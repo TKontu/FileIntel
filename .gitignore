@@ -15,4 +15,3 @@ git-cheat-sheet.md
 local.env
 .env.worker
 .env.api
-.env

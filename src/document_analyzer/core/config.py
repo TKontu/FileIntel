@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from decouple import config
 import yaml
+from typing import Optional, List
 
 class LLMSettings(BaseModel):
     provider: str = Field(default="openai")
@@ -8,19 +9,19 @@ class LLMSettings(BaseModel):
     max_tokens: int = Field(default=4000)
     temperature: float = Field(default=0.1)
     rate_limit: int = Field(default=60)
-    base_url: str | None = Field(default=None)
-    api_key: str | None = Field(default="ollama") # Default for Ollama
+    base_url: Optional[str] = Field(default=None)
+    api_key: Optional[str] = Field(default="ollama") # Default for Ollama
 
 
 class DocumentProcessingSettings(BaseModel):
     chunk_size: int = Field(default=4000)
     overlap: int = Field(default=200)
     max_file_size: str = Field(default="100MB")
-    supported_formats: list[str] = Field(default_factory=lambda: ["pdf", "epub", "mobi"])
+    supported_formats: List[str] = Field(default_factory=lambda: ["pdf", "epub", "mobi"])
 
 class OCRSettings(BaseModel):
     primary_engine: str = Field(default="pdf_extract_kit")
-    fallback_engines: list[str] = Field(default_factory=lambda: ["tesseract", "google_vision"])
+    fallback_engines: List[str] = Field(default_factory=lambda: ["tesseract", "google_vision"])
 
 class OutputSettings(BaseModel):
     default_format: str = Field(default="json")
@@ -33,7 +34,7 @@ class OutputSettings(BaseModel):
 class APISettings(BaseModel):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     rate_limit: int = Field(default=100)
 
 class StorageSettings(BaseModel):
