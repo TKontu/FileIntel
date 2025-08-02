@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/home/appuser/app/src
+      - ./config:/home/appuser/app/config
+      - ./prompts:/home/appuser/app/prompts
+      - ./logs:/home/appuser/app/logs
+    environment:
+      # If you have environment-specific configs, you can specify them here
+      - PYTHONUNBUFFERED=1
