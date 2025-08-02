@@ -8,6 +8,9 @@ class LLMSettings(BaseModel):
     max_tokens: int = Field(default=4000)
     temperature: float = Field(default=0.1)
     rate_limit: int = Field(default=60)
+    base_url: str | None = Field(default=None)
+    api_key: str | None = Field(default="ollama") # Default for Ollama
+
 
 class DocumentProcessingSettings(BaseModel):
     chunk_size: int = Field(default=4000)
@@ -34,9 +37,13 @@ class APISettings(BaseModel):
     rate_limit: int = Field(default=100)
 
 class StorageSettings(BaseModel):
-    type: str = Field(default="sqlite")
+    type: str = Field(default="redis")
     connection_string: str = Field(default="sqlite:///./database.db")
     cache_ttl: int = Field(default=3600)
+    redis_host: str = Field(default="redis")
+    redis_port: int = Field(default=6379)
+    redis_db: int = Field(default=0)
+    job_queue_name: str = Field(default="document_analyzer:job_queue")
 
 class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)

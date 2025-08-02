@@ -1,7 +1,7 @@
 from pathlib import Path
 import mobi
-from .base import FileReader
-from ..core.exceptions import DocumentProcessingException
+from document_analyzer.document_processing.base import FileReader
+from document_analyzer.core.exceptions import DocumentProcessingException
 from bs4 import BeautifulSoup
 import os
 import shutil
@@ -30,7 +30,7 @@ class MOBIProcessor(FileReader):
             elif unpacked_path.endswith('.epub'):
                 # If it's an epub, we can reuse our EPUBProcessor logic
                 # For now, a simplified version:
-                from .epub_processor import EPUBProcessor
+                from document_analyzer.document_processing.processors.epub_processor import EPUBProcessor
                 epub_processor = EPUBProcessor()
                 content = epub_processor.read(Path(unpacked_path))
             else:

@@ -1,0 +1,11 @@
+2025-08-02 18:51:08,191 - worker - INFO - Worker starting...
+2025-08-02 18:51:08,194 - worker - ERROR - A critical error occurred in the worker: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable
+Traceback (most recent call last):
+  File "/home/appuser/app/run_worker.py", line 26, in main
+    llm_provider = OpenAIProvider() # You could make this configurable
+  File "/home/appuser/app/src/document_analyzer/llm_integration/openai_provider.py", line 7, in __init__
+    self.client = openai.OpenAI()
+  File "/app/.venv/lib/python3.9/site-packages/openai/_client.py", line 130, in __init__
+    raise OpenAIError(
+openai.OpenAIError: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable
+2025-08-02 18:51:08,233 - worker - INFO - Worker shutting down.

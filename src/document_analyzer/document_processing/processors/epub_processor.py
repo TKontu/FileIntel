@@ -1,8 +1,8 @@
 import ebooklib
 from ebooklib import epub
 from pathlib import Path
-from .base import FileReader
-from ..core.exceptions import DocumentProcessingException
+from document_analyzer.document_processing.base import FileReader
+from document_analyzer.core.exceptions import DocumentProcessingException
 from bs4 import BeautifulSoup
 
 class EPUBProcessor(FileReader):

@@ -4,11 +4,14 @@ import openai
 
 class OpenAIProvider(LLMProvider):
     def __init__(self):
-        self.client = openai.OpenAI()
+        self.client = openai.OpenAI(
+            base_url=settings.llm.base_url,
+            api_key=settings.llm.api_key,
+        )
 
     def get_response(self, prompt: str) -> str:
         """
-        Sends a prompt to the OpenAI API and returns the response.
+        Sends a prompt to a compatible OpenAI API endpoint and returns the response.
         """
         response = self.client.chat.completions.create(
             model=settings.llm.model,

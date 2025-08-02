@@ -1,7 +1,7 @@
-from .job_manager import JobManager
-from ..document_processing.unified_processor import UnifiedDocumentProcessor
-from ..llm_integration.base import LLMProvider
-from ..storage.base import StorageInterface
+from document_analyzer.batch_processing.job_manager import JobManager
+from document_analyzer.document_processing.unified_processor import UnifiedDocumentProcessor
+from document_analyzer.llm_integration.base import LLMProvider
+from document_analyzer.storage.base import StorageInterface
 
 class Worker:
     def __init__(

@@ -1,7 +1,7 @@
 import pdfplumber
 from pathlib import Path
-from .base import FileReader
-from ..core.exceptions import DocumentProcessingException
+from document_analyzer.document_processing.base import FileReader
+from document_analyzer.core.exceptions import DocumentProcessingException
 
 class TraditionalPDFProcessor(FileReader):
     def read(self, file_path: Path) -> str:
