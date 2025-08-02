@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "document_analyzer"
+version = "0.1.0"
+description = "A Python-based document analysis system"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+fastapi = "^0.109.0"
+pydantic = "^2.5.3"
+python-decouple = "^3.8"
+uvicorn = {extras = ["standard"], version = "^0.25.0"}
+ebooklib = "^0.18"
+pdfplumber = "^0.10.3"
+Jinja2 = "^3.1.3"
+openai = "^1.7.2"
+anthropic = "^0.15.1"
+PyYAML = "^6.0.1"
+SQLAlchemy = "^2.0.25"
+alembic = "^1.13.1"
+redis = "^5.0.1"
+celery = "^5.3.6"
+python-magic = "^0.4.27"
+pytesseract = "^0.3.10"
+click = "^8.1.7"
+typer = "^0.9.0"
+beautifulsoup4 = "^4.12.3"
+mobi = "^0.4.5"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.4"
+black = "^23.12.1"
+flake8 = "^7.0.0"
+mypy = "^1.8.0"
+pre-commit = "^3.6.0"
+pytest-cov = "^4.1.0"
+httpx = "^0.26.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+
+[tool.mypy]
+ignore_missing_imports = true

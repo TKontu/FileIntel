@@ -1,0 +1,54 @@
+from pydantic import BaseModel, Field
+from decouple import config
+import yaml
+
+class LLMSettings(BaseModel):
+    provider: str = Field(default="openai")
+    model: str = Field(default="gpt-4")
+    max_tokens: int = Field(default=4000)
+    temperature: float = Field(default=0.1)
+    rate_limit: int = Field(default=60)
+
+class DocumentProcessingSettings(BaseModel):
+    chunk_size: int = Field(default=4000)
+    overlap: int = Field(default=200)
+    max_file_size: str = Field(default="100MB")
+    supported_formats: list[str] = Field(default_factory=lambda: ["pdf", "epub", "mobi"])
+
+class OCRSettings(BaseModel):
+    primary_engine: str = Field(default="pdf_extract_kit")
+    fallback_engines: list[str] = Field(default_factory=lambda: ["tesseract", "google_vision"])
+
+class OutputSettings(BaseModel):
+    default_format: str = Field(default="json")
+    output_directory: str = Field(default="./results")
+    include_metadata: bool = Field(default=True)
+    max_concurrent_jobs: int = Field(default=5)
+    retry_attempts: int = Field(default=3)
+    timeout: int = Field(default=300)
+
+class APISettings(BaseModel):
+    host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8000)
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    rate_limit: int = Field(default=100)
+
+class StorageSettings(BaseModel):
+    type: str = Field(default="sqlite")
+    connection_string: str = Field(default="sqlite:///./database.db")
+    cache_ttl: int = Field(default=3600)
+
+class Settings(BaseModel):
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    document_processing: DocumentProcessingSettings = Field(default_factory=DocumentProcessingSettings)
+    ocr: OCRSettings = Field(default_factory=OCRSettings)
+    output: OutputSettings = Field(default_factory=OutputSettings)
+    api: APISettings = Field(default_factory=APISettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+
+def load_config(path: str = "config/default.yaml") -> Settings:
+    with open(path, "r") as f:
+        config_data = yaml.safe_load(f)
+    return Settings.parse_obj(config_data)
+
+settings = load_config()
