@@ -11,3 +11,175 @@ openai.OpenAIError: The api_key client option must be set either by passing api_
 2025-08-02 18:51:08,233 - worker - INFO - Worker shutting down.
 2025-08-02 19:52:07,205 - worker - INFO - Worker starting...
 2025-08-02 19:52:07,238 - worker - INFO - Worker started. Waiting for jobs...
+2025-08-02 20:08:10,274 - worker - INFO - Worker starting...
+2025-08-02 20:08:10,310 - worker - INFO - Worker started. Waiting for jobs...
+2025-08-03 10:28:15,271 - worker - ERROR - A critical error occurred in the worker: Connection closed by server.
+Traceback (most recent call last):
+  File "/home/appuser/app/run_worker.py", line 36, in main
+    worker.run()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/worker.py", line 24, in run
+    job = self.job_manager.get_next_job()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/job_manager.py", line 29, in get_next_job
+    _, job_json = self.redis_client.brpop(self.queue_name)
+  File "/app/.venv/lib/python3.9/site-packages/redis/commands/core.py", line 2609, in brpop
+    return self.execute_command("BRPOP", *keys)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 605, in execute_command
+    return self._execute_command(*args, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 616, in _execute_command
+    return conn.retry.call_with_retry(
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 65, in call_with_retry
+    fail(error)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 620, in <lambda>
+    lambda error: self._disconnect_raise(conn, error),
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 601, in _disconnect_raise
+    raise error
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 62, in call_with_retry
+    return do()
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 617, in <lambda>
+    lambda: self._send_command_parse_response(
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 588, in _send_command_parse_response
+    return self.parse_response(conn, command_name, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 635, in parse_response
+    response = connection.read_response()
+  File "/app/.venv/lib/python3.9/site-packages/redis/connection.py", line 613, in read_response
+    response = self._parser.read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 15, in read_response
+    result = self._read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 25, in _read_response
+    raw = self._buffer.readline()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 115, in readline
+    self._read_from_socket()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 68, in _read_from_socket
+    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
+redis.exceptions.ConnectionError: Connection closed by server.
+2025-08-03 10:28:15,327 - worker - INFO - Worker shutting down.
+2025-08-03 10:28:21,343 - worker - INFO - Worker starting...
+2025-08-03 10:28:21,364 - worker - INFO - Worker started. Waiting for jobs...
+2025-08-03 10:30:38,784 - worker - ERROR - A critical error occurred in the worker: Connection closed by server.
+Traceback (most recent call last):
+  File "/home/appuser/app/run_worker.py", line 36, in main
+    worker.run()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/worker.py", line 24, in run
+    job = self.job_manager.get_next_job()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/job_manager.py", line 29, in get_next_job
+    _, job_json = self.redis_client.brpop(self.queue_name)
+  File "/app/.venv/lib/python3.9/site-packages/redis/commands/core.py", line 2609, in brpop
+    return self.execute_command("BRPOP", *keys)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 605, in execute_command
+    return self._execute_command(*args, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 616, in _execute_command
+    return conn.retry.call_with_retry(
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 65, in call_with_retry
+    fail(error)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 620, in <lambda>
+    lambda error: self._disconnect_raise(conn, error),
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 601, in _disconnect_raise
+    raise error
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 62, in call_with_retry
+    return do()
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 617, in <lambda>
+    lambda: self._send_command_parse_response(
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 588, in _send_command_parse_response
+    return self.parse_response(conn, command_name, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 635, in parse_response
+    response = connection.read_response()
+  File "/app/.venv/lib/python3.9/site-packages/redis/connection.py", line 613, in read_response
+    response = self._parser.read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 15, in read_response
+    result = self._read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 25, in _read_response
+    raw = self._buffer.readline()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 115, in readline
+    self._read_from_socket()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 68, in _read_from_socket
+    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
+redis.exceptions.ConnectionError: Connection closed by server.
+2025-08-03 10:30:38,851 - worker - INFO - Worker shutting down.
+2025-08-03 10:30:45,018 - worker - INFO - Worker starting...
+2025-08-03 10:30:45,044 - worker - INFO - Worker started. Waiting for jobs...
+2025-08-03 10:43:52,324 - worker - INFO - Worker starting...
+2025-08-03 10:43:52,346 - worker - INFO - Worker started. Waiting for jobs...
+2025-08-03 10:45:31,772 - worker - ERROR - A critical error occurred in the worker: Connection closed by server.
+Traceback (most recent call last):
+  File "/home/appuser/app/run_worker.py", line 36, in main
+    worker.run()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/worker.py", line 24, in run
+    job = self.job_manager.get_next_job()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/job_manager.py", line 29, in get_next_job
+    _, job_json = self.redis_client.brpop(self.queue_name)
+  File "/app/.venv/lib/python3.9/site-packages/redis/commands/core.py", line 2609, in brpop
+    return self.execute_command("BRPOP", *keys)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 605, in execute_command
+    return self._execute_command(*args, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 616, in _execute_command
+    return conn.retry.call_with_retry(
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 65, in call_with_retry
+    fail(error)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 620, in <lambda>
+    lambda error: self._disconnect_raise(conn, error),
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 601, in _disconnect_raise
+    raise error
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 62, in call_with_retry
+    return do()
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 617, in <lambda>
+    lambda: self._send_command_parse_response(
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 588, in _send_command_parse_response
+    return self.parse_response(conn, command_name, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 635, in parse_response
+    response = connection.read_response()
+  File "/app/.venv/lib/python3.9/site-packages/redis/connection.py", line 613, in read_response
+    response = self._parser.read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 15, in read_response
+    result = self._read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 25, in _read_response
+    raw = self._buffer.readline()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 115, in readline
+    self._read_from_socket()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 68, in _read_from_socket
+    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
+redis.exceptions.ConnectionError: Connection closed by server.
+2025-08-03 10:45:31,860 - worker - INFO - Worker shutting down.
+2025-08-03 10:45:38,514 - worker - INFO - Worker starting...
+2025-08-03 10:45:38,540 - worker - INFO - Worker started. Waiting for jobs...
+2025-08-03 10:47:07,796 - worker - ERROR - A critical error occurred in the worker: Connection closed by server.
+Traceback (most recent call last):
+  File "/home/appuser/app/run_worker.py", line 36, in main
+    worker.run()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/worker.py", line 24, in run
+    job = self.job_manager.get_next_job()
+  File "/home/appuser/app/src/document_analyzer/batch_processing/job_manager.py", line 29, in get_next_job
+    _, job_json = self.redis_client.brpop(self.queue_name)
+  File "/app/.venv/lib/python3.9/site-packages/redis/commands/core.py", line 2609, in brpop
+    return self.execute_command("BRPOP", *keys)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 605, in execute_command
+    return self._execute_command(*args, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 616, in _execute_command
+    return conn.retry.call_with_retry(
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 65, in call_with_retry
+    fail(error)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 620, in <lambda>
+    lambda error: self._disconnect_raise(conn, error),
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 601, in _disconnect_raise
+    raise error
+  File "/app/.venv/lib/python3.9/site-packages/redis/retry.py", line 62, in call_with_retry
+    return do()
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 617, in <lambda>
+    lambda: self._send_command_parse_response(
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 588, in _send_command_parse_response
+    return self.parse_response(conn, command_name, **options)
+  File "/app/.venv/lib/python3.9/site-packages/redis/client.py", line 635, in parse_response
+    response = connection.read_response()
+  File "/app/.venv/lib/python3.9/site-packages/redis/connection.py", line 613, in read_response
+    response = self._parser.read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 15, in read_response
+    result = self._read_response(disable_decoding=disable_decoding)
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/resp2.py", line 25, in _read_response
+    raw = self._buffer.readline()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 115, in readline
+    self._read_from_socket()
+  File "/app/.venv/lib/python3.9/site-packages/redis/_parsers/socket.py", line 68, in _read_from_socket
+    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
+redis.exceptions.ConnectionError: Connection closed by server.
+2025-08-03 10:47:07,841 - worker - INFO - Worker shutting down.
+2025-08-03 10:47:15,072 - worker - INFO - Worker starting...
+2025-08-03 10:47:15,098 - worker - INFO - Worker started. Waiting for jobs...

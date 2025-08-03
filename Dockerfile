@@ -52,12 +52,20 @@ WORKDIR /home/appuser/app
 COPY ./src ./src
 COPY ./config ./config
 COPY ./prompts ./prompts
+COPY ./scripts ./scripts
+COPY ./docker-entrypoint.sh .
 
 # Create logs directory and set permissions
 RUN mkdir logs && chown appuser:appuser logs
 
+# Make the entrypoint script executable
+RUN sed -i 's/$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
+
 # Expose the port the app runs on
 EXPOSE 8000
+
+# Set the entrypoint
+ENTRYPOINT ["./docker-entrypoint.sh"]
 
 # Command to run the application
 CMD ["uvicorn", "src.document_analyzer.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

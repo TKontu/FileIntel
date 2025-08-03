@@ -32,6 +32,6 @@ api:
   rate_limit: 100
 
 storage:
-  type: "sqlite"
-  connection_string: "sqlite:///./database.db"
+  type: "postgres"
+  connection_string: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   cache_ttl: 3600
