@@ -23,7 +23,7 @@ COPY pyproject.toml poetry.lock* ./
 # --no-dev: Don't install development dependencies
 # Poetry will create a poetry.lock file if one doesn't exist
 RUN poetry config virtualenvs.in-project true && \
-    poetry install --no-root --without dev
+    poetry install --no-root
 
 # Stage 2: Final application image
 FROM python:3.9-slim
@@ -54,6 +54,7 @@ COPY ./config ./config
 COPY ./prompts ./prompts
 COPY ./scripts ./scripts
 COPY ./docker-entrypoint.sh .
+COPY ./tests ./tests
 
 # Create logs directory and set permissions
 RUN mkdir logs && chown appuser:appuser logs
