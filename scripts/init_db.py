@@ -35,9 +35,14 @@ def init_db():
         print("Could not connect to the database.")
         sys.exit(1)
 
+    # Drop all tables first
+    print("Dropping all tables...")
+    Base.metadata.drop_all(bind=engine)
+    print("Tables dropped successfully.")
+
     # Create tables
     print("Creating tables...")
-    Base.metadata.create_all(bind=engine, checkfirst=True)
+    Base.metadata.create_all(bind=engine, checkfirst=False)
     print("Tables created successfully.")
 
 if __name__ == "__main__":

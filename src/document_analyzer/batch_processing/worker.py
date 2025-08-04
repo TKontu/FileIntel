@@ -1,42 +1,53 @@
-from document_analyzer.batch_processing.job_manager import JobManager
-from document_analyzer.document_processing.unified_processor import UnifiedDocumentProcessor
-from document_analyzer.llm_integration.base import LLMProvider
-from document_analyzer.storage.base import StorageInterface
+from .job_manager import JobManager
+from ..document_processing.factory import ReaderFactory
+from ..llm_integration.openai_provider import OpenAIProvider # Using OpenAI for now
+from ..prompt_management.composer import PromptComposer
+from ..prompt_management.loader import PromptLoader
+from pathlib import Path
 
 class Worker:
-    def __init__(
-        self,
-        job_manager: JobManager,
-        document_processor: UnifiedDocumentProcessor,
-        llm_provider: LLMProvider,
-        storage: StorageInterface,
-    ):
+    def __init__(self, job_manager: JobManager):
         self.job_manager = job_manager
-        self.document_processor = document_processor
-        self.llm_provider = llm_provider
-        self.storage = storage
+        self.reader_factory = ReaderFactory()
+        self.llm_provider = OpenAIProvider() # This should be configurable
+        
+        prompts_dir = Path('/home/appuser/app/prompts/templates')
+        self.loader = PromptLoader(prompts_dir=prompts_dir)
+        self.composer = PromptComposer(loader=self.loader)
 
-    def run(self):
+
+    def process_job(self, job):
         """
-        Continuously processes jobs from the job manager.
+        Processes a single job.
         """
-        while True:
-            job = self.job_manager.get_next_job()
-            if job is None:
-                break
+        job_id = job.id
+        self.job_manager.update_job_status(job_id, "running")
 
-            job_id = job["id"]
-            self.storage.update_job_status(job_id, "running")
+        try:
+            # 1. Get document content
+            file_path = job.data.get("file_path") 
+            reader = self.reader_factory.get_reader(file_path)
+            elements = reader.read(Path(file_path))
+            
+            document_text = "\n".join([el.text for el in elements if hasattr(el, 'text')])
 
-            try:
-                # For now, we assume the job data contains the file path
-                file_path = job["data"]["file_path"]
-                processed_content = self.document_processor.process(file_path)
-                response = self.llm_provider.get_response(processed_content)
-                self.storage.save_result(job_id, {"response": response})
-                self.storage.update_job_status(job_id, "completed")
-            except Exception as e:
-                self.storage.update_job_status(job_id, "failed")
-                print(f"Error processing job {job_id}: {e}") # Replace with proper logging
-            finally:
-                self.job_manager.job_done()
+            # 2. Compose the prompt
+            # Load the question from the dedicated markdown file
+            user_question = self.loader.load_prompt("user_question")
+            context = {
+                "document_text": document_text,
+                "question": user_question
+            }
+            prompt = self.composer.compose(context)
+
+            # 3. Get LLM response
+            response = self.llm_provider.generate_response(prompt)
+
+            # 4. Save result
+            self.job_manager.storage.save_result(job_id, response._asdict())
+            self.job_manager.update_job_status(job_id, "completed")
+            print(f"Job {job_id} completed successfully.")
+
+        except Exception as e:
+            self.job_manager.update_job_status(job_id, "failed")
+            print(f"Error processing job {job_id}: {e}")

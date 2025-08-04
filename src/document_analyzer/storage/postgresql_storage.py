@@ -22,6 +22,9 @@ class PostgreSQLStorage(StorageInterface):
         self.db.refresh(new_document)
         return new_document
 
+    def get_document_by_hash(self, content_hash: str) -> Document:
+        return self.db.query(Document).filter(Document.content_hash == content_hash).first()
+
     def save_job(self, job_data: dict) -> str:
         job_id = job_data.get("id")
         if not job_id:
@@ -39,6 +42,12 @@ class PostgreSQLStorage(StorageInterface):
 
     def get_job(self, job_id: str) -> Job:
         return self.db.query(Job).filter(Job.id == job_id).first()
+
+    def get_job_by_document_id(self, document_id: str) -> Job:
+        return self.db.query(Job).filter(Job.document_id == document_id).first()
+
+    def get_pending_job(self) -> Job:
+        return self.db.query(Job).filter(Job.status == "pending").first()
 
     def update_job_status(self, job_id: str, status: str):
         job = self.get_job(job_id)

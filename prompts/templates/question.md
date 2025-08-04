@@ -1,8 +1,11 @@
-Based on the following document, please answer this question:
+# Task
 
-{{ user_question }}
+Based on the document provided below, please answer the following question. Use only the information contained within the document.
 
-Document:
+**Question:** {{ question }}
+
 ---
-{{ document_content }}
----
+
+**Document:**
+
+{{ document_text }}

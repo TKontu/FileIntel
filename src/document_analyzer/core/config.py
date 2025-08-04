@@ -1,7 +1,13 @@
 from pydantic import BaseModel, Field
 from decouple import config
 import yaml
-from typing import Optional, List
+from typing import Optional, List, Any
+
+class OpenAISettings(BaseModel):
+    rate_limit: int = Field(default=30)
+
+class AnthropicSettings(BaseModel):
+    rate_limit: int = Field(default=15)
 
 class LLMSettings(BaseModel):
     provider: str = Field(default="openai")
@@ -11,6 +17,8 @@ class LLMSettings(BaseModel):
     rate_limit: int = Field(default=60)
     base_url: Optional[str] = Field(default=None)
     api_key: Optional[str] = Field(default="ollama") # Default for Ollama
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
 
 
 class DocumentProcessingSettings(BaseModel):
@@ -53,6 +61,24 @@ class Settings(BaseModel):
     output: OutputSettings = Field(default_factory=OutputSettings)
     api: APISettings = Field(default_factory=APISettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Retrieves a value from the nested settings using dot notation.
+        Example: settings.get('llm.model', 'default-model')
+        """
+        keys = key.split('.')
+        value = self
+        for k in keys:
+            if isinstance(value, BaseModel):
+                value = getattr(value, k, None)
+            elif isinstance(value, dict):
+                value = value.get(k)
+            else:
+                return default
+            if value is None:
+                return default
+        return value
 
 def load_config(path: str = "config/default.yaml") -> Settings:
     with open(path, "r") as f:

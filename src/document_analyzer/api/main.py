@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from ..core.config import settings
 from ..core.logging import setup_logging
-from .routes import analysis
+from .routes import analysis, batch
 
 app = FastAPI(
     title="Document Analyzer API",
@@ -10,6 +10,7 @@ app = FastAPI(
 )
 
 app.include_router(analysis.router, prefix="/api/v1", tags=["analysis"])
+app.include_router(batch.router, prefix="/api/v1", tags=["batch"])
 
 @app.on_event("startup")
 def on_startup():

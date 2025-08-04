@@ -7,14 +7,15 @@ from ...storage.base import StorageInterface
 from ...api.dependencies import get_db
 import hashlib
 import uuid
+import os
 
 router = APIRouter()
 
-def get_job_manager():
-    return JobManager()
-
 def get_storage(db: Session = Depends(get_db)) -> StorageInterface:
     return PostgreSQLStorage(db)
+
+def get_job_manager(storage: StorageInterface = Depends(get_storage)) -> JobManager:
+    return JobManager(storage=storage)
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_document(
@@ -23,13 +24,27 @@ async def analyze_document(
     storage: StorageInterface = Depends(get_storage),
 ):
     """
-    Submits a document for analysis.
+    Submits a document for analysis. If the document has been analyzed before,
+    it returns the existing job ID.
     """
     # Read file content and calculate hash
     content = await file.read()
     content_hash = hashlib.sha256(content).hexdigest()
 
-    # Create document record
+    # Check if document already exists
+    existing_document = storage.get_document_by_hash(content_hash)
+    if existing_document:
+        # If it exists, find the associated job
+        existing_job = storage.get_job_by_document_id(existing_document.id)
+        if existing_job:
+            return {"job_id": existing_job.id}
+
+    # Save the file to the uploads directory
+    file_path = os.path.join("uploads", f"{content_hash}_{file.filename}")
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Create new document record
     document = storage.create_document(
         filename=file.filename,
         content_hash=content_hash,
@@ -37,14 +52,8 @@ async def analyze_document(
         mime_type=file.content_type,
     )
 
-    # Submit job
-    job_id = str(uuid.uuid4())
-    job_manager.submit_job({"document_id": document.id, "job_id": job_id})
-    storage.save_job({
-        "id": job_id,
-        "document_id": document.id,
-        "status": "pending",
-    })
+    # Submit new job
+    job_id = job_manager.submit_job(document_id=document.id, data={"file_path": file_path})
     return {"job_id": job_id}
 
 @router.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
@@ -60,6 +69,7 @@ def get_job_status(job_id: str, storage: StorageInterface = Depends(get_storage)
 @router.get("/jobs/{job_id}/result", response_model=JobResultResponse)
 def get_job_result(job_id: str, storage: StorageInterface = Depends(get_storage)):
     """
+
     Retrieves the result of a completed job.
     """
     job = storage.get_job(job_id)

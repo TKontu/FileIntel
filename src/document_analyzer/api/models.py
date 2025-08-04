@@ -1,9 +1,9 @@
 from pydantic import BaseModel
+from typing import List, Dict, Any
 
 class AnalyzeRequest(BaseModel):
     file_path: str
-    user_question: str
-    desired_format: str
+    question: str
 
 class AnalyzeResponse(BaseModel):
     job_id: str
@@ -14,4 +14,12 @@ class JobStatusResponse(BaseModel):
 
 class JobResultResponse(BaseModel):
     job_id: str
-    result: dict
+    result: Dict[str, Any]
+
+class URLAnalyzeRequest(BaseModel):
+    url: str
+    question: str
+
+class BatchAnalyzeResponse(BaseModel):
+    batch_id: str
+    job_ids: List[str]

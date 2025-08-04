@@ -28,6 +28,17 @@ class Job(Base):
 
     document = relationship("Document", back_populates="jobs")
     result = relationship("Result", back_populates="job", uselist=False)
+    batch_id = Column(String, ForeignKey('batches.id'))
+    batch = relationship("Batch", back_populates="jobs")
+
+class Batch(Base):
+    __tablename__ = 'batches'
+    id = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    jobs = relationship("Job", back_populates="batch")
 
 class Result(Base):
     __tablename__ = 'results'

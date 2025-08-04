@@ -11,14 +11,38 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d fileintel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: "redis:alpine"
     ports:
       - "6379:6379"
 
+  init-db:
+    build: .
+    command: ["python", "scripts/init_db.py"]
+    volumes:
+      - ./src:/home/appuser/app/src
+      - ./scripts:/home/appuser/app/scripts
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=fileintel
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
+    entrypoint: []
+    command: ["uvicorn", "src.document_analyzer.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     volumes:
@@ -26,7 +50,7 @@ services:
       - ./config:/home/appuser/app/config
       - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
-      - ./run_worker.py:/home/appuser/app/run_worker.py
+      - ./uploads:/home/appuser/app/uploads
     environment:
       - PYTHONUNBUFFERED=1
       - DB_USER=user
@@ -37,11 +61,14 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - postgres
-      - redis
+      init-db:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
 
   worker:
     build: .
+    entrypoint: []
     command: ["python", "run_worker.py"]
     volumes:
       - ./src:/home/appuser/app/src
@@ -49,6 +76,7 @@ services:
       - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
       - ./run_worker.py:/home/appuser/app/run_worker.py
+      - ./uploads:/home/appuser/app/uploads
     environment:
       - PYTHONUNBUFFERED=1
       - DB_USER=user
@@ -59,8 +87,31 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - postgres
-      - redis
+      init-db:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  backup:
+    build:
+      context: ./docker/backup
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: fileintel
+      POSTGRES_HOST: postgres
+    volumes:
+      - backups:/backups
+    command: >
+      sh -c "while true; do
+        /usr/local/bin/backup.sh
+        sleep 86400
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  backups:

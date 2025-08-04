@@ -1,38 +1,35 @@
-import redis
-import json
+from ..storage.base import StorageInterface
 from uuid import uuid4
-from ..core.config import settings
 
 class JobManager:
-    def __init__(self):
-        self.redis_client = redis.Redis(
-            host=settings.storage.redis_host,
-            port=settings.storage.redis_port,
-            db=settings.storage.redis_db,
-            decode_responses=True
-        )
-        self.queue_name = settings.storage.job_queue_name
+    def __init__(self, storage: StorageInterface):
+        self.storage = storage
 
-    def submit_job(self, data: dict) -> str:
+    def submit_job(self, document_id: str, data: dict) -> str:
         """
-        Submits a new job to the Redis queue and returns a job ID.
+        Submits a new job and returns a job ID.
         """
         job_id = str(uuid4())
-        job_data = {"id": job_id, "data": data}
-        self.redis_client.lpush(self.queue_name, json.dumps(job_data))
+        job_data = {
+            "id": job_id,
+            "document_id": document_id,
+            "status": "pending",
+            "data": data
+        }
+        self.storage.save_job(job_data)
         return job_id
 
     def get_next_job(self) -> dict:
         """
-        Gets the next job from the Redis queue (blocking).
+        Gets the next pending job from storage.
         """
-        _, job_json = self.redis_client.brpop(self.queue_name)
-        return json.loads(job_json)
+        # This is a simplified implementation. A real implementation would
+        # have a more robust way of finding and locking the next pending job.
+        return self.storage.get_pending_job()
 
-    def job_done(self):
+    def update_job_status(self, job_id: str, status: str):
         """
-        In a Redis list-based queue, this is a no-op,
-        as brpop removes the item.
+        Updates the status of a job.
         """
-        pass
+        self.storage.update_job_status(job_id, status)
 

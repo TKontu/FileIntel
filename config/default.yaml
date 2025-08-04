@@ -4,7 +4,13 @@ llm:
   max_tokens: 4000
   temperature: 0.1
   rate_limit: 60
-  base_url: "http://host.docker.internal:11435/v1"
+  openai:
+    base_url: "http://192.168.0.247:11435/v1"
+    api_key: "ollama"
+    rate_limit: 30
+  anthropic:
+    rate_limit: 15
+  base_url: "http://192.168.0.247:11435/v1"
   api_key: "ollama"
 
 document_processing:
