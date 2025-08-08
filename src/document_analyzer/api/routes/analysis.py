@@ -1,5 +1,8 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
+from src.document_analyzer.output_management.formatters.markdown import MarkdownFormatter
 from ..models import AnalyzeResponse, JobStatusResponse, JobResultResponse
 from ...batch_processing.job_manager import JobManager
 from ...storage.postgresql_storage import PostgreSQLStorage
@@ -81,4 +84,24 @@ def get_job_result(job_id: str, storage: StorageInterface = Depends(get_storage)
     result = storage.get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
-    return {"job_id": job_id, "result": result.data}
+    return {"job_id": job_id, "result": json.loads(result.data)}
+
+@router.get("/jobs/{job_id}/result/markdown", response_class=PlainTextResponse)
+def get_job_result_markdown(job_id: str, storage: StorageInterface = Depends(get_storage)):
+    """
+    Retrieves the result of a completed job in markdown format.
+    """
+    job = storage.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail=f"Job is not complete. Current status: {job.status}")
+
+    result = storage.get_result(job_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    formatter = MarkdownFormatter()
+    formatted_result = formatter.format(json.loads(result.data))
+    
+    return PlainTextResponse(content=formatted_result, media_type="text/markdown")

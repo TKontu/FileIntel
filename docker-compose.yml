@@ -81,11 +81,12 @@ services:
       - PYTHONUNBUFFERED=1
       - DB_USER=user
       - DB_PASSWORD=password
-      - DB_HOST=postgres
+      - DB_HOST=localhost
       - DB_PORT=5432
       - DB_NAME=fileintel
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    network_mode: "host"
     depends_on:
       init-db:
         condition: service_completed_successfully

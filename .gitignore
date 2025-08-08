@@ -15,3 +15,6 @@ git-cheat-sheet.md
 local.env
 .env.worker
 .env.api
+testfile2.pdf
+testfile.pdf.pdf
+*.pdf

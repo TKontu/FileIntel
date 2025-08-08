@@ -10,8 +10,6 @@ llm:
     rate_limit: 30
   anthropic:
     rate_limit: 15
-  base_url: "http://192.168.0.247:11435/v1"
-  api_key: "ollama"
 
 document_processing:
   chunk_size: 4000
@@ -41,3 +39,4 @@ storage:
   type: "postgres"
   connection_string: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   cache_ttl: 3600
+  redis_host: "localhost"

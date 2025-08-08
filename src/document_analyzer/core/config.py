@@ -4,6 +4,8 @@ import yaml
 from typing import Optional, List, Any
 
 class OpenAISettings(BaseModel):
+    api_key: Optional[str] = Field(default="ollama")
+    base_url: Optional[str] = Field(default=None)
     rate_limit: int = Field(default=30)
 
 class AnthropicSettings(BaseModel):
