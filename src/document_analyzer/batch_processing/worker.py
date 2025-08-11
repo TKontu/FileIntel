@@ -4,6 +4,7 @@ from ..llm_integration.openai_provider import OpenAIProvider # Using OpenAI for 
 from ..prompt_management.composer import PromptComposer
 from ..prompt_management.loader import PromptLoader
 from pathlib import Path
+from ..core.config import settings
 
 class Worker:
     def __init__(self, job_manager: JobManager):
@@ -11,9 +12,14 @@ class Worker:
         self.reader_factory = ReaderFactory()
         self.llm_provider = OpenAIProvider() # This should be configurable
         
-        prompts_dir = Path('/home/appuser/app/prompts/templates')
+        prompts_dir_str = settings.get('prompts.directory', '/home/appuser/app/prompts/templates')
+        prompts_dir = Path(prompts_dir_str)
         self.loader = PromptLoader(prompts_dir=prompts_dir)
-        self.composer = PromptComposer(loader=self.loader)
+        self.composer = PromptComposer(
+            loader=self.loader,
+            max_length=settings.get('llm.context_length'),
+            model_name=settings.get('llm.model')
+        )
 
 
     def process_job(self, job):

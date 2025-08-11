@@ -15,6 +15,7 @@ class LLMSettings(BaseModel):
     provider: str = Field(default="openai")
     model: str = Field(default="gpt-4")
     max_tokens: int = Field(default=4000)
+    context_length: int = Field(default=4096)
     temperature: float = Field(default=0.1)
     rate_limit: int = Field(default=60)
     base_url: Optional[str] = Field(default=None)

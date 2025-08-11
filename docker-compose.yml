@@ -48,9 +48,11 @@ services:
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./prompts:/home/appuser/app/prompts
+      - ./prompts/templates:/home/appuser/app/prompts/templates
       - ./logs:/home/appuser/app/logs
       - ./uploads:/home/appuser/app/uploads
+      - ./input:/home/appuser/app/input
+      - ./output:/home/appuser/app/output
     environment:
       - PYTHONUNBUFFERED=1
       - DB_USER=user
@@ -73,10 +75,12 @@ services:
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./prompts:/home/appuser/app/prompts
+      - ./prompts/templates:/home/appuser/app/prompts/templates
       - ./logs:/home/appuser/app/logs
       - ./run_worker.py:/home/appuser/app/run_worker.py
       - ./uploads:/home/appuser/app/uploads
+      - ./input:/home/appuser/app/input
+      - ./output:/home/appuser/app/output
     environment:
       - PYTHONUNBUFFERED=1
       - DB_USER=user

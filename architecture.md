@@ -265,7 +265,7 @@ document_analyzer/
 llm:
   provider: "openai" # openai, anthropic, local
   model: "gpt-4"
-  max_tokens: 4000
+  context_length: 4000
   temperature: 0.1
   rate_limit: 60 # requests per minute
 

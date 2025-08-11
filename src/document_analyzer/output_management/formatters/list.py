@@ -1,6 +1,10 @@
 from ..base import OutputFormatter
 
 class ListFormatter(OutputFormatter):
+    @property
+    def file_extension(self) -> str:
+        return "txt"
+
     def format(self, data: dict) -> str:
         """
         Formats the data as a bulleted list.

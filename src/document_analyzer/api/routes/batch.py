@@ -1,47 +1,36 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
-from typing import List
-import hashlib
-import uuid
-
-from ..dependencies import get_db
-from ...storage.postgresql_storage import PostgreSQLStorage
-from ...batch_processing.job_manager import JobManager
-from ..models import BatchAnalyzeResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel
+from document_analyzer.batch_processing.batch_manager import BatchProcessor
+from document_analyzer.core.config import settings
+import os
 
 router = APIRouter()
 
-@router.post("/analyze/batch", response_model=BatchAnalyzeResponse)
-async def analyze_batch(
-    files: List[UploadFile] = File(...),
-    db: Session = Depends(get_db)
-):
+from document_analyzer.core.config import settings
+class BatchRequest(BaseModel):
+    input_dir: str = settings.get('batch_processing.directory_input', 'input')
+    output_dir: str = settings.get('batch_processing.directory_output', 'output')
+    output_format: str = settings.get('batch_processing.default_format', 'json')
+
+def run_batch_processing(input_dir: str, output_dir: str, output_format: str):
+    processor = BatchProcessor()
+    processor.process_files(input_dir, output_dir, output_format)
+
+@router.post("/batch", status_code=202)
+async def create_batch_job(request: BatchRequest, background_tasks: BackgroundTasks):
     """
-    Submits a batch of documents for analysis.
+    Starts a batch processing job.
     """
-    storage = PostgreSQLStorage(db)
-    job_manager = JobManager(storage)
-    
-    batch_id = str(uuid.uuid4())
-    # A more robust implementation would create a Batch record in the database
-    # storage.create_batch(batch_id=batch_id, status="pending")
+    # Security check: Ensure directories are within the app's scope
+    base_dir = "/home/appuser/app"
+    input_dir = os.path.abspath(os.path.join(base_dir, request.input_dir))
+    output_dir = os.path.abspath(os.path.join(base_dir, request.output_dir))
 
-    job_ids = []
-    for file in files:
-        content = await file.read()
-        content_hash = hashlib.sha256(content).hexdigest()
+    if not input_dir.startswith(base_dir) or not output_dir.startswith(base_dir):
+        raise HTTPException(status_code=400, detail="Invalid directory path.")
 
-        document = storage.create_document(
-            filename=file.filename,
-            content_hash=content_hash,
-            file_size=len(content),
-            mime_type=file.content_type,
-        )
+    if not os.path.isdir(input_dir):
+        raise HTTPException(status_code=400, detail=f"Input directory does not exist: {input_dir}")
 
-        job_id = job_manager.submit_job(
-            document_id=document.id,
-            data={"filename": file.filename} # Add any other job-specific data here
-        )
-        job_ids.append(job_id)
-
-    return {"batch_id": batch_id, "job_ids": job_ids}
+    background_tasks.add_task(run_batch_processing, input_dir, output_dir, request.output_format)
+    return {"message": "Batch processing job started."}
