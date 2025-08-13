@@ -33,6 +33,7 @@ class PostgreSQLStorage(StorageInterface):
         new_job = Job(
             id=job_id,
             document_id=job_data.get("document_id"),
+            job_type=job_data.get("job_type", "single_file"),
             status=job_data.get("status", "pending"),
             data=job_data.get("data")
         )

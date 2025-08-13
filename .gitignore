@@ -1,4 +1,6 @@
 .venv/
+input/
+output/
 *.pyc
 __pycache__/
 /__pycache/*
@@ -18,3 +20,12 @@ local.env
 testfile2.pdf
 testfile.pdf.pdf
 *.pdf
+logs/document_analyzer.log
+prompts/templates/answer_format.md
+prompts/templates/answer_format.md
+prompts/templates/instruction.md
+prompts/templates/question.md
+prompts/templates/user_question.md
+result2.json
+result1.md
+result1.md

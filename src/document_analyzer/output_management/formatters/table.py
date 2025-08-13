@@ -1,9 +1,13 @@
 import csv
 import json
 from io import StringIO
-from .base import OutputFormatter
+from ..base import OutputFormatter
 
 class TableFormatter(OutputFormatter):
+    @property
+    def file_extension(self) -> str:
+        return "csv"
+
     def format(self, data: dict, format_type: str = "csv") -> str:
         """
         Formats the given data as a table (CSV or JSON).

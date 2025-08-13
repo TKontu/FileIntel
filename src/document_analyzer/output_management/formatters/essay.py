@@ -1,6 +1,10 @@
-from .base import OutputFormatter
+from ..base import OutputFormatter
 
 class EssayFormatter(OutputFormatter):
+    @property
+    def file_extension(self) -> str:
+        return "md"
+
     def format(self, data: dict) -> str:
         """
         Formats the given data as a structured essay.

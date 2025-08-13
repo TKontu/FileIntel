@@ -5,19 +5,34 @@ class JobManager:
     def __init__(self, storage: StorageInterface):
         self.storage = storage
 
-    def submit_job(self, document_id: str, data: dict) -> str:
+    def submit_job(self, job_type: str, data: dict, document_id: str = None) -> str:
         """
         Submits a new job and returns a job ID.
         """
         job_id = str(uuid4())
         job_data = {
             "id": job_id,
-            "document_id": document_id,
             "status": "pending",
+            "job_type": job_type,
             "data": data
         }
+        if document_id:
+            job_data["document_id"] = document_id
+            
         self.storage.save_job(job_data)
         return job_id
+
+    def submit_file_job(self, document_id: str, data: dict) -> str:
+        """
+        Submits a new single-file job and returns a job ID.
+        """
+        return self.submit_job(job_type="single_file", data=data, document_id=document_id)
+
+    def submit_batch_job(self, data: dict) -> str:
+        """
+        Submits a new batch job and returns a job ID.
+        """
+        return self.submit_job(job_type="batch", data=data)
 
     def get_next_job(self) -> dict:
         """

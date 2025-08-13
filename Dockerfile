@@ -51,7 +51,6 @@ WORKDIR /home/appuser/app
 # Copy the application source code
 COPY ./src ./src
 COPY ./config ./config
-COPY ./prompts ./prompts
 COPY ./scripts ./scripts
 COPY ./docker-entrypoint.sh .
 COPY ./tests ./tests

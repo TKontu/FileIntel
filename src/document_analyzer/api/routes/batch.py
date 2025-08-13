@@ -1,47 +1,34 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
-import hashlib
-import uuid
-
+from document_analyzer.batch_processing.job_manager import JobManager
+from document_analyzer.core.config import settings
+from document_analyzer.storage.base import StorageInterface
+from document_analyzer.storage.postgresql_storage import PostgreSQLStorage
 from ..dependencies import get_db
-from ...storage.postgresql_storage import PostgreSQLStorage
-from ...batch_processing.job_manager import JobManager
-from ..models import BatchAnalyzeResponse
+import os
 
 router = APIRouter()
 
-@router.post("/analyze/batch", response_model=BatchAnalyzeResponse)
-async def analyze_batch(
-    files: List[UploadFile] = File(...),
-    db: Session = Depends(get_db)
-):
+def get_storage(db: Session = Depends(get_db)) -> StorageInterface:
+    return PostgreSQLStorage(db)
+
+def get_job_manager(storage: StorageInterface = Depends(get_storage)) -> JobManager:
+    return JobManager(storage=storage)
+
+@router.post("/batch", status_code=202)
+async def create_batch_job(job_manager: JobManager = Depends(get_job_manager)):
     """
-    Submits a batch of documents for analysis.
+    Submits a batch processing job using pre-configured directories.
     """
-    storage = PostgreSQLStorage(db)
-    job_manager = JobManager(storage)
+    input_dir = settings.get('batch_processing.directory_input', 'input')
     
-    batch_id = str(uuid.uuid4())
-    # A more robust implementation would create a Batch record in the database
-    # storage.create_batch(batch_id=batch_id, status="pending")
+    if not os.path.isdir(input_dir) or not os.listdir(input_dir):
+        raise HTTPException(status_code=400, detail=f"Input directory '{input_dir}' is empty or does not exist.")
 
-    job_ids = []
-    for file in files:
-        content = await file.read()
-        content_hash = hashlib.sha256(content).hexdigest()
-
-        document = storage.create_document(
-            filename=file.filename,
-            content_hash=content_hash,
-            file_size=len(content),
-            mime_type=file.content_type,
-        )
-
-        job_id = job_manager.submit_job(
-            document_id=document.id,
-            data={"filename": file.filename} # Add any other job-specific data here
-        )
-        job_ids.append(job_id)
-
-    return {"batch_id": batch_id, "job_ids": job_ids}
+    job_data = {
+        "input_dir": input_dir,
+        "output_dir": settings.get('batch_processing.directory_output', 'output'),
+        "output_format": settings.get('batch_processing.default_format', 'json')
+    }
+    job_id = job_manager.submit_batch_job(data=job_data)
+    return {"message": "Batch processing job submitted.", "job_id": job_id}

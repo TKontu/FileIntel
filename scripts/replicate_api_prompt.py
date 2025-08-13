@@ -10,6 +10,7 @@ import sys
 # Add the src directory to the Python path to allow for absolute imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
+from document_analyzer.core.config import settings
 from document_analyzer.document_processing.factory import ReaderFactory
 from document_analyzer.prompt_management.loader import PromptLoader
 from document_analyzer.prompt_management.composer import PromptComposer
@@ -26,9 +27,14 @@ def replicate_api_prompt(file_path):
 
     try:
         # 1. Setup components exactly like the worker
-        prompts_dir = Path(__file__).parent.parent / 'prompts' / 'templates'
+        prompts_dir_str = settings.get('prompts.directory', str(Path(__file__).parent.parent / 'prompts' / 'templates'))
+        prompts_dir = Path(prompts_dir_str)
         loader = PromptLoader(prompts_dir=prompts_dir)
-        composer = PromptComposer(loader=loader)
+        composer = PromptComposer(
+            loader=loader,
+            max_length=settings.get('llm.context_length'),
+            model_name=settings.get('llm.model')
+        )
         reader_factory = ReaderFactory()
 
         # 2. Process the document using the factory to get the correct reader

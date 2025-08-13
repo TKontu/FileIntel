@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from datetime import datetime
 
 class AnalyzeRequest(BaseModel):
     file_path: str
@@ -11,6 +12,9 @@ class AnalyzeResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
+    job_type: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
 
 class JobResultResponse(BaseModel):
     job_id: str

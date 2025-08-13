@@ -1,11 +1,11 @@
 llm:
   provider: "openai"
-  model: "gemma3"
-  max_tokens: 4000
+  model: "gemma3-4B"
+  context_length: 128000
   temperature: 0.1
   rate_limit: 60
   openai:
-    base_url: "http://192.168.0.247:11435/v1"
+    base_url: "http://192.168.0.247:9003/v1"
     api_key: "ollama"
     rate_limit: 30
   anthropic:
@@ -29,6 +29,9 @@ output:
   retry_attempts: 3
   timeout: 300
 
+prompts:
+  directory: "/home/appuser/app/prompts/templates"
+
 api:
   host: "0.0.0.0"
   port: 8000
@@ -40,3 +43,8 @@ storage:
   connection_string: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   cache_ttl: 3600
   redis_host: "localhost"
+
+batch_processing:
+  directory_input: "input"
+  directory_output: "output"
+  default_format: "json"
