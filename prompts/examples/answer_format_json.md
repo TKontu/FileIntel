@@ -6,17 +6,21 @@ Please provide your answer as a single, valid JSON object. The specific structur
 
 ```json
 {
-  "summary": "This is a brief summary of the findings from the document.",
+  "document": "document name",
   "key_points": [
     {
-      "point": "First key point",
-      "details": "Elaboration on the first key point.",
+      "category": "categorization of the item",
+      "support_need": "categorization of support need severity related to the item, very high, high, minor, no need, not relevant",
+      "point": "Question",
+      "details": "First answer / first item",
       "page_reference": 2
     },
     {
-      "point": "Second key point",
-      "details": "Elaboration on the second key point.",
-      "page_reference": 5
+      "category": "categorization of the item",
+      "support_need": "categorization of support need severity related to the item, very high, high, minor, no need, not relevant",
+      "point": "Question",
+      "details": "second answer / second item",
+      "page_reference": 2
     }
   ],
   "confidence_score": 0.95

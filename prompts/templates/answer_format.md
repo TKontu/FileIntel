@@ -1,13 +1,26 @@
-# Answer Format
+# Answer Format: JSON
 
----
+Please provide your answers as a single, valid JSON object. Format the answer according to following json structure. the entire output **must** be a single JSON object.
 
-**_ answer_format _**
+### Example of Expected Format
 
-Please provide the answer as a list of key insights or items found in the document that are relevant to the question. Each item in the list should be on a new line and start with a hyphen. Categorize each finding and separate the categorization with vertical bar. Output only the list of relevant items, no comment or pondering about the task.
-
-Example:
-
-- Level | This is the first key insight from the document.
-- Level | This is the second relevant piece of information.
-- Level | This is another finding that answers the user's question.
+```json # Do not copy this line with backticks
+{
+  "document": "document name",
+  "key_points": [
+    {
+      "classification": "Level 2: Requires Substantial Support",
+      "category": "High Probability Trait",
+      "item": "First answer / first item",
+      "page_reference": 2
+    },
+    {
+      "classification": "Level 1: Requires Support",
+      "category": "Typical Trait",
+      "item": "First answer / first item",
+      "page_reference": 7
+    }
+  ]
+}
+# Do not copy these backticks
+```

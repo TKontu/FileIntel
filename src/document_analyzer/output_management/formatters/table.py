@@ -1,7 +1,7 @@
 import csv
 import json
 from io import StringIO
-from .base import OutputFormatter
+from ..base import OutputFormatter
 
 class TableFormatter(OutputFormatter):
     @property

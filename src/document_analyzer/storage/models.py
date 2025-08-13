@@ -20,7 +20,8 @@ class Document(Base):
 class Job(Base):
     __tablename__ = 'jobs'
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey('documents.id'), nullable=False)
+    document_id = Column(String, ForeignKey('documents.id')) # Can be null for batch jobs
+    job_type = Column(String, nullable=False, default="single_file") # 'single_file' or 'batch'
     status = Column(String, nullable=False)
     data = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -28,17 +29,6 @@ class Job(Base):
 
     document = relationship("Document", back_populates="jobs")
     result = relationship("Result", back_populates="job", uselist=False)
-    batch_id = Column(String, ForeignKey('batches.id'))
-    batch = relationship("Batch", back_populates="jobs")
-
-class Batch(Base):
-    __tablename__ = 'batches'
-    id = Column(String, primary_key=True)
-    status = Column(String, nullable=False, default="pending")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    jobs = relationship("Job", back_populates="batch")
 
 class Result(Base):
     __tablename__ = 'results'

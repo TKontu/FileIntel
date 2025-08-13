@@ -1,4 +1,4 @@
-from .base import OutputFormatter
+from ..base import OutputFormatter
 
 class EssayFormatter(OutputFormatter):
     @property

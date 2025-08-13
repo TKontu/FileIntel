@@ -56,8 +56,18 @@ async def analyze_document(
     )
 
     # Submit new job
-    job_id = job_manager.submit_job(document_id=document.id, data={"file_path": file_path})
+    job_id = job_manager.submit_file_job(document_id=document.id, data={"file_path": str(file_path)})
     return {"job_id": job_id}
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job(job_id: str, storage: StorageInterface = Depends(get_storage)):
+    """
+    Retrieves the full details and status of a job.
+    """
+    job = storage.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job.id, "status": job.status, "job_type": job.job_type, "data": job.data, "created_at": job.created_at}
 
 @router.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
 def get_job_status(job_id: str, storage: StorageInterface = Depends(get_storage)):
