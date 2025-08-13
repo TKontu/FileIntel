@@ -9,14 +9,10 @@ Please provide your answers as a single, valid JSON object. Format the answer ac
   "document": "document name",
   "key_points": [
     {
-      "classification": "Level 2: Requires Substantial Support",
-      "category": "High Probability Trait",
       "item": "First answer / first item",
       "page_reference": 2
     },
     {
-      "classification": "Level 1: Requires Support",
-      "category": "Typical Trait",
       "item": "First answer / first item",
       "page_reference": 7
     }
