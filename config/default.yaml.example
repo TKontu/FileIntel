@@ -1,0 +1,42 @@
+llm:
+  provider: "openai"
+  model: "gemma3-4B"
+  max_tokens: 4000
+  temperature: 0.1
+  rate_limit: 60
+  openai:
+    base_url: "http://192.168.0.247:9003/v1"
+    api_key: "ollama"
+    rate_limit: 30
+  anthropic:
+    rate_limit: 15
+
+document_processing:
+  chunk_size: 4000
+  overlap: 200
+  max_file_size: "100MB"
+  supported_formats: ["pdf", "epub", "mobi"]
+
+ocr:
+  primary_engine: "pdf_extract_kit"
+  fallback_engines: ["tesseract", "google_vision"]
+
+output:
+  default_format: "json"
+  output_directory: "./results"
+  include_metadata: true
+  max_concurrent_jobs: 5
+  retry_attempts: 3
+  timeout: 300
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins: ["*"]
+  rate_limit: 100
+
+storage:
+  type: "postgres"
+  connection_string: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+  cache_ttl: 3600
+  redis_host: "localhost"

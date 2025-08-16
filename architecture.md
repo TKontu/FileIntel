@@ -193,7 +193,7 @@ document_analyzer/
 ├── prompts/
 │   ├── templates/
 │   │   ├── instruction.md
-│   │   ├── question.md
+│   │   ├── prompt-frame.md
 │   │   └── answer_format.md
 │   └── examples/
 ├── config/

@@ -17,7 +17,7 @@ class PromptComposer:
         self,
         context: dict,
         instruction_template: str = "instruction",
-        question_template: str = "question",
+        prompt_frame: str = "prompt_frame",
         answer_format_template: str = "answer_format",
         instruction_version: str = None,
         question_version: str = None,
@@ -28,7 +28,7 @@ class PromptComposer:
         by truncating the document text if necessary.
         """
         instruction = self.loader.load_prompt(instruction_template, version=instruction_version)
-        question = self.loader.load_prompt(question_template, version=question_version)
+        question = self.loader.load_prompt(prompt_frame, version=question_version)
         answer_format = self.loader.load_prompt(answer_format_template, version=answer_format_version)
 
         full_prompt_template = f"{instruction}\n\n{question}\n\n{answer_format}"
