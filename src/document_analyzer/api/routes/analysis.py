@@ -20,9 +20,15 @@ def get_storage(db: Session = Depends(get_db)) -> StorageInterface:
 def get_job_manager(storage: StorageInterface = Depends(get_storage)) -> JobManager:
     return JobManager(storage=storage)
 
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+# ... (keep other imports)
+
+# ... (keep get_storage and get_job_manager)
+
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_document(
     file: UploadFile = File(...),
+    task_name: str = Form("default_analysis"),
     job_manager: JobManager = Depends(get_job_manager),
     storage: StorageInterface = Depends(get_storage),
 ):
@@ -42,8 +48,11 @@ async def analyze_document(
         if existing_job:
             return {"job_id": existing_job.id}
 
-    # Save the file to the uploads directory
-    file_path = os.path.join("uploads", f"{content_hash}_{file.filename}")
+    # Define the absolute path for saving uploads inside the container
+    upload_dir = "/home/appuser/app/uploads"
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, f"{content_hash}_{file.filename}")
+    
     with open(file_path, "wb") as f:
         f.write(content)
 
@@ -55,9 +64,16 @@ async def analyze_document(
         mime_type=file.content_type,
     )
 
-    # Submit new job
-    job_id = job_manager.submit_file_job(document_id=document.id, data={"file_path": str(file_path)})
+    # Submit new job with task_name and correct file_path
+    job_data = {
+        "file_path": file_path,
+        "task_name": task_name
+    }
+    job_id = job_manager.submit_file_job(document_id=document.id, data=job_data)
     return {"job_id": job_id}
+
+# ... (keep other routes)
+
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job(job_id: str, storage: StorageInterface = Depends(get_storage)):

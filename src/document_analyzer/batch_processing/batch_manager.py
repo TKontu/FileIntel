@@ -1,25 +1,16 @@
 from pathlib import Path
 from document_analyzer.document_processing.factory import ReaderFactory
-from document_analyzer.llm_integration.openai_provider import OpenAIProvider
+from document_analyzer.llm_integration.base import LLMProvider
 from document_analyzer.prompt_management.composer import PromptComposer
-from document_analyzer.prompt_management.loader import PromptLoader
 from document_analyzer.output_management.factory import FormatterFactory
-from document_analyzer.core.config import settings
 
 class BatchProcessor:
-    def __init__(self):
+    def __init__(self, composer: PromptComposer, llm_provider: LLMProvider):
         self.reader_factory = ReaderFactory()
-        self.llm_provider = OpenAIProvider()
-        prompts_dir_str = settings.get('prompts.directory', 'prompts/templates')
-        prompts_dir = Path(prompts_dir_str)
-        self.loader = PromptLoader(prompts_dir=prompts_dir)
-        self.composer = PromptComposer(
-            loader=self.loader,
-            max_length=settings.get('llm.context_length'),
-            model_name=settings.get('llm.model')
-        )
+        self.composer = composer
+        self.llm_provider = llm_provider
 
-    def process_files(self, input_dir: str, output_dir: str, output_format: str):
+    def process_files(self, input_dir: str, output_dir: str, output_format: str, task_name: str):
         input_path = Path(input_dir)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -35,12 +26,10 @@ class BatchProcessor:
                     document_text = "\n".join([el.text for el in elements if hasattr(el, 'text')])
 
                     # 2. Compose the prompt
-                    user_question = self.loader.load_prompt("user_question")
                     context = {
                         "document_text": document_text,
-                        "question": user_question
                     }
-                    prompt = self.composer.compose(context)
+                    prompt = self.composer.compose(task_name, context)
 
                     # 3. Get LLM response
                     response = self.llm_provider.generate_response(prompt)

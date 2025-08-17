@@ -12,7 +12,7 @@ You must produce a **single valid JSON object** with this structure:
       "classification": "<classification level from list>",
       "category": "<category from list>",
       "item": "<full-sentence behavior/experience description>",
-      "page_reference": "<page number from the document>"
+      "confidence_score": "<value between 0...100 (low...high), which is an estimate of confidence how surely described item actually exists in the provided input prompt content>",
     }
   ]
 }
@@ -26,13 +26,13 @@ You must produce a **single valid JSON object** with this structure:
   "classification": "Level 2: Requires Substantial Support",
   "category": "High Probability Trait",
   "item": "Struggles with verbal communication and often relies on alternative methods, requiring tailored support to express needs.",
-  "page_reference": 10
+  "confidence_score": 68
 },
 {
   "classification": "Level 1: Requires Support",
   "category": "Possible Trait of Functional ASD",
   "item": "Finds it challenging to transition between activities and benefits from preparation and visual supports to feel secure.",
-  "page_reference": 11
+  "confidence_score": 21
 }
 ```
 

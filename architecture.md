@@ -1,337 +1,143 @@
-# Description
+# Document Analysis System Architecture
 
-## Overview
+## 1. Overview
 
-A Python-based document analysis system that processes EPUB, MOBI, and PDF files using LLM APIs with customizable markdown-based prompts and structured output formats.
+This document describes the current architecture of the Document Analysis System. The system is a Python-based application designed to process and analyze documents using Large Language Models (LLMs). It exposes a RESTful API for submitting documents, managing analysis jobs, and retrieving results.
 
-## Data Flow
+The core functionality is built around a job-based, asynchronous processing pipeline. Users can upload single files or initiate batch processing on a directory of files. The system uses a PostgreSQL database to track documents and jobs, and Redis for caching, ensuring that identical documents are not processed more than once.
 
-1. **Input Stage**: Documents are uploaded or batch-loaded from directory
-2. **Document Type Detection**: System analyzes document to determine processing method
-3. **Processor Selection**: Choose optimal processor (PDF-Extract-Kit, traditional PDF, OCR fallback)
-4. **Content Extraction**: Extract text, tables, images with unified DocumentElement format
-5. **Content Validation**: Ensure meaningful content was extracted
-6. **LLM Bridge**: Convert to LLM-optimized format (structured or flattened)
-7. **Prompt Composition**: Merge instruction.md + question.md + answer_format.md
-8. **LLM Processing**: Send to appropriate LLM provider with rate limiting
-9. **Output Generation**: Format response according to specified output type
-10. **Result Storage**: Store results and metadata for retrieval# Document Analysis System Architecture
+## 2. System Architecture
 
-## System Architecture
+The system is composed of the following core layers and components:
+
+![System Architecture Diagram](https://i.imgur.com/example.png)  <!-- Placeholder for a diagram -->
 
 ### Core Components
 
-#### 1. Document Processing Layer
+#### 2.1. API Layer (FastAPI)
+**Location**: `src/document_analyzer/api/`
 
-**Purpose**: Extract and preprocess content from various document formats using specialized tools
+-   **Purpose**: Provides the external interface for the system.
+-   **Implementation**: Built with **FastAPI**. It defines Pydantic models for request/response validation and includes three main routers:
+    -   `single.py`: Handles single file uploads.
+    -   `batch.py`: Initiates processing for a pre-configured directory.
+    -   `analysis.py`: A more advanced single-file submission endpoint that prevents duplicate processing and provides endpoints for checking job status and retrieving results.
+-   **Key Dependencies**: `fastapi`, `uvicorn`, `pydantic`.
 
-- **UnifiedDocumentProcessor**: Main orchestrator that manages processor selection and fallback
-- **DocumentTypeDetector**: Analyzes documents to determine optimal processing method
-- **DocumentToLLMBridge**: Converts processed elements to LLM-optimized formats
-- **Processor Implementations**:
-  - **PDFExtractKitProcessor**: Advanced layout understanding using PDF-Extract-Kit API
-  - **TraditionalPDFProcessor**: Fast text extraction using pdfplumber for simple PDFs
-  - **EPUBReader**: EPUB parsing using `ebooklib`
-  - **MOBIReader**: MOBI parsing using specialized libraries
-  - **FallbackOCRProcessor**: Tesseract OCR as universal fallback
-- **DocumentElement Model**: Unified representation for text, tables, images, and metadata
-- **ContentValidator**: Ensures meaningful content extraction before LLM processing
+#### 2.2. Batch Processing Engine
+**Location**: `src/document_analyzer/batch_processing/`
 
-#### 2. Prompt Management System
+-   **Purpose**: Manages the lifecycle of analysis jobs.
+-   **Implementation**:
+    -   `JobManager`: The central component responsible for creating and submitting jobs to the storage layer. It is used by all API endpoints that initiate a processing task.
+    -   `Worker`: (Driven by `run_worker.py`) A Celery-based worker that continuously polls the database for pending jobs, processes them, and stores the results.
+-   **Key Dependencies**: `celery`, `redis`.
 
-**Purpose**: Handle markdown-based prompt composition and templating
+#### 2.3. Document Processing Layer
+**Location**: `src/document_analyzer/document_processing/`
 
-- **PromptLoader**: Loads and validates markdown prompt files
-- **PromptComposer**: Merges instruction.md + question.md + answer_format.md
-- **TemplateEngine**: Handles variable substitution and dynamic content
-- **PromptValidator**: Ensures prompt structure and completeness
+-   **Purpose**: Handles the parsing and content extraction from various document formats.
+-   **Implementation**: A factory-based design.
+    -   `TypeDetector`: Identifies the MIME type of a file.
+    -   `factory.py`: Selects the appropriate processor based on the file type.
+    -   `processors/`: Contains specialized modules for different formats (`.epub`, `.mobi`, `.pdf`, `.txt`). It includes processors that use `pdfplumber` for text-based PDFs and `pytesseract` for OCR.
+-   **Key Dependencies**: `pdfplumber`, `ebooklib`, `mobi`, `pytesseract`.
 
-#### 3. LLM Integration Layer
+#### 2.4. LLM Integration Layer
+**Location**: `src/document_analyzer/llm_integration/`
 
-**Purpose**: Abstract interface for various LLM providers
+-   **Purpose**: Provides a standardized interface for communicating with different LLM providers.
+-   **Implementation**: A provider-based design.
+    -   `base.py`: Defines the abstract `LLMProvider` interface.
+    -   `openai_provider.py`: Implementation for OpenAI models.
+    -   `anthropic_provider.py`: Implementation for Anthropic models.
+    -   `RateLimiter`: A basic mechanism to control the request frequency to LLM APIs.
+-   **Key Dependencies**: `openai`, `anthropic`, `tenacity`.
 
-- **LLMProvider Interface**: Abstract base for LLM implementations
-- **OpenAIProvider**: OpenAI GPT models integration
-- **AnthropicProvider**: Claude models integration
-- **LocalLLMProvider**: Local model support (Ollama, etc.)
-- **RateLimiter**: Manages API rate limits and retry logic
-- **ResponseParser**: Extracts and validates LLM responses
+#### 2.5. Prompt Management System
+**Location**: `src/document_analyzer/prompt_management/`
 
-#### 4. Batch Processing Engine
+-   **Purpose**: Constructs the final prompts sent to the LLMs.
+-   **Implementation**:
+    -   `PromptLoader`: Reads prompt components (instruction, question, format) from markdown files in the `/prompts` directory.
+    -   `TemplateEngine`: Uses Jinja2 for variable substitution.
+    -   `PromptComposer`: Assembles the different parts into a final, coherent prompt.
+-   **Key Dependencies**: `Jinja2`, `mistune`.
 
-**Purpose**: Orchestrate multiple file processing with queue management
+#### 2.6. Output Management System
+**Location**: `src/document_analyzer/output_management/`
 
-- **JobManager**: Manages processing queue and job lifecycle
-- **Worker**: Processes individual documents
-- **ProgressTracker**: Monitors batch processing status
-- **ErrorHandler**: Manages failures and retry logic
-- **ResultAggregator**: Collects and formats batch results
+-   **Purpose**: Formats the raw LLM output into the desired structure.
+-   **Implementation**: A factory-based design.
+    -   `factory.py`: Selects the appropriate formatter.
+    -   `formatters/`: Contains modules to format the output as JSON, Markdown, a simple list, a table, or an essay.
+-   **Key Dependencies**: None.
 
-#### 5. Output Management System
+#### 2.7. Storage Layer
+**Location**: `src/document_analyzer/storage/`
 
-**Purpose**: Handle various output formats and destinations
+-   **Purpose**: Manages all data persistence.
+-   **Implementation**:
+    -   `models.py`: Defines the SQLAlchemy schema for the `documents`, `jobs`, and `results` tables.
+    -   `PostgreSQLStorage`: The concrete implementation of the storage interface, handling all database interactions.
+    -   `RedisStorage`: Used for caching to prevent re-processing of existing documents.
+-   **Key Dependencies**: `SQLAlchemy`, `psycopg2-binary`, `redis`.
 
-- **OutputFormatter Interface**: Abstract base for output formats
-- **EssayFormatter**: Structured essay output
-- **ListFormatter**: Bullet/numbered list output
-- **TableFormatter**: Tabular data output (CSV, JSON, Markdown)
-- **JSONFormatter**: Structured JSON output
-- **OutputWriter**: Writes results to files or databases
+## 3. Data Flow
 
-#### 6. API Layer
+1.  **Submission**: A user submits a document via the `/api/v1/analyze` endpoint. The API reads the file, calculates its SHA256 hash, and saves it to the `uploads/` directory.
+2.  **Deduplication**: The system checks if a document with the same hash already exists in the database. If so, it returns the existing job ID and stops.
+3.  **Job Creation**: If the document is new, a `document` record is created in the database. A new `job` record is then created with a "pending" status.
+4.  **Worker Pickup**: A Celery worker, running separately, polls the database for pending jobs. It retrieves the job and the associated file path.
+5.  **Content Extraction**: The worker passes the file to the **Document Processing Layer**, which detects the file type and uses the appropriate processor to extract its text content.
+6.  **Prompt Composition**: The extracted text is sent to the **Prompt Management System**, which combines it with the relevant prompt templates from the `/prompts` directory.
+7.  **LLM Analysis**: The final prompt is sent to the configured LLM via the **LLM Integration Layer**.
+8.  **Output Formatting**: The raw response from the LLM is passed to the **Output Management System**, which formats it into the requested structure (e.g., JSON).
+9.  **Result Storage**: The formatted result is stored in the `results` table in the database, and the job's status is updated to "completed".
+10. **Retrieval**: The user can poll the `/api/v1/jobs/{job_id}/result` endpoint to retrieve the final result once the job is complete.
 
-**Purpose**: RESTful API for external integration
+## 4. Key Design Patterns
 
-- **FastAPI Application**: Main API server
-- **Authentication**: API key management and validation
-- **Request Models**: Pydantic models for API requests
-- **Response Models**: Standardized API responses
-- **WebSocket Support**: Real-time progress updates
-- **Documentation**: Auto-generated OpenAPI docs
+-   **Strategy Pattern**: Used in the Document Processing and LLM Integration layers to allow for different implementations (e.g., different file type processors, different LLM providers) to be used interchangeably.
+-   **Factory Pattern**: Used in the Document Processing and Output Management layers to select the appropriate processor or formatter at runtime based on the file type or requested output format.
+-   **Task Queue**: The entire processing pipeline is managed asynchronously using a task queue (Celery), which decouples the API from the resource-intensive document processing work.
 
-#### 7. Configuration Management
-
-**Purpose**: Centralized configuration and settings
-
-- **ConfigManager**: Loads and validates configuration
-- **Environment Variables**: Runtime configuration
-- **Secrets Management**: API keys and sensitive data
-- **Logging Configuration**: Structured logging setup
-
-#### 8. Storage Layer
-
-**Purpose**: Persistent storage for jobs, results, and metadata
-
-- **Database Interface**: Abstract storage layer
-- **SQLiteStorage**: Local database implementation
-- **PostgreSQLStorage**: Production database support
-- **FileStorage**: File-based result storage
-- **CacheManager**: Redis-based caching for performance
-
-#### 9. Evaluation and Quality Assurance
-
-**Purpose**: Automated testing and quality validation of analysis results
-
-- **EvaluationEngine**: Automated assessment of analysis quality
-- **GroundTruthManager**: Management of reference datasets for validation
-- **MetricsCollector**: Accuracy, completeness, and consistency scoring
-- **A/BTestFramework**: Compare different prompts, models, and processing methods
-- **HumanFeedbackLoop**: Integration for human review and correction
-- **QualityReporting**: Dashboards and alerts for quality monitoring
+## 5. Project Directory Structure (Simplified)
 
 ```
-document_analyzer/
-├── src/
-│   ├── document_analyzer/
-│   │   ├── __init__.py
-│   │   ├── core/
-│   │   │   ├── __init__.py
-│   │   │   ├── config.py
-│   │   │   ├── exceptions.py
-│   │   │   └── logging.py
-│   │   ├── document_processing/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py
-│   │   │   ├── unified_processor.py
-│   │   │   ├── type_detector.py
-│   │   │   ├── bridge.py
-│   │   │   ├── processors/
-│   │   │   │   ├── pdf_extract_kit.py
-│   │   │   │   ├── traditional_pdf.py
-│   │   │   │   ├── epub_processor.py
-│   │   │   │   ├── mobi_processor.py
-│   │   │   │   └── fallback_ocr.py
-│   │   │   ├── elements.py
-│   │   │   └── validator.py
-│   │   ├── prompt_management/
-│   │   │   ├── __init__.py
-│   │   │   ├── loader.py
-│   │   │   ├── composer.py
-│   │   │   ├── template_engine.py
-│   │   │   └── validator.py
-│   │   ├── llm_integration/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py
-│   │   │   ├── openai_provider.py
-│   │   │   ├── anthropic_provider.py
-│   │   │   ├── local_provider.py
-│   │   │   └── rate_limiter.py
-│   │   ├── batch_processing/
-│   │   │   ├── __init__.py
-│   │   │   ├── job_manager.py
-│   │   │   ├── worker.py
-│   │   │   ├── progress_tracker.py
-│   │   │   └── error_handler.py
-│   │   ├── output_management/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py
-│   │   │   ├── formatters/
-│   │   │   │   ├── essay.py
-│   │   │   │   ├── list.py
-│   │   │   │   ├── table.py
-│   │   │   │   └── json.py
-│   │   │   └── writer.py
-│   │   ├── api/
-│   │   │   ├── __init__.py
-│   │   │   ├── main.py
-│   │   │   ├── auth.py
-│   │   │   ├── models.py
-│   │   │   ├── routes/
-│   │   │   │   ├── analysis.py
-│   │   │   │   ├── batch.py
-│   │   │   │   └── status.py
-│   │   │   └── websocket.py
-│   │   └── storage/
-│   │       ├── __init__.py
-│   │       ├── base.py
-│   │       ├── sqlite_storage.py
-│   │       ├── postgresql_storage.py
-│   │       └── cache.py
-│   └── cli/
-│       ├── __init__.py
-│       └── main.py
-├── prompts/
-│   ├── templates/
-│   │   ├── instruction.md
-│   │   ├── prompt-frame.md
-│   │   └── answer_format.md
-│   └── examples/
-├── config/
-│   ├── default.yaml
-│   ├── development.yaml
-│   └── production.yaml
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── fixtures/
-├── docs/
-│   ├── api.md
-│   ├── usage.md
-│   └── examples/
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── requirements/
-│   ├── base.txt
-│   ├── dev.txt
-│   └── prod.txt
-├── scripts/
-│   ├── setup.sh
-│   └── deploy.sh
+C:\code\FileIntel\
+├── alembic.ini
+├── docker-compose.yml
+├── Dockerfile
 ├── pyproject.toml
-├── README.md
-└── .env.example
+├── config/
+│   └── default.yaml
+├── prompts/
+│   └── default_analysis/
+├── src/
+│   └── document_analyzer/
+│       ├── api/
+│       │   ├── main.py
+│       │   └── routes/
+│       │       ├── analysis.py
+│       │       ├── batch.py
+│       │       └── single.py
+│       ├── batch_processing/
+│       │   ├── job_manager.py
+│       │   └── worker.py
+│       ├── document_processing/
+│       │   ├── factory.py
+│       │   └── processors/
+│       ├── llm_integration/
+│       │   ├── openai_provider.py
+│       │   └── anthropic_provider.py
+│       ├── output_management/
+│       │   ├── factory.py
+│       │   └── formatters/
+│       ├── prompt_management/
+│       │   └── composer.py
+│       └── storage/
+│           ├── models.py
+│           └── postgresql_storage.py
+└── tests/
 ```
-
-## Data Flow
-
-1. **Input Stage**: Documents are uploaded or batch-loaded from directory
-2. **Processing Stage**:
-   - Document text extraction
-   - Prompt composition
-   - LLM API calls with rate limiting
-3. **Output Stage**:
-   - Response parsing and validation
-   - Format-specific output generation
-   - Result storage and delivery
-
-## Key Design Patterns
-
-### 1. Strategy Pattern
-
-- Multiple document readers for different formats
-- Multiple LLM providers with unified interface
-- Multiple output formatters
-
-### 2. Factory Pattern
-
-- Document reader factory based on file extension
-- LLM provider factory based on configuration
-- Output formatter factory based on requested format
-
-### 3. Observer Pattern
-
-- Progress tracking during batch processing
-- WebSocket notifications for real-time updates
-
-### 4. Template Method Pattern
-
-- Base processing workflow with customizable steps
-- Consistent error handling across components
-
-## Configuration Schema
-
-```yaml
-llm:
-  provider: "openai" # openai, anthropic, local
-  model: "gpt-4"
-  context_length: 4000
-  temperature: 0.1
-  rate_limit: 60 # requests per minute
-
-document_processing:
-  chunk_size: 4000
-  overlap: 200
-  max_file_size: "100MB"
-  supported_formats: ["pdf", "epub", "mobi"]
-
-ocr:
-  primary_engine: "pdf_extract_kit" # pdf_extract_kit, tesseract, google_vision, azure_cv
-  fallback_engines: ["tesseract", "google_vision"]
-  pdf_extract_kit:
-    api_endpoint: "http://localhost:8080"
-    timeout: 30
-    layout_detection: true
-    table_extraction: true
-  tesseract:
-    languages: ["eng", "spa", "fra"]
-    config: "--psm 6"
-  cloud_ocr:
-    google_vision_api_key: "${GOOGLE_VISION_API_KEY}"
-    azure_cv_endpoint: "${AZURE_CV_ENDPOINT}"
-
-output:
-  default_format: "json"
-  output_directory: "./results"
-  include_metadata: true
-  max_concurrent_jobs: 5
-  retry_attempts: 3
-  timeout: 300 # seconds
-
-api:
-  host: "0.0.0.0"
-  port: 8000
-  cors_origins: ["*"]
-  rate_limit: 100 # requests per minute per client
-
-storage:
-  type: "sqlite" # sqlite, postgresql
-  connection_string: "sqlite:///./database.db"
-  cache_ttl: 3600 # seconds
-```
-
-## Security Considerations
-
-- API key management and rotation
-- Input validation and sanitization
-- Rate limiting and abuse prevention
-- Secure file handling and temporary file cleanup
-- Authentication and authorization for API access
-- Audit logging for compliance
-
-## Scalability Considerations
-
-- Horizontal scaling with worker processes
-- Database connection pooling
-- Caching layer for frequent operations
-- Asynchronous processing with job queues
-- Load balancing for API endpoints
-- Container orchestration support
-
-## Error Handling Strategy
-
-- Graceful degradation for unsupported file formats
-- Retry logic with exponential backoff
-- Comprehensive error logging and monitoring
-- User-friendly error messages
-- Partial success handling for batch operations

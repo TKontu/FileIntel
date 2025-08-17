@@ -1,6 +1,6 @@
-# Question
+# Task
 
-Create a categorized list of ASD signs and their support needs, considering both observable behaviors and internalized masking.
+Create a categorized list of any mentioned ASD related behavior and traits, considering both observable behaviors, thought patterns and internalized masking. Assume that the provided file generally describes related patterns, even though it is not explicitly mentioned, on the provided context.
 
 **Instructions:**
 

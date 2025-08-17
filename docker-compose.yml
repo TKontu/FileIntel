@@ -47,7 +47,7 @@ services:
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./prompts/templates:/home/appuser/app/prompts/templates
+      - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
       - ./uploads:/home/appuser/app/uploads
       - ./input:/home/appuser/app/input
@@ -78,7 +78,7 @@ services:
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./prompts/templates:/home/appuser/app/prompts/templates
+      - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
       - ./run_worker.py:/home/appuser/app/run_worker.py
       - ./uploads:/home/appuser/app/uploads

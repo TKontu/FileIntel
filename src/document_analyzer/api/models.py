@@ -27,3 +27,10 @@ class URLAnalyzeRequest(BaseModel):
 class BatchAnalyzeResponse(BaseModel):
     batch_id: str
     job_ids: List[str]
+
+class BatchJobCreate(BaseModel):
+    task_name: str = "default_analysis"
+
+class BatchJobResponse(BaseModel):
+    message: str
+    job_id: str
