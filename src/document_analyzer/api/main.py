@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from ..core.config import settings
+
 from ..core.logging import setup_logging
 from .routes import collections
 

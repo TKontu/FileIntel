@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field
-from decouple import config
 import yaml
 from typing import Optional, List, Any
 

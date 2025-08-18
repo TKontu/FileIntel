@@ -1,8 +1,9 @@
 import os
 import sys
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
 import time
+
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 
 # Add the src directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
