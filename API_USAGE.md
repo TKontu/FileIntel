@@ -1,65 +1,88 @@
-# How to Analyze a Document via the API
+# How to Use the RAG API
 
-This guide provides clear, directly usable commands for analyzing a document.
-
-**Note:** The examples below use the file `testfile.pdf.pdf`. Make sure a file with this exact name exists in the root directory of the project, or replace it with your actual filename in the commands.
+This guide provides a complete workflow for creating a knowledge base (a "Collection"), uploading documents to it, and asking questions against the entire collection.
 
 ---
 
-## For PowerShell Users
+## Step 1: Create a Collection
 
-### Step 1: Upload the File
+First, create a collection to hold your documents.
 
-Copy and paste this entire block into your PowerShell terminal and press Enter. This command uploads the `testfile.pdf.pdf` and returns a `job_id`.
-
+### PowerShell
 ```powershell
-$form = @{ file = Get-Item -Path "testfile.pdf.pdf" }; Invoke-WebRequest -Uri http://localhost:8000/api/v1/analyze -Method POST -Form $form
+Invoke-WebRequest -Uri http://localhost:8000/api/v1/collections -Method POST -Body @{name="My First Collection"}
 ```
 
-**➡️ Action:** A `job_id` will be returned. **Copy this ID** for the next steps.
-
-### Step 2: Check the Job Status
-
-Replace `<your_job_id>` in the command below with the ID you copied from Step 1. Run the command to see if the job is `pending`, `running`, `completed`, or `failed`.
-
-```powershell
-Invoke-WebRequest -Uri http://localhost:8000/api/v1/jobs/9094b901-aa64-4835-8c01-8aa9a6daf89d/status
-```
-
-### Step 3: Retrieve the Result
-
-Once the job status is `completed`, run the following command (using the same `job_id`) to get the final analysis.
-
-```powershell
-Invoke-WebRequest -Uri http://localhost:8000/api/v1/jobs/<your_job_id>/result
-```
-
----
-
-## For Bash/cURL Users
-
-### Step 1: Upload the File
-
-Run this command to upload `testfile.pdf.pdf`.
-
+### Bash/cURL
 ```bash
-curl -X POST -F "file=@testfile.pdf.pdf" http://localhost:8000/api/v1/analyze
+curl -X POST -d "name=My First Collection" http://localhost:8000/api/v1/collections
 ```
 
-**➡️ Action:** A `job_id` will be returned. **Copy this ID** for the next steps.
+**➡️ Action:** A `collection_id` will be returned. **Copy this ID** for the next steps.
 
-### Step 2: Check the Job Status
+---
 
-Replace `<your_job_id>` in the command below with the ID you copied from Step 1.
+## Step 2: Upload a Document to the Collection
 
+Next, upload a document to your newly created collection.
+
+### PowerShell
+Replace `<your_collection_id>` with the ID you copied.
+```powershell
+$form = @{ file = Get-Item -Path "testfile.pdf" }; Invoke-WebRequest -Uri http://localhost:8000/api/v1/collections/<your_collection_id>/documents -Method POST -Form $form
+```
+
+### Bash/cURL
+Replace `<your_collection_id>` with the ID you copied.
+```bash
+curl -X POST -F "file=@testfile.pdf" http://localhost:8000/api/v1/collections/<your_collection_id>/documents
+```
+
+**➡️ Action:** The document will be uploaded, and an indexing job will be created in the background. You can upload multiple documents to the same collection.
+
+---
+
+## Step 3: Query the Collection
+
+Once your documents have been indexed, you can ask questions against the entire collection.
+
+### PowerShell
+Replace `<your_collection_id>` with the ID you copied.
+```powershell
+$body = @{ question = "What is the main topic of the documents in this collection?" } | ConvertTo-Json
+Invoke-WebRequest -Uri http://localhost:8000/api/v1/collections/<your_collection_id>/query -Method POST -Body $body -ContentType "application/json"
+```
+
+### Bash/cURL
+Replace `<your_collection_id>` with the ID you copied.
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"question": "What is the main topic of the documents in this collection?"}' http://localhost:8000/api/v1/collections/<your_collection_id>/query
+```
+
+**➡️ Action:** A `job_id` will be returned. **Copy this ID** to check the status and get the result.
+
+---
+
+## Step 4: Check Job Status and Get the Result
+
+You can check the status of your query job and retrieve the result once it's complete.
+
+### Check Status (PowerShell)
+```powershell
+Invoke-WebRequest -Uri http://localhost:8000/api/v1/jobs/<your_job_id>/status
+```
+
+### Check Status (Bash/cURL)
 ```bash
 curl http://localhost:8000/api/v1/jobs/<your_job_id>/status
 ```
 
-### Step 3: Retrieve the Result
+### Get Result (PowerShell)
+```powershell
+Invoke-WebRequest -Uri http://localhost:8000/api/v1/jobs/<your_job_id>/result
+```
 
-Once the status is `completed`, use the same `job_id` to get the result.
-
+### Get Result (Bash/cURL)
 ```bash
 curl http://localhost:8000/api/v1/jobs/<your_job_id>/result
 ```

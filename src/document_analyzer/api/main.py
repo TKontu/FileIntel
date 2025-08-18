@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from ..core.config import settings
 from ..core.logging import setup_logging
-from .routes import analysis, batch, single
+from .routes import collections
 
 app = FastAPI(
     title="Document Analyzer API",
@@ -9,13 +9,13 @@ app = FastAPI(
     version="0.1.0",
 )
 
-app.include_router(analysis.router, prefix="/api/v1", tags=["analysis"])
-app.include_router(batch.router, prefix="/api/v1", tags=["batch"])
-app.include_router(single.router, prefix="/api/v1", tags=["single"])
+app.include_router(collections.router, prefix="/api/v1", tags=["collections"])
+
 
 @app.on_event("startup")
 def on_startup():
     setup_logging()
+
 
 @app.get("/health")
 def health_check():

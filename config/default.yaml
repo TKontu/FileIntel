@@ -11,6 +11,12 @@ llm:
   anthropic:
     rate_limit: 15
 
+rag:
+  chunk_size: 1024
+  chunk_overlap: 200
+  embedding_provider: "openai"
+  embedding_model: "text-embedding-3-small"
+
 document_processing:
   chunk_size: 4000
   overlap: 200

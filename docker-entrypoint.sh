@@ -1,7 +1,9 @@
-#!/bin/sh
+#!/bin/sh -e
 
-# Run the database initialization script
-python /home/appuser/app/scripts/init_db.py
+# Migrations are run from one place to avoid race conditions.
+echo "Running database migrations..."
+alembic upgrade head
 
-# Execute the command passed to this script
+# Execute the command passed to this script.
+echo "Executing command: $@"
 exec "$@"

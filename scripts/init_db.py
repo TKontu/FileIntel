@@ -1,12 +1,11 @@
-
 import os
 import sys
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 import time
 
 # Add the src directory to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from document_analyzer.storage.models import Base
 
@@ -18,6 +17,7 @@ db_port = os.getenv("DB_PORT", "5432")
 db_name = os.getenv("DB_NAME", "fileintel")
 
 DATABASE_URL = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
 
 def init_db():
     # Wait for the database to be ready
@@ -44,6 +44,7 @@ def init_db():
     print("Creating tables...")
     Base.metadata.create_all(bind=engine, checkfirst=False)
     print("Tables created successfully.")
+
 
 if __name__ == "__main__":
     init_db()
