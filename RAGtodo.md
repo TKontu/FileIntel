@@ -21,7 +21,7 @@ The project is broken down into five distinct phases.
 
 **Goal:** Prepare the database, configuration, and core components required for the collection-based RAG pipeline.
 
--   [ ] **Task 1.1: Set Up the Vector Database and Data Models**
+-   [x] **Task 1.1: Set Up the Vector Database and Data Models**
     -   **Action:** Enable the `pgvector` extension in the PostgreSQL database (e.g., `CREATE EXTENSION vector;`).
     -   **Action:** Add the `pgvector-sqlalchemy` library to `pyproject.toml`.
     -   **File:** `src/document_analyzer/storage/models.py`
@@ -31,21 +31,21 @@ The project is broken down into five distinct phases.
     -   **Action:** Create a new Alembic migration script to apply these schema changes.
         -   **CRITICAL:** The migration must also create an **HNSW index** on the `embedding` column of the `DocumentChunk` table for efficient vector searching. Example SQL: `CREATE INDEX ON document_chunks USING hnsw (embedding vector_cosine_ops);`
 
--   [ ] **Task 1.2: Update Configuration**
+-   [x] **Task 1.2: Update Configuration**
     -   **File:** `config/default.yaml`
         -   **Action:** Add a `rag` section with settings for `chunk_size`, `chunk_overlap`, `embedding_provider`, and `embedding_model`.
     -   **File:** `src/document_analyzer/core/config.py`
         -   **Action:** Update the config loader to parse these new settings.
 
--   [ ] **Task 1.3: Create the Chunking Service**
+-   [x] **Task 1.3: Create the Chunking Service**
     -   **File:** Create `src/document_analyzer/document_processing/chunking.py`.
     -   **Action:** Implement a configurable `TextChunker` class.
 
--   [ ] **Task 1.4: Create the Embedding Service**
+-   [x] **Task 1.4: Create the Embedding Service**
     -   **File:** Create `src/document_analyzer/llm_integration/embedding_provider.py`.
     -   **Action:** Define a base `EmbeddingProvider` and a concrete `OpenAIEmbeddingProvider`.
 
--   [ ] **Task 1.5: Extend the Storage Layer**
+-   [x] **Task 1.5: Extend the Storage Layer**
     -   **File:** `src/document_analyzer/storage/postgresql_storage.py`
     -   **Action:** Add methods for `add_document_chunks` and `find_relevant_chunks_in_collection`.
 
@@ -53,16 +53,16 @@ The project is broken down into five distinct phases.
 
 **Goal:** Implement the API and worker logic for creating collections, managing documents, and indexing them.
 
--   [ ] **Task 2.1: Update the Job Model**
+-   [x] **Task 2.1: Update the Job Model**
     -   **File:** `src/document_analyzer/storage/models.py`
         -   **Action:** Modify the `Job` model to include `job_type`, `document_id`, and `collection_id`.
         -   **Action:** Create an Alembic migration for this change.
 
--   [ ] **Task 2.2: Modify the Worker for Indexing**
+-   [x] **Task 2.2: Modify the Worker for Indexing**
     -   **File:** `src/document_analyzer/batch_processing/worker.py`
     -   **Action:** Implement the "indexing" job logic (extract, chunk, embed, store).
 
--   [ ] **Task 2.3: Implement Full Collections & Documents API (CRUD)**
+-   [x] **Task 2.3: Implement Full Collections & Documents API (CRUD)**
     -   **Action:** Create a new API router: `src/document_analyzer/api/routes/collections.py`.
     -   **Endpoints:**
         -   `POST /api/v1/collections`: Create a new collection.
@@ -78,11 +78,11 @@ The project is broken down into five distinct phases.
 
 **Goal:** Implement the logic for handling user questions against a collection.
 
--   [ ] **Task 3.1: Modify the Worker for Querying**
+-   [x] **Task 3.1: Modify the Worker for Querying**
     -   **File:** `src/document_analyzer/batch_processing/worker.py`
     -   **Action:** Add logic to handle the "query" job type (embed question, retrieve chunks, compose prompt, call LLM, save result).
 
--   [ ] **Task 3.2: Add the API Endpoint for Querying**
+-   [x] **Task 3.2: Add the API Endpoint for Querying**
     -   **File:** `src/document_analyzer/api/routes/collections.py`
     -   **Endpoint:** `POST /api/v1/collections/{collection_id}/query`
         -   **Logic:** Submit a "query" job and return the `job_id`.
@@ -98,7 +98,7 @@ The project is broken down into five distinct phases.
 -   [ ] **Task 4.2: Code Cleanup**
     -   **Action:** Deprecate and remove the old `analysis.py`, `single.py`, and `batch.py` routers.
 
--   [ ] **Task 4.3: Add Tests**
+-   [x] **Task 4.3: Add Tests**
     -   **Action:** Create unit and integration tests for the new RAG system.
 
 ### Phase 5: Quality & Performance Enhancements

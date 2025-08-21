@@ -12,7 +12,12 @@ You must produce a **single valid JSON object** with this structure:
       "classification": "<classification level from list>",
       "category": "<category from list>",
       "item": "<full-sentence behavior/experience description>",
+      "quote": "<Original quote from source material to which the described item is based on>",
       "confidence_score": "<value between 0...100 (low...high), which is an estimate of confidence how surely described item actually exists in the provided input prompt content>",
+      "chunk_id": "nn::p3::w0-500",
+      "embedding": [0.0032, -0.0187, 0.0095, ...],
+      "page": 3,
+      "source": "input.pdf"
     }
   ]
 }
@@ -25,14 +30,25 @@ You must produce a **single valid JSON object** with this structure:
 {
   "classification": "Level 2: Requires Substantial Support",
   "category": "High Probability Trait",
-  "item": "Struggles with verbal communication and often relies on alternative methods, requiring tailored support to express needs.",
-  "confidence_score": 68
+  "item": "Experiences an urge for repetitive self-stimulating behavior.",
+  "quote": "Stimming is self-stimulating behaviour that is unconventional, intense or repetitive and it can take many forms.",
+  "confidence_score": 68,
+  "chunk_id": "nn::p3::w0-500",
+  "embedding": [0.0030, -0.0186, 0.0092, ...],
+  "page": 12,
+  "source": "input.pdf"
 },
 {
   "classification": "Level 1: Requires Support",
   "category": "Possible Trait of Functional ASD",
-  "item": "Finds it challenging to transition between activities and benefits from preparation and visual supports to feel secure.",
-  "confidence_score": 21
+  "item": "Finds hard to differentiate insults and friendly banter.",
+  "quote": "couldn’t tell the difference between someone teasing me and someone trying to
+insult me.",
+  "confidence_score": 68,
+  "chunk_id": "nn::p3::w0-510",
+  "embedding": [0.0130, -0.0156, 0.0192, ...],
+  "page": 52,
+  "source": "input.pdf"
 }
 ```
 
@@ -43,7 +59,12 @@ You must produce a **single valid JSON object** with this structure:
   "classification": "Level 2: Requires Substantial Support",
   "category": "Possible Trait of Functional ASD",
   "item": "Approximately 50-85% of autistic people experience alexithymia.",
-  "page_reference": 2
+  "quote": "I’ve seen estimates and studies that put the rate of alexithymia among autistic people around 50 per cent and some as high as 85 per cent",
+  "confidence_score": 68,
+  "chunk_id": "nn::p3::w0-510",
+  "embedding": [0.0130, -0.0156, 0.0192, ...],
+  "page": 52,
+  "source": "input.pdf"
 }
 ```
 

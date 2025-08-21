@@ -71,3 +71,13 @@ To run a custom analysis (e.g., `find_insights`):
 You would send a JSON body specifying the task_name.
 
 curl -X POST http://localhost:8000/api/v1/batch -H "Content-Type: application/json" -d '{"task_name":"find_insights"}'
+
+RAG:
+curl.exe -X POST "http://localhost:8000/api/v1/collections?name=ASD" -H "accept: application/json"
+
+curl.exe -X POST "http://localhost:8000/api/v1/collections/6ac841ab-8124-470e-9b74 -cd3c98718ed7/documents" -H "accept: application/json" -F "file=@C:\code\FileIntel\input\input.pdf"
+
+curl.exe -X POST "http://localhost:8000/api/v1/collections/6ac841ab-8124-470e-9b74 │
+│ -cd-c3c98718ed7/query" -H "accept: application/json" -H "Content-Type: │
+│ application/json" -d "{\\"question\\": \\"\\", \\"task_name\\": │
+│ \\"default_analysis\\"}"

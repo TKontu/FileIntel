@@ -1,3 +1,50 @@
-2025-08-11 20:00:51,103 - document_analyzer.llm_integration.openai_provider - INFO - Initializing OpenAIProvider with base_url: http://192.168.0.247:9003/v1
-2025-08-12 18:10:17,944 - document_analyzer.llm_integration.openai_provider - INFO - Initializing OpenAIProvider with base_url: http://192.168.0.247:9003/v1
-2025-08-12 18:11:36,773 - document_analyzer.llm_integration.openai_provider - INFO - Initializing OpenAIProvider with base_url: http://192.168.0.247:9003/v1
+{"timestamp": "2025-08-21 18:27:31,191", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_begin with no data"}
+{"timestamp": "2025-08-21 18:27:31,193", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_header_field with data[50:69]"}
+{"timestamp": "2025-08-21 18:27:31,194", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_header_value with data[71:115]"}
+{"timestamp": "2025-08-21 18:27:31,195", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_header_end with no data"}
+{"timestamp": "2025-08-21 18:27:31,196", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_header_field with data[117:129]"}
+{"timestamp": "2025-08-21 18:27:31,197", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_header_value with data[131:146]"}
+{"timestamp": "2025-08-21 18:27:31,198", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_header_end with no data"}
+{"timestamp": "2025-08-21 18:27:31,199", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_headers_finished with no data"}
+{"timestamp": "2025-08-21 18:27:31,200", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[150:16384]"}
+{"timestamp": "2025-08-21 18:27:31,201", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:58832]"}
+{"timestamp": "2025-08-21 18:27:31,203", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:44191]"}
+{"timestamp": "2025-08-21 18:27:31,203", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,204", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[44192:88168]"}
+{"timestamp": "2025-08-21 18:27:31,206", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:54758]"}
+{"timestamp": "2025-08-21 18:27:31,206", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,208", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[54759:249403]"}
+{"timestamp": "2025-08-21 18:27:31,208", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,209", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[249404:256000]"}
+{"timestamp": "2025-08-21 18:27:31,210", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:36780]"}
+{"timestamp": "2025-08-21 18:27:31,211", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,211", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[36781:73261]"}
+{"timestamp": "2025-08-21 18:27:31,212", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,213", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[73262:102280]"}
+{"timestamp": "2025-08-21 18:27:31,213", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,214", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[102281:160160]"}
+{"timestamp": "2025-08-21 18:27:31,215", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,216", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[160161:206513]"}
+{"timestamp": "2025-08-21 18:27:31,217", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,218", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[206514:256000]"}
+{"timestamp": "2025-08-21 18:27:31,220", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:11336]"}
+{"timestamp": "2025-08-21 18:27:31,220", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,222", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[11337:256000]"}
+{"timestamp": "2025-08-21 18:27:31,224", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:12124]"}
+{"timestamp": "2025-08-21 18:27:31,225", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,227", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[12125:170195]"}
+{"timestamp": "2025-08-21 18:27:31,227", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,228", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[170196:237486]"}
+{"timestamp": "2025-08-21 18:27:31,229", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,230", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[237487:238639]"}
+{"timestamp": "2025-08-21 18:27:31,231", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,231", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[238640:256000]"}
+{"timestamp": "2025-08-21 18:27:31,235", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:256000]"}
+{"timestamp": "2025-08-21 18:27:31,237", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:161023]"}
+{"timestamp": "2025-08-21 18:27:31,238", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,239", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[161024:229189]"}
+{"timestamp": "2025-08-21 18:27:31,239", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:1]"}
+{"timestamp": "2025-08-21 18:27:31,240", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[229190:256000]"}
+{"timestamp": "2025-08-21 18:27:31,241", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_data with data[0:38049]"}
+{"timestamp": "2025-08-21 18:27:31,242", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_part_end with no data"}
+{"timestamp": "2025-08-21 18:27:31,242", "level": "DEBUG", "name": "multipart.multipart", "message": "Calling on_end with no data"}

@@ -3,23 +3,31 @@ from ebooklib import epub
 from pathlib import Path
 from typing import List
 from bs4 import BeautifulSoup
+import logging
 
 from ..base import FileReader
 from ..elements import DocumentElement, TextElement
 from ...core.exceptions import DocumentProcessingException
 
+logger = logging.getLogger(__name__)
+
+
 class EPUBReader(FileReader):
-    def read(self, file_path: Path) -> List[DocumentElement]:
+    def read(
+        self, file_path: Path, adapter: logging.LoggerAdapter = None
+    ) -> List[DocumentElement]:
         """
         Reads the text content from an EPUB file, returning a TextElement
         for each chapter/document within the EPUB.
         """
+        log = adapter or logger
         if not file_path.exists():
             raise DocumentProcessingException(f"File not found: {file_path}")
 
         elements = []
         try:
             book = epub.read_epub(file_path)
+            log.info(f"Processing EPUB file: {file_path.name}")
             for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
                 content = item.get_content()
                 soup = BeautifulSoup(content, "html.parser")
@@ -28,7 +36,10 @@ class EPUBReader(FileReader):
                     # Use the item's file name as a proxy for chapter name
                     metadata = {"source": str(file_path), "chapter": item.get_name()}
                     elements.append(TextElement(text=text, metadata=metadata))
+            log.info(f"Successfully processed EPUB file: {file_path.name}")
             return elements
         except Exception as e:
-            raise DocumentProcessingException(f"Error processing EPUB file {file_path}: {e}")
-
+            log.error(f"Error processing EPUB file {file_path}: {e}", exc_info=True)
+            raise DocumentProcessingException(
+                f"Error processing EPUB file {file_path}: {e}"
+            )

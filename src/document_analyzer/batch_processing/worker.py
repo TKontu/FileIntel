@@ -9,8 +9,17 @@ from .batch_manager import BatchProcessor
 from pathlib import Path
 from ..core.config import settings
 import logging
+from logging import LoggerAdapter
 
 logger = logging.getLogger(__name__)
+
+
+class JobContextAdapter(LoggerAdapter):
+    def process(self, msg, kwargs):
+        # Add job_id to the log record's extra dictionary
+        if "job_id" not in self.extra:
+            self.extra["job_id"] = None
+        return f'[Job: {self.extra["job_id"]}] {msg}', kwargs
 
 
 class Worker:
@@ -40,34 +49,35 @@ class Worker:
         job_id = job.id
         job_type = job.job_type
 
-        logger.debug(f"--- Processing job {job_id} with type: {job_type}")
+        # Create a logger adapter with the job_id
+        adapter = LoggerAdapter(logger, {"job_id": job_id})
+
+        adapter.info(f"Processing job with type: {job_type}")
 
         self.job_manager.update_job_status(job_id, "running")
 
         try:
             if job_type == "batch":
-                logger.info(f"Handling as BATCH job: {job_id}")
-                self._process_batch_job(job)
+                adapter.info(f"Handling as BATCH job")
+                self._process_batch_job(job, adapter)
             elif job_type == "indexing":
-                logger.info(f"Handling as INDEXING job: {job_id}")
-                self._process_indexing_job(job)
+                adapter.info(f"Handling as INDEXING job")
+                self._process_indexing_job(job, adapter)
             elif job_type == "query":
-                logger.info(f"Handling as QUERY job: {job_id}")
-                self._process_query_job(job)
+                adapter.info(f"Handling as QUERY job")
+                self._process_query_job(job, adapter)
             else:  # Default to single_file
-                logger.info(f"Handling as SINGLE FILE job: {job_id}")
-                self._process_single_file_job(job)
+                adapter.info(f"Handling as SINGLE FILE job")
+                self._process_single_file_job(job, adapter)
 
             self.job_manager.update_job_status(job_id, "completed")
-            logger.info(f"Job {job_id} ({job_type}) completed successfully.")
+            adapter.info(f"Job completed successfully.")
 
         except Exception as e:
             self.job_manager.update_job_status(job_id, "failed")
-            logger.error(
-                f"Error processing job {job_id} ({job_type}): {e}", exc_info=True
-            )
+            adapter.error(f"Error processing job: {e}", exc_info=True)
 
-    def _process_batch_job(self, job):
+    def _process_batch_job(self, job, adapter: LoggerAdapter):
         """
         Processes a batch job.
         """
@@ -77,55 +87,64 @@ class Worker:
         output_format = job_data.get("output_format")
         task_name = job_data.get("task_name", "default_analysis")
 
+        adapter.debug(
+            f"Starting batch processing from '{input_dir}' to '{output_dir}'."
+        )
         self.batch_processor.process_files(
             input_dir, output_dir, output_format, task_name
         )
+        adapter.debug("Batch processing finished.")
 
-    def _process_single_file_job(self, job):
+    def _process_single_file_job(self, job, adapter: LoggerAdapter):
         """
         Processes a single file job.
         """
-        # 1. Get document content
-        file_path = job.data.get("file_path")
+        file_path_str = job.data.get("file_path")
+        file_path = Path(file_path_str)
+        adapter.debug(f"Reading content from file: {file_path}")
         reader = self.reader_factory.get_reader(file_path)
-        elements = reader.read(Path(file_path))
+        elements = reader.read(file_path, adapter)
 
         document_text = "\n".join([el.text for el in elements if hasattr(el, "text")])
+        adapter.debug(f"Extracted {len(document_text)} characters of text.")
 
-        # 2. Compose the prompt
         task_name = job.data.get("task_name", "default_analysis")
-        logger.info(f"Using prompt task: '{task_name}' for job {job.id}")
+        adapter.debug(f"Composing prompt using task: '{task_name}'")
         context = {
             "document_text": document_text,
         }
         prompt = self.composer.compose(task_name, context)
 
-        # 3. Get LLM response
+        adapter.debug("Sending prompt to LLM.")
         response = self.llm_provider.generate_response(prompt)
+        adapter.debug("Received response from LLM.")
 
-        # 4. Save result
         self.job_manager.storage.save_result(job.id, response._asdict())
+        adapter.debug("Saved result to storage.")
 
-    def _process_indexing_job(self, job):
+    def _process_indexing_job(self, job, adapter: LoggerAdapter):
         """
         Processes an indexing job.
         """
         document_id = job.document_id
         collection_id = job.collection_id
-        file_path = job.data.get("file_path")
+        file_path_str = job.data.get("file_path")
+        file_path = Path(file_path_str)
 
-        # 1. Extract text
+        adapter.debug(f"Extracting text from: {file_path}")
         reader = self.reader_factory.get_reader(file_path)
-        elements = reader.read(Path(file_path))
+        elements = reader.read(file_path, adapter)
         document_text = "\n".join([el.text for el in elements if hasattr(el, "text")])
+        adapter.debug(f"Extracted {len(document_text)} characters.")
 
-        # 2. Chunk text
+        adapter.debug("Chunking text.")
         chunks = self.text_chunker.chunk_text(document_text)
+        adapter.debug(f"Created {len(chunks)} chunks.")
 
-        # 3. Embed chunks
+        adapter.debug("Getting embeddings for chunks.")
         embeddings = self.embedding_provider.get_embeddings(chunks)
+        adapter.debug("Embeddings received.")
 
-        # 4. Store chunks
         chunk_data = [
             {"text": chunk, "embedding": embedding}
             for chunk, embedding in zip(chunks, embeddings)
@@ -133,33 +152,39 @@ class Worker:
         self.job_manager.storage.add_document_chunks(
             document_id, collection_id, chunk_data
         )
+        adapter.debug("Stored chunks and embeddings in storage.")
 
-    def _process_query_job(self, job):
+    def _process_query_job(self, job, adapter: LoggerAdapter):
         """
         Processes a query job.
         """
         collection_id = job.collection_id
         question = job.data.get("question")
+        adapter.debug(
+            f"Querying collection {collection_id} with question: '{question}'"
+        )
 
-        # 1. Embed the question
+        adapter.debug("Embedding the question.")
         query_embedding = self.embedding_provider.get_embeddings([question])[0]
 
-        # 2. Find relevant chunks
+        adapter.debug("Finding relevant chunks.")
         relevant_chunks = self.job_manager.storage.find_relevant_chunks_in_collection(
             collection_id, query_embedding
         )
+        adapter.debug(f"Found {len(relevant_chunks)} relevant chunks.")
         context_text = "\n".join([chunk.chunk_text for chunk in relevant_chunks])
 
-        # 3. Compose the prompt
         task_name = job.data.get("task_name", "default_analysis")
+        adapter.debug(f"Composing prompt with task: '{task_name}'")
         context = {
             "document_text": context_text,
             "question": question,
         }
         prompt = self.composer.compose(task_name, context)
 
-        # 4. Get LLM response
+        adapter.debug("Sending prompt to LLM.")
         response = self.llm_provider.generate_response(prompt)
+        adapter.debug("Received response from LLM.")
 
-        # 5. Save result
         self.job_manager.storage.save_result(job.id, response._asdict())
+        adapter.debug("Saved result to storage.")
