@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from ..core.logging import setup_logging
-from .routes import collections
+from .routes import collections, jobs
 
 app = FastAPI(
     title="Document Analyzer API",
@@ -10,6 +10,7 @@ app = FastAPI(
 )
 
 app.include_router(collections.router, prefix="/api/v1", tags=["collections"])
+app.include_router(jobs.router, prefix="/api/v1", tags=["jobs"])
 
 
 @app.on_event("startup")

@@ -11,25 +11,34 @@ from document_analyzer.batch_processing.worker import Worker
 from document_analyzer.storage.models import SessionLocal
 
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 def main():
-    print("Worker starting...")
+    logger.info("Worker starting...")
     db_session = SessionLocal()
     storage = PostgreSQLStorage(db_session)
     job_manager = JobManager(storage)
     worker = Worker(job_manager)
 
-    print("Worker started. Waiting for jobs...")
+    logger.info("Worker started. Waiting for jobs...")
     while True:
         try:
+            logger.debug("Checking for pending jobs...")
             job = job_manager.get_next_job()
             if job:
-                print(f"Processing job: {job.id}")
+                logger.info(f"Found job: {job.id}, type: {job.job_type}")
                 worker.process_job(job)
             else:
                 # If no job is found, wait for a bit before checking again
                 time.sleep(5)
         except Exception as e:
-            print(f"An error occurred: {e}")
+            logger.error(
+                f"An error occurred in the main worker loop: {e}", exc_info=True
+            )
             time.sleep(10)  # Wait longer after an error
 
 

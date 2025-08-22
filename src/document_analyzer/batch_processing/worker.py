@@ -14,14 +14,6 @@ from logging import LoggerAdapter
 logger = logging.getLogger(__name__)
 
 
-class JobContextAdapter(LoggerAdapter):
-    def process(self, msg, kwargs):
-        # Add job_id to the log record's extra dictionary
-        if "job_id" not in self.extra:
-            self.extra["job_id"] = None
-        return f'[Job: {self.extra["job_id"]}] {msg}', kwargs
-
-
 class Worker:
     def __init__(self, job_manager: JobManager):
         self.job_manager = job_manager
@@ -50,7 +42,7 @@ class Worker:
         job_type = job.job_type
 
         # Create a logger adapter with the job_id
-        adapter = LoggerAdapter(logger, {"job_id": job_id})
+        adapter = logging.LoggerAdapter(logger, {"job_id": job_id})
 
         adapter.info(f"Processing job with type: {job_type}")
 
@@ -131,28 +123,31 @@ class Worker:
         file_path_str = job.data.get("file_path")
         file_path = Path(file_path_str)
 
-        adapter.debug(f"Extracting text from: {file_path}")
+        adapter.info(f"Starting indexing for document: {file_path.name}")
+
+        adapter.info("Step 1/4: Reading and extracting text...")
         reader = self.reader_factory.get_reader(file_path)
         elements = reader.read(file_path, adapter)
         document_text = "\n".join([el.text for el in elements if hasattr(el, "text")])
-        adapter.debug(f"Extracted {len(document_text)} characters.")
+        adapter.info(f"Extracted {len(document_text)} characters.")
 
-        adapter.debug("Chunking text.")
+        adapter.info("Step 2/4: Chunking text...")
         chunks = self.text_chunker.chunk_text(document_text)
-        adapter.debug(f"Created {len(chunks)} chunks.")
+        adapter.info(f"Created {len(chunks)} chunks.")
 
-        adapter.debug("Getting embeddings for chunks.")
+        adapter.info("Step 3/4: Generating embeddings for chunks...")
         embeddings = self.embedding_provider.get_embeddings(chunks)
-        adapter.debug("Embeddings received.")
+        adapter.info("Embeddings generated.")
 
         chunk_data = [
             {"text": chunk, "embedding": embedding}
             for chunk, embedding in zip(chunks, embeddings)
         ]
+        adapter.info(f"Step 4/4: Saving {len(chunks)} chunks to database...")
         self.job_manager.storage.add_document_chunks(
             document_id, collection_id, chunk_data
         )
-        adapter.debug("Stored chunks and embeddings in storage.")
+        adapter.info("Saved chunks and embeddings to storage.")
 
     def _process_query_job(self, job, adapter: LoggerAdapter):
         """
