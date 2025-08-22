@@ -1,5 +1,6 @@
 from ..base import OutputFormatter
 
+
 class EssayFormatter(OutputFormatter):
     @property
     def file_extension(self) -> str:
@@ -18,6 +19,5 @@ class EssayFormatter(OutputFormatter):
             heading = section.get("heading", "Introduction")
             content = section.get("content", "")
             essay += f"## {heading}\n\n{content}\n\n"
-        
-        return essay.strip()
 
+        return essay.strip()

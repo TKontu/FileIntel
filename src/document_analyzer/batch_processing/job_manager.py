@@ -16,20 +16,13 @@ class JobManager:
         """
         Submits a new job and returns a job ID.
         """
-        job_id = str(uuid4())
-        job_data = {
-            "id": job_id,
-            "status": "pending",
-            "job_type": job_type,
-            "data": data,
-        }
-        if document_id:
-            job_data["document_id"] = document_id
-        if collection_id:
-            job_data["collection_id"] = collection_id
-
-        self.storage.save_job(job_data)
-        return job_id
+        job = self.storage.create_job(
+            job_type=job_type,
+            data=data,
+            document_id=document_id,
+            collection_id=collection_id,
+        )
+        return job.id
 
     def submit_file_job(self, document_id: str, data: dict) -> str:
         """

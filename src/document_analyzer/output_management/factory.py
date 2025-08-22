@@ -5,6 +5,7 @@ from .formatters.list import ListFormatter
 from .formatters.table import TableFormatter
 from .base import OutputFormatter
 
+
 class FormatterFactory:
     formatters = {
         "json": JSONFormatter,

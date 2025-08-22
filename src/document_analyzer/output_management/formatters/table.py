@@ -3,6 +3,7 @@ import json
 from io import StringIO
 from ..base import OutputFormatter
 
+
 class TableFormatter(OutputFormatter):
     @property
     def file_extension(self) -> str:

@@ -1,6 +1,7 @@
 from pathlib import Path
 from ..core.exceptions import ConfigException
 
+
 class PromptLoader:
     def __init__(self, prompts_dir: Path):
         self.prompts_dir = prompts_dir
@@ -21,7 +22,7 @@ class PromptLoader:
                     templates[template_name] = f.read()
             except IOError as e:
                 raise ConfigException(f"Error reading prompt file {file_path}: {e}")
-        
+
         if not templates:
             raise ConfigException(f"No prompt templates found in directory: {task_dir}")
 

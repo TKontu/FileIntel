@@ -33,3 +33,12 @@ prompts/templates/answer_format.md
 prompts/templates/instruction.md
 prompts/templates/user_question.md
 prompts/templates/question.md
+migrations/versions/1_remove_default_from_job_type.py
+migrations/versions/5172acc0a360_merge_heads.py
+migrations/versions/05340f10b3f9_change_embedding_dimension_to_1024.py
+migrations/versions/60896da84c95_make_content_hash_unique_per_collection.py
+logs/document_analyzer.log
+migrations/versions/1_remove_default_from_job_type.py
+migrations/versions/1_remove_default_from_job_type.py
+migrations/versions/1_remove_default_from_job_type.py
+migrations/versions/1_remove_default_from_job_type.py

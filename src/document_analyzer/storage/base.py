@@ -1,10 +1,42 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict
-from .models import Document, Job, Result
+from .models import Document, Job, Result, Collection
+
 
 class StorageInterface(ABC):
     @abstractmethod
-    def create_document(self, filename: str, content_hash: str, file_size: int, mime_type: str) -> Document:
+    def create_collection(self, name: str) -> Collection:
+        pass
+
+    @abstractmethod
+    def get_collection(self, collection_id: str) -> Collection:
+        pass
+
+    @abstractmethod
+    def get_collection_by_name(self, name: str) -> Collection:
+        pass
+
+    @abstractmethod
+    def get_all_collections(self) -> List[Collection]:
+        pass
+
+    @abstractmethod
+    def delete_collection(self, collection_id: str):
+        pass
+
+    @abstractmethod
+    def create_document(
+        self,
+        filename: str,
+        content_hash: str,
+        file_size: int,
+        mime_type: str,
+        collection_id: str,
+    ) -> Document:
+        pass
+
+    @abstractmethod
+    def get_document(self, document_id: str) -> Document:
         pass
 
     @abstractmethod
@@ -12,7 +44,29 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
-    def save_job(self, job_data: dict) -> str:
+    def get_document_by_hash_and_collection(
+        self, content_hash: str, collection_id: str
+    ) -> Document:
+        pass
+
+    @abstractmethod
+    def get_document_by_filename_and_collection(
+        self, filename: str, collection_id: str
+    ) -> Document:
+        pass
+
+    @abstractmethod
+    def delete_document(self, document_id: str):
+        pass
+
+    @abstractmethod
+    def create_job(
+        self,
+        job_type: str,
+        data: Dict,
+        document_id: str = None,
+        collection_id: str = None,
+    ) -> Job:
         pass
 
     @abstractmethod
@@ -20,11 +74,7 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
-    def get_job_by_document_id(self, document_id: str) -> Job:
-        pass
-
-    @abstractmethod
-    def get_pending_job(self) -> Job:
+    def get_pending_job(self, job_type: str = None) -> Job:
         pass
 
     @abstractmethod
@@ -38,4 +88,3 @@ class StorageInterface(ABC):
     @abstractmethod
     def get_result(self, job_id: str) -> Result:
         pass
-

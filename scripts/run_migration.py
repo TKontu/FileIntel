@@ -8,12 +8,13 @@ print("Starting migration script...")
 load_dotenv()
 print("Dotenv loaded.")
 
+
 def run_migrations():
     print("Creating Alembic config...")
     alembic_cfg = Config("alembic.ini")
     fileConfig(alembic_cfg.config_file_name)  # ← setup logging
     print("Alembic config created.")
-    
+
     print("Setting script location...")
     alembic_cfg.set_main_option("script_location", "migrations")
     print("Script location set.")
@@ -26,6 +27,7 @@ def run_migrations():
     print("Running upgrade command...")
     command.upgrade(alembic_cfg, "head")
     print("Upgrade command finished.")
+
 
 if __name__ == "__main__":
     run_migrations()

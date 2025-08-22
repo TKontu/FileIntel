@@ -1,9 +1,16 @@
 from pathlib import Path
-from document_analyzer.document_processing.processors.traditional_pdf import TraditionalPDFProcessor
-from document_analyzer.document_processing.processors.epub_processor import EPUBProcessor
-from document_analyzer.document_processing.processors.mobi_processor import MOBIProcessor
+from document_analyzer.document_processing.processors.traditional_pdf import (
+    TraditionalPDFProcessor,
+)
+from document_analyzer.document_processing.processors.epub_processor import (
+    EPUBProcessor,
+)
+from document_analyzer.document_processing.processors.mobi_processor import (
+    MOBIProcessor,
+)
 from document_analyzer.document_processing.preprocessor import TextPreprocessor
 from document_analyzer.core.exceptions import DocumentProcessingException
+
 
 class UnifiedDocumentProcessor:
     def __init__(self):

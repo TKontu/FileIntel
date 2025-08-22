@@ -54,7 +54,7 @@ class DocumentChunk(Base):
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     collection_id = Column(String, ForeignKey("collections.id"), nullable=False)
     chunk_text = Column(Text, nullable=False)
-    embedding = Column(Vector(1536))  # Assuming OpenAI's text-embedding-3-small
+    embedding = Column(Vector())  # Assuming OpenAI's text-embedding-3-small
     chunk_metadata = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
