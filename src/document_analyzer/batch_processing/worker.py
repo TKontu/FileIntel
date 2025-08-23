@@ -137,9 +137,14 @@ class Worker:
 
         adapter.info("Step 1/4: Reading and extracting text...")
         reader = self.reader_factory.get_reader(file_path)
-        elements = reader.read(file_path, adapter)
+        elements, doc_metadata = reader.read(file_path, adapter)
         document_text = "\n".join([el.text for el in elements if hasattr(el, "text")])
-        adapter.info(f"Extracted {len(document_text)} characters.")
+        adapter.info(
+            f"Extracted {len(document_text)} characters and metadata: {doc_metadata}"
+        )
+
+        self.job_manager.storage.update_document_metadata(document_id, doc_metadata)
+        adapter.info(f"Updated document {document_id} with extracted metadata.")
 
         adapter.info("Step 2/4: Chunking text...")
         chunks = self.text_chunker.chunk_text(document_text)
@@ -191,13 +196,18 @@ class Worker:
         # Execute the chosen RAG strategy
         if rag_strategy == "separate":
             all_answers = []
-            for chunk in relevant_chunks:
+            for result in relevant_chunks:
+                chunk = result["chunk"]
                 context = {"document_text": chunk.chunk_text, "question": question}
                 prompt = self.composer.compose(task_name, context)
                 response = self.llm_provider.generate_response(prompt)
                 all_answers.append(
                     {
-                        "source_chunk": chunk.chunk_text,
+                        "source": {
+                            "filename": result["filename"],
+                            "chunk_text": chunk.chunk_text,
+                            "document_metadata": result["document_metadata"],
+                        },
                         "llm_response": response._asdict(),
                     }
                 )
@@ -206,7 +216,7 @@ class Worker:
             )
         else:  # Default to "merge"
             context_text = "\n---\n".join(
-                [chunk.chunk_text for chunk in relevant_chunks]
+                [res["chunk"].chunk_text for res in relevant_chunks]
             )
             context = {"document_text": context_text, "question": question}
             prompt = self.composer.compose(task_name, context)
@@ -253,7 +263,8 @@ class Worker:
         # Execute the chosen RAG strategy
         if rag_strategy == "separate":
             all_answers = []
-            for chunk in relevant_chunks:
+            for result in relevant_chunks:
+                chunk = result["chunk"]
                 context = {
                     "document_text": chunk.chunk_text,
                     "question": generation_question,
@@ -262,7 +273,11 @@ class Worker:
                 response = self.llm_provider.generate_response(prompt)
                 all_answers.append(
                     {
-                        "source_chunk": chunk.chunk_text,
+                        "source": {
+                            "filename": result["filename"],
+                            "chunk_text": chunk.chunk_text,
+                            "document_metadata": result["document_metadata"],
+                        },
                         "llm_response": response._asdict(),
                     }
                 )
@@ -271,7 +286,7 @@ class Worker:
             )
         else:  # Default to "merge"
             context_text = "\n---\n".join(
-                [chunk.chunk_text for chunk in relevant_chunks]
+                [res["chunk"].chunk_text for res in relevant_chunks]
             )
             context = {"document_text": context_text, "question": generation_question}
             prompt = self.composer.compose(task_name, context)
@@ -308,13 +323,18 @@ class Worker:
 
         if rag_strategy == "separate":
             all_answers = []
-            for chunk in relevant_chunks:
+            for result in relevant_chunks:
+                chunk = result["chunk"]
                 context = {"document_text": chunk.chunk_text, "question": question}
                 prompt = self.composer.compose(task_name, context)
                 response = self.llm_provider.generate_response(prompt)
                 all_answers.append(
                     {
-                        "source_chunk": chunk.chunk_text,
+                        "source": {
+                            "filename": result["filename"],
+                            "chunk_text": chunk.chunk_text,
+                            "document_metadata": result["document_metadata"],
+                        },
                         "llm_response": response._asdict(),
                     }
                 )
@@ -323,7 +343,7 @@ class Worker:
             )
         else:
             context_text = "\n---\n".join(
-                [chunk.chunk_text for chunk in relevant_chunks]
+                [res["chunk"].chunk_text for res in relevant_chunks]
             )
             context = {"document_text": context_text, "question": question}
             prompt = self.composer.compose(task_name, context)
@@ -362,7 +382,8 @@ class Worker:
 
         if rag_strategy == "separate":
             all_answers = []
-            for chunk in relevant_chunks:
+            for result in relevant_chunks:
+                chunk = result["chunk"]
                 context = {
                     "document_text": chunk.chunk_text,
                     "question": generation_question,
@@ -371,7 +392,11 @@ class Worker:
                 response = self.llm_provider.generate_response(prompt)
                 all_answers.append(
                     {
-                        "source_chunk": chunk.chunk_text,
+                        "source": {
+                            "filename": result["filename"],
+                            "chunk_text": chunk.chunk_text,
+                            "document_metadata": result["document_metadata"],
+                        },
                         "llm_response": response._asdict(),
                     }
                 )
@@ -380,7 +405,7 @@ class Worker:
             )
         else:
             context_text = "\n---\n".join(
-                [chunk.chunk_text for chunk in relevant_chunks]
+                [res["chunk"].chunk_text for res in relevant_chunks]
             )
             context = {"document_text": context_text, "question": generation_question}
             prompt = self.composer.compose(task_name, context)

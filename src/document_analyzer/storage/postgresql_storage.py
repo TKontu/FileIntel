@@ -40,6 +40,7 @@ class PostgreSQLStorage(StorageInterface):
         file_size: int,
         mime_type: str,
         collection_id: str,
+        document_metadata: Dict[str, Any] = None,
     ) -> Document:
         doc_id = str(uuid.uuid4())
         new_document = Document(
@@ -49,6 +50,7 @@ class PostgreSQLStorage(StorageInterface):
             file_size=file_size,
             mime_type=mime_type,
             collection_id=collection_id,
+            document_metadata=document_metadata,
         )
         self.db.add(new_document)
         self.db.commit()
@@ -95,6 +97,12 @@ class PostgreSQLStorage(StorageInterface):
             self.db.delete(document)
             self.db.commit()
 
+    def update_document_metadata(self, document_id: str, metadata: Dict[str, Any]):
+        document = self.get_document(document_id)
+        if document:
+            document.document_metadata = metadata
+            self.db.commit()
+
     def add_document_chunks(
         self, document_id: str, collection_id: str, chunks: List[Dict[str, Any]]
     ):
@@ -113,25 +121,43 @@ class PostgreSQLStorage(StorageInterface):
 
     def find_relevant_chunks_in_collection(
         self, collection_id: str, query_embedding: List[float], top_k: int = 5
-    ) -> List[DocumentChunk]:
-        return (
-            self.db.query(DocumentChunk)
+    ) -> List[Dict[str, Any]]:
+        results = (
+            self.db.query(DocumentChunk, Document.filename, Document.document_metadata)
+            .join(Document, DocumentChunk.document_id == Document.id)
             .filter(DocumentChunk.collection_id == collection_id)
             .order_by(DocumentChunk.embedding.l2_distance(query_embedding))
             .limit(top_k)
             .all()
         )
+        return [
+            {
+                "chunk": row.DocumentChunk,
+                "filename": row.filename,
+                "document_metadata": row.document_metadata,
+            }
+            for row in results
+        ]
 
     def find_relevant_chunks_in_document(
         self, document_id: str, query_embedding: List[float], top_k: int = 5
-    ) -> List[DocumentChunk]:
-        return (
-            self.db.query(DocumentChunk)
+    ) -> List[Dict[str, Any]]:
+        results = (
+            self.db.query(DocumentChunk, Document.filename, Document.document_metadata)
+            .join(Document, DocumentChunk.document_id == Document.id)
             .filter(DocumentChunk.document_id == document_id)
             .order_by(DocumentChunk.embedding.l2_distance(query_embedding))
             .limit(top_k)
             .all()
         )
+        return [
+            {
+                "chunk": row.DocumentChunk,
+                "filename": row.filename,
+                "document_metadata": row.document_metadata,
+            }
+            for row in results
+        ]
 
     def create_job(
         self,

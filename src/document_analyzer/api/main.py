@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from ..core.logging import setup_logging
+from ..storage.models import create_tables
 from .routes import collections, jobs
 
 app = FastAPI(
@@ -16,6 +17,7 @@ app.include_router(jobs.router, prefix="/api/v1", tags=["jobs"])
 @app.on_event("startup")
 def on_startup():
     setup_logging()
+    create_tables()
 
 
 @app.get("/health")

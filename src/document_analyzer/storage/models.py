@@ -10,6 +10,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
 import os
 
@@ -38,6 +39,7 @@ class Document(Base):
     content_hash = Column(String, nullable=False, unique=True)
     file_size = Column(Integer, nullable=False)
     mime_type = Column(String, nullable=False)
+    document_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

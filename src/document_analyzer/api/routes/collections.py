@@ -86,6 +86,7 @@ async def upload_document_to_collection(
         file_size=len(contents),
         mime_type=mime_type,
         collection_id=collection.id,
+        document_metadata={},
     )
 
     # Create indexing job
