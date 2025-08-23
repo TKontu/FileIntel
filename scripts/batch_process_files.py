@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from document_analyzer.batch_processing.batch_manager import BatchProcessor
+from document_analyzer.worker.batch_manager import BatchProcessor
 from document_analyzer.core.config import settings
 
 

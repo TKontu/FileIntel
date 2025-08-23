@@ -6,8 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from document_analyzer.storage.postgresql_storage import PostgreSQLStorage
-from document_analyzer.batch_processing.job_manager import JobManager
-from document_analyzer.batch_processing.worker import Worker
+from document_analyzer.worker.job_manager import JobManager
+from document_analyzer.worker.worker import Worker
 from document_analyzer.storage.models import SessionLocal
 
 

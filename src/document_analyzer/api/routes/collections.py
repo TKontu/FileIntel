@@ -8,7 +8,7 @@ from ..dependencies import (
 from ...storage.base import StorageInterface
 from ...storage.models import Collection, Document
 from ..models import QueryRequest, AnalysisRequest
-from ...batch_processing.job_manager import JobManager
+from ...worker.job_manager import JobManager
 import hashlib
 import mimetypes
 import os
