@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from typing import List
 from ..dependencies import (
     get_storage,
@@ -7,16 +7,19 @@ from ..dependencies import (
 )
 from ...storage.base import StorageInterface
 from ...storage.models import Collection, Document
-from ..models import QueryRequest
+from ..models import QueryRequest, AnalysisRequest
 from ...batch_processing.job_manager import JobManager
 import hashlib
+import mimetypes
 import os
 
 router = APIRouter()
 
 
 @router.post("/collections", status_code=201)
-def create_collection(name: str, storage: StorageInterface = Depends(get_storage)):
+def create_collection(
+    name: str = Form(...), storage: StorageInterface = Depends(get_storage)
+):
     collection = storage.create_collection(name)
     return {"id": collection.id, "name": collection.name}
 
@@ -71,12 +74,17 @@ async def upload_document_to_collection(
     with open(file_path, "wb") as f:
         f.write(contents)
 
+    # Determine MIME type
+    mime_type, _ = mimetypes.guess_type(file.filename)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
     # Create document record
     document = storage.create_document(
         filename=file.filename,
         content_hash=file_hash,
         file_size=len(contents),
-        mime_type=file.content_type,
+        mime_type=mime_type,
         collection_id=collection.id,
     )
 
@@ -143,4 +151,66 @@ def query_collection(
         collection_id=collection.id,
     )
 
+    return {"job_id": job_id}
+
+
+@router.post("/collections/{collection_identifier}/analyze")
+def analyze_collection(
+    request: AnalysisRequest,
+    collection: Collection = Depends(get_collection_by_id_or_name),
+    storage: StorageInterface = Depends(get_storage),
+):
+    job_manager = JobManager(storage)
+    job_data = {
+        "task_name": request.task_name,
+    }
+    job_id = job_manager.submit_job(
+        job_type="analysis",
+        data=job_data,
+        collection_id=collection.id,
+    )
+
+    return {"job_id": job_id}
+
+
+@router.post(
+    "/collections/{collection_identifier}/documents/{document_identifier}/query"
+)
+def query_document_in_collection(
+    request: QueryRequest,
+    document: Document = Depends(get_document_by_id_or_filename),
+    storage: StorageInterface = Depends(get_storage),
+):
+    job_manager = JobManager(storage)
+    job_data = {
+        "question": request.question,
+        "task_name": request.task_name,
+    }
+    job_id = job_manager.submit_job(
+        job_type="document_query",
+        data=job_data,
+        document_id=document.id,
+        collection_id=document.collection_id,
+    )
+    return {"job_id": job_id}
+
+
+@router.post(
+    "/collections/{collection_identifier}/documents/{document_identifier}/analyze"
+)
+def analyze_document_in_collection(
+    request: AnalysisRequest,
+    document: Document = Depends(get_document_by_id_or_filename),
+    storage: StorageInterface = Depends(get_storage),
+):
+    job_manager = JobManager(storage)
+    job_data = {
+        "task_name": request.task_name,
+    }
+    job_id = job_manager.submit_job(
+        job_type="document_analysis",
+        data=job_data,
+        document_id=document.id,
+        collection_id=document.collection_id,
+    )
     return {"job_id": job_id}

@@ -27,6 +27,7 @@ class LLMSettings(BaseModel):
 
 
 class RAGSettings(BaseModel):
+    strategy: str = Field(default="merge")
     chunk_size: int = Field(default=1024)
     chunk_overlap: int = Field(default=200)
     embedding_provider: str = Field(default="openai")

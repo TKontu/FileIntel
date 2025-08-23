@@ -12,6 +12,7 @@ llm:
     rate_limit: 15
 
 rag:
+  strategy: "separate" # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
   chunk_size: 1024
   chunk_overlap: 200
   embedding_provider: "openai"

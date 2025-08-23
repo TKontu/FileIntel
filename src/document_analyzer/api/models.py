@@ -47,3 +47,7 @@ class BatchJobResponse(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     task_name: str = "default_analysis"
+
+
+class AnalysisRequest(BaseModel):
+    task_name: str = "default_analysis"

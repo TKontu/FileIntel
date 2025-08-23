@@ -122,6 +122,17 @@ class PostgreSQLStorage(StorageInterface):
             .all()
         )
 
+    def find_relevant_chunks_in_document(
+        self, document_id: str, query_embedding: List[float], top_k: int = 5
+    ) -> List[DocumentChunk]:
+        return (
+            self.db.query(DocumentChunk)
+            .filter(DocumentChunk.document_id == document_id)
+            .order_by(DocumentChunk.embedding.l2_distance(query_embedding))
+            .limit(top_k)
+            .all()
+        )
+
     def create_job(
         self,
         job_type: str,

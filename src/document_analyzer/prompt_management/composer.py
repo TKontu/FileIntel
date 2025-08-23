@@ -23,7 +23,7 @@ class PromptComposer:
         specified token limit by truncating the document text if necessary.
         """
         # Load all templates for the given task
-        templates = self.loader.load_task_templates(task_name)
+        templates = self.loader.load_prompt_components(task_name)
 
         # The main frame must be present
         if "prompt" not in templates:

@@ -6,7 +6,7 @@ class PromptLoader:
     def __init__(self, prompts_dir: Path):
         self.prompts_dir = prompts_dir
 
-    def load_task_templates(self, task_name: str) -> dict:
+    def load_prompt_components(self, task_name: str) -> dict:
         """
         Loads all prompt component templates from a specific task directory.
         """
@@ -14,16 +14,21 @@ class PromptLoader:
         if not task_dir.is_dir():
             raise ConfigException(f"Prompt task directory not found: {task_dir}")
 
-        templates = {}
+        components = {}
         for file_path in task_dir.glob("*.md"):
-            template_name = file_path.stem  # e.g., "instruction" from "instruction.md"
+            component_name = file_path.stem
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
-                    templates[template_name] = f.read()
+                    components[component_name] = f.read()
             except IOError as e:
                 raise ConfigException(f"Error reading prompt file {file_path}: {e}")
 
-        if not templates:
-            raise ConfigException(f"No prompt templates found in directory: {task_dir}")
+        # embedding_reference is optional, so we don't check for its existence
+        # like we might for other required components.
 
-        return templates
+        if not components:
+            raise ConfigException(
+                f"No prompt components found in directory: {task_dir}"
+            )
+
+        return components

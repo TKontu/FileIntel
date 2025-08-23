@@ -7,6 +7,7 @@ from ..prompt_management.composer import PromptComposer
 from ..prompt_management.loader import PromptLoader
 from .batch_manager import BatchProcessor
 from pathlib import Path
+from typing import List
 from ..core.config import settings
 import logging
 from logging import LoggerAdapter
@@ -58,7 +59,16 @@ class Worker:
             elif job_type == "query":
                 adapter.info(f"Handling as QUERY job")
                 self._process_query_job(job, adapter)
-            else:  # Default to single_file
+            elif job_type == "analysis":
+                adapter.info(f"Handling as ANALYSIS job")
+                self._process_analysis_job(job, adapter)
+            elif job_type == "document_query":
+                adapter.info(f"Handling as DOCUMENT QUERY job")
+                self._process_document_query_job(job, adapter)
+            elif job_type == "document_analysis":
+                adapter.info(f"Handling as DOCUMENT ANALYSIS job")
+                self._process_document_analysis_job(job, adapter)
+            else:  # Default to single_file (non-RAG)
                 adapter.info(f"Handling as SINGLE FILE job")
                 self._process_single_file_job(job, adapter)
 
@@ -151,35 +161,230 @@ class Worker:
 
     def _process_query_job(self, job, adapter: LoggerAdapter):
         """
-        Processes a query job.
+        Processes a simple query job. Always uses the user's question for the search.
         """
         collection_id = job.collection_id
         question = job.data.get("question")
-        adapter.debug(
-            f"Querying collection {collection_id} with question: '{question}'"
-        )
+        task_name = job.data.get("task_name", "default_analysis")
+        rag_strategy = settings.get("rag.strategy", "merge")
 
-        adapter.debug("Embedding the question.")
-        query_embedding = self.embedding_provider.get_embeddings([question])[0]
+        adapter.info(f"Processing simple query for collection {collection_id}")
+        adapter.info(f"Using RAG strategy: '{rag_strategy}'")
 
-        adapter.debug("Finding relevant chunks.")
+        # In a simple query, the user's question is always the search text.
+        search_text = question
+        adapter.info("Using user's question for search.")
+
+        # Perform the similarity search
+        query_embedding = self.embedding_provider.get_embeddings([search_text])[0]
         relevant_chunks = self.job_manager.storage.find_relevant_chunks_in_collection(
             collection_id, query_embedding
         )
-        adapter.debug(f"Found {len(relevant_chunks)} relevant chunks.")
-        context_text = "\n".join([chunk.chunk_text for chunk in relevant_chunks])
+        adapter.info(f"Found {len(relevant_chunks)} relevant chunks.")
 
-        task_name = job.data.get("task_name", "default_analysis")
-        adapter.debug(f"Composing prompt with task: '{task_name}'")
-        context = {
-            "document_text": context_text,
-            "question": question,
-        }
-        prompt = self.composer.compose(task_name, context)
+        if not relevant_chunks:
+            self.job_manager.storage.save_result(
+                job.id, {"content": "No relevant documents found."}
+            )
+            return
 
-        adapter.debug("Sending prompt to LLM.")
-        response = self.llm_provider.generate_response(prompt)
-        adapter.debug("Received response from LLM.")
+        # Execute the chosen RAG strategy
+        if rag_strategy == "separate":
+            all_answers = []
+            for chunk in relevant_chunks:
+                context = {"document_text": chunk.chunk_text, "question": question}
+                prompt = self.composer.compose(task_name, context)
+                response = self.llm_provider.generate_response(prompt)
+                all_answers.append(
+                    {
+                        "source_chunk": chunk.chunk_text,
+                        "llm_response": response._asdict(),
+                    }
+                )
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "separate", "results": all_answers}
+            )
+        else:  # Default to "merge"
+            context_text = "\n---\n".join(
+                [chunk.chunk_text for chunk in relevant_chunks]
+            )
+            context = {"document_text": context_text, "question": question}
+            prompt = self.composer.compose(task_name, context)
+            response = self.llm_provider.generate_response(prompt)
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "merge", "result": response._asdict()}
+            )
 
-        self.job_manager.storage.save_result(job.id, response._asdict())
         adapter.debug("Saved result to storage.")
+
+    def _process_analysis_job(self, job, adapter: LoggerAdapter):
+        """
+        Processes an analysis job. Uses prompt components for search and generation.
+        """
+        collection_id = job.collection_id
+        task_name = job.data.get("task_name", "default_analysis")
+        rag_strategy = settings.get("rag.strategy", "merge")
+
+        adapter.info(f"Processing analysis job for collection {collection_id}")
+        adapter.info(f"Using RAG strategy: '{rag_strategy}'")
+        adapter.info(f"Using prompt task: '{task_name}'")
+
+        # Determine search text and generation question from prompt components
+        prompt_components = self.loader.load_prompt_components(task_name)
+        generation_question = prompt_components.get("question")
+        search_text = prompt_components.get("embedding_reference", generation_question)
+
+        if not generation_question:
+            raise ValueError(f"Task '{task_name}' is missing a question.md component.")
+
+        # Perform the similarity search
+        query_embedding = self.embedding_provider.get_embeddings([search_text])[0]
+        relevant_chunks = self.job_manager.storage.find_relevant_chunks_in_collection(
+            collection_id, query_embedding
+        )
+        adapter.info(f"Found {len(relevant_chunks)} relevant chunks.")
+
+        if not relevant_chunks:
+            self.job_manager.storage.save_result(
+                job.id, {"content": "No relevant documents found."}
+            )
+            return
+
+        # Execute the chosen RAG strategy
+        if rag_strategy == "separate":
+            all_answers = []
+            for chunk in relevant_chunks:
+                context = {
+                    "document_text": chunk.chunk_text,
+                    "question": generation_question,
+                }
+                prompt = self.composer.compose(task_name, context)
+                response = self.llm_provider.generate_response(prompt)
+                all_answers.append(
+                    {
+                        "source_chunk": chunk.chunk_text,
+                        "llm_response": response._asdict(),
+                    }
+                )
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "separate", "results": all_answers}
+            )
+        else:  # Default to "merge"
+            context_text = "\n---\n".join(
+                [chunk.chunk_text for chunk in relevant_chunks]
+            )
+            context = {"document_text": context_text, "question": generation_question}
+            prompt = self.composer.compose(task_name, context)
+            response = self.llm_provider.generate_response(prompt)
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "merge", "result": response._asdict()}
+            )
+
+        adapter.debug("Saved result to storage.")
+
+    def _process_document_query_job(self, job, adapter: LoggerAdapter):
+        """
+        Processes a query job for a single document.
+        """
+        document_id = job.document_id
+        question = job.data.get("question")
+        task_name = job.data.get("task_name", "default_analysis")
+        rag_strategy = settings.get("rag.strategy", "merge")
+
+        adapter.info(f"Processing query for document {document_id}")
+
+        search_text = question
+        query_embedding = self.embedding_provider.get_embeddings([search_text])[0]
+        relevant_chunks = self.job_manager.storage.find_relevant_chunks_in_document(
+            document_id, query_embedding
+        )
+        adapter.info(f"Found {len(relevant_chunks)} relevant chunks in document.")
+
+        if not relevant_chunks:
+            self.job_manager.storage.save_result(
+                job.id, {"content": "No relevant chunks found in the document."}
+            )
+            return
+
+        if rag_strategy == "separate":
+            all_answers = []
+            for chunk in relevant_chunks:
+                context = {"document_text": chunk.chunk_text, "question": question}
+                prompt = self.composer.compose(task_name, context)
+                response = self.llm_provider.generate_response(prompt)
+                all_answers.append(
+                    {
+                        "source_chunk": chunk.chunk_text,
+                        "llm_response": response._asdict(),
+                    }
+                )
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "separate", "results": all_answers}
+            )
+        else:
+            context_text = "\n---\n".join(
+                [chunk.chunk_text for chunk in relevant_chunks]
+            )
+            context = {"document_text": context_text, "question": question}
+            prompt = self.composer.compose(task_name, context)
+            response = self.llm_provider.generate_response(prompt)
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "merge", "result": response._asdict()}
+            )
+
+    def _process_document_analysis_job(self, job, adapter: LoggerAdapter):
+        """
+        Processes an analysis job for a single document.
+        """
+        document_id = job.document_id
+        task_name = job.data.get("task_name", "default_analysis")
+        rag_strategy = settings.get("rag.strategy", "merge")
+
+        adapter.info(f"Processing analysis for document {document_id}")
+
+        prompt_components = self.loader.load_prompt_components(task_name)
+        generation_question = prompt_components.get("question")
+        search_text = prompt_components.get("embedding_reference", generation_question)
+        if not generation_question:
+            raise ValueError(f"Task '{task_name}' is missing a question.md component.")
+
+        query_embedding = self.embedding_provider.get_embeddings([search_text])[0]
+        relevant_chunks = self.job_manager.storage.find_relevant_chunks_in_document(
+            document_id, query_embedding
+        )
+        adapter.info(f"Found {len(relevant_chunks)} relevant chunks in document.")
+
+        if not relevant_chunks:
+            self.job_manager.storage.save_result(
+                job.id, {"content": "No relevant chunks found in the document."}
+            )
+            return
+
+        if rag_strategy == "separate":
+            all_answers = []
+            for chunk in relevant_chunks:
+                context = {
+                    "document_text": chunk.chunk_text,
+                    "question": generation_question,
+                }
+                prompt = self.composer.compose(task_name, context)
+                response = self.llm_provider.generate_response(prompt)
+                all_answers.append(
+                    {
+                        "source_chunk": chunk.chunk_text,
+                        "llm_response": response._asdict(),
+                    }
+                )
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "separate", "results": all_answers}
+            )
+        else:
+            context_text = "\n---\n".join(
+                [chunk.chunk_text for chunk in relevant_chunks]
+            )
+            context = {"document_text": context_text, "question": generation_question}
+            prompt = self.composer.compose(task_name, context)
+            response = self.llm_provider.generate_response(prompt)
+            self.job_manager.storage.save_result(
+                job.id, {"strategy": "merge", "result": response._asdict()}
+            )

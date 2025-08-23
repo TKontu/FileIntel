@@ -69,6 +69,33 @@ class FileIntelAPI:
             json={"question": question},
         )
 
+    def analyze_collection(
+        self, collection_identifier: str, task_name: str
+    ) -> Dict[str, Any]:
+        return self._request(
+            "POST",
+            f"collections/{collection_identifier}/analyze",
+            json={"task_name": task_name},
+        )
+
+    def query_document(
+        self, collection_identifier: str, document_identifier: str, question: str
+    ) -> Dict[str, Any]:
+        return self._request(
+            "POST",
+            f"collections/{collection_identifier}/documents/{document_identifier}/query",
+            json={"question": question},
+        )
+
+    def analyze_document(
+        self, collection_identifier: str, document_identifier: str, task_name: str
+    ) -> Dict[str, Any]:
+        return self._request(
+            "POST",
+            f"collections/{collection_identifier}/documents/{document_identifier}/analyze",
+            json={"task_name": task_name},
+        )
+
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         return self._request("GET", f"jobs/{job_id}/status")
 

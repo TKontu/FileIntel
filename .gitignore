@@ -1,6 +1,7 @@
 .venv/
 input/
 output/
+logs/
 *.pyc
 __pycache__/
 /__pycache/*
@@ -42,3 +43,4 @@ migrations/versions/1_remove_default_from_job_type.py
 migrations/versions/1_remove_default_from_job_type.py
 migrations/versions/1_remove_default_from_job_type.py
 migrations/versions/1_remove_default_from_job_type.py
+logs/document_analyzer.log
