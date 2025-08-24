@@ -170,7 +170,6 @@ class Worker:
         """
         collection_id = job.collection_id
         question = job.data.get("question")
-        task_name = job.data.get("task_name", "default_analysis")
         rag_strategy = settings.get("rag.strategy", "merge")
 
         adapter.info(f"Processing simple query for collection {collection_id}")
@@ -198,8 +197,7 @@ class Worker:
             all_answers = []
             for result in relevant_chunks:
                 chunk = result["chunk"]
-                context = {"document_text": chunk.chunk_text, "question": question}
-                prompt = self.composer.compose(task_name, context)
+                prompt = f"Based on the following text, answer the question: '{question}'.\n\nText: {chunk.chunk_text}"
                 response = self.llm_provider.generate_response(prompt)
                 all_answers.append(
                     {
@@ -218,8 +216,7 @@ class Worker:
             context_text = "\n---\n".join(
                 [res["chunk"].chunk_text for res in relevant_chunks]
             )
-            context = {"document_text": context_text, "question": question}
-            prompt = self.composer.compose(task_name, context)
+            prompt = f"Based on the following text, answer the question: '{question}'.\n\nText: {context_text}"
             response = self.llm_provider.generate_response(prompt)
             self.job_manager.storage.save_result(
                 job.id, {"strategy": "merge", "result": response._asdict()}
@@ -303,7 +300,6 @@ class Worker:
         """
         document_id = job.document_id
         question = job.data.get("question")
-        task_name = job.data.get("task_name", "default_analysis")
         rag_strategy = settings.get("rag.strategy", "merge")
 
         adapter.info(f"Processing query for document {document_id}")
@@ -325,8 +321,7 @@ class Worker:
             all_answers = []
             for result in relevant_chunks:
                 chunk = result["chunk"]
-                context = {"document_text": chunk.chunk_text, "question": question}
-                prompt = self.composer.compose(task_name, context)
+                prompt = f"Based on the following text, answer the question: '{question}'.\n\nText: {chunk.chunk_text}"
                 response = self.llm_provider.generate_response(prompt)
                 all_answers.append(
                     {
@@ -345,8 +340,7 @@ class Worker:
             context_text = "\n---\n".join(
                 [res["chunk"].chunk_text for res in relevant_chunks]
             )
-            context = {"document_text": context_text, "question": question}
-            prompt = self.composer.compose(task_name, context)
+            prompt = f"Based on the following text, answer the question: '{question}'.\n\nText: {context_text}"
             response = self.llm_provider.generate_response(prompt)
             self.job_manager.storage.save_result(
                 job.id, {"strategy": "merge", "result": response._asdict()}

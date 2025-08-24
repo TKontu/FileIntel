@@ -35,8 +35,15 @@ class Document(Base):
     __tablename__ = "documents"
     id = Column(String, primary_key=True)
     collection_id = Column(String, ForeignKey("collections.id"), nullable=False)
-    filename = Column(String, nullable=False)
-    content_hash = Column(String, nullable=False, unique=True)
+    filename = Column(
+        String, nullable=False
+    )  # This will store the secure, UUID-based filename
+    original_filename = Column(
+        String, nullable=False
+    )  # This will store the user's original filename
+    content_hash = Column(
+        String, nullable=False
+    )  # No longer unique across all collections
     file_size = Column(Integer, nullable=False)
     mime_type = Column(String, nullable=False)
     document_metadata = Column(JSONB, nullable=True)

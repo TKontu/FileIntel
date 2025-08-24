@@ -13,6 +13,8 @@ from ...worker.job_manager import JobManager
 import hashlib
 import mimetypes
 import os
+import aiofiles
+import uuid
 
 router = APIRouter(dependencies=[Depends(get_api_key)])
 
@@ -37,7 +39,12 @@ def get_collection(collection: Collection = Depends(get_collection_by_id_or_name
         "id": collection.id,
         "name": collection.name,
         "documents": [
-            {"id": d.id, "filename": d.filename} for d in collection.documents
+            {
+                "id": d.id,
+                "filename": d.filename,
+                "original_filename": d.original_filename,
+            }
+            for d in collection.documents
         ],
     }
 
@@ -57,44 +64,62 @@ async def upload_document_to_collection(
     collection: Collection = Depends(get_collection_by_id_or_name),
     storage: StorageInterface = Depends(get_storage),
 ):
-    contents = await file.read()
-    file_hash = hashlib.sha256(contents).hexdigest()
+    # --- Secure File Handling ---
+    upload_dir = "uploads"
+    os.makedirs(upload_dir, exist_ok=True)
 
-    # Check for duplicates in the specific collection
-    existing_doc = storage.get_document_by_hash_and_collection(file_hash, collection.id)
+    # Generate a secure, unique filename
+    original_filename = file.filename
+    file_extension = os.path.splitext(original_filename)[1]
+    secure_filename = f"{uuid.uuid4()}{file_extension}"
+    file_path = os.path.join(upload_dir, secure_filename)
+
+    # --- Stream to Disk and Calculate Hash Simultaneously ---
+    file_hash = hashlib.sha256()
+    file_size = 0
+    try:
+        async with aiofiles.open(file_path, "wb") as f:
+            while contents := await file.read(1024 * 1024):  # Read in 1MB chunks
+                await f.write(contents)
+                file_hash.update(contents)
+                file_size += len(contents)
+    except Exception as e:
+        # Clean up partially written file if something goes wrong
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+
+    content_hash_hex = file_hash.hexdigest()
+
+    # --- Check for Duplicates ---
+    existing_doc = storage.get_document_by_hash_and_collection(
+        content_hash_hex, collection.id
+    )
     if existing_doc:
+        os.remove(file_path)  # Clean up the newly uploaded file
         raise HTTPException(
             status_code=409,
             detail=f"Document with same content already exists in this collection with ID: {existing_doc.id}",
         )
 
-    # Save file to disk
-    upload_dir = "uploads"
-    os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, file.filename)
-    with open(file_path, "wb") as f:
-        f.write(contents)
-
-    # Determine MIME type
-    mime_type, _ = mimetypes.guess_type(file.filename)
+    # --- Create Database Record ---
+    mime_type, _ = mimetypes.guess_type(original_filename)
     if mime_type is None:
         mime_type = "application/octet-stream"
 
-    # Create document record
     document = storage.create_document(
-        filename=file.filename,
-        content_hash=file_hash,
-        file_size=len(contents),
+        filename=secure_filename,
+        original_filename=original_filename,
+        content_hash=content_hash_hex,
+        file_size=file_size,
         mime_type=mime_type,
         collection_id=collection.id,
         document_metadata={},
     )
 
-    # Create indexing job
+    # --- Create Indexing Job ---
     job_manager = JobManager(storage)
-    job_data = {
-        "file_path": file_path,
-    }
+    job_data = {"file_path": file_path}
     job_manager.submit_job(
         job_type="indexing",
         data=job_data,
@@ -113,7 +138,12 @@ def list_documents_in_collection(
     collection: Collection = Depends(get_collection_by_id_or_name),
 ):
     return [
-        {"id": doc.id, "filename": doc.filename, "mime_type": doc.mime_type}
+        {
+            "id": doc.id,
+            "filename": doc.filename,
+            "original_filename": doc.original_filename,
+            "mime_type": doc.mime_type,
+        }
         for doc in collection.documents
     ]
 

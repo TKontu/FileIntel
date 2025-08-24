@@ -36,6 +36,7 @@ class PostgreSQLStorage(StorageInterface):
     def create_document(
         self,
         filename: str,
+        original_filename: str,
         content_hash: str,
         file_size: int,
         mime_type: str,
@@ -46,6 +47,7 @@ class PostgreSQLStorage(StorageInterface):
         new_document = Document(
             id=doc_id,
             filename=filename,
+            original_filename=original_filename,
             content_hash=content_hash,
             file_size=file_size,
             mime_type=mime_type,
@@ -86,6 +88,18 @@ class PostgreSQLStorage(StorageInterface):
             self.db.query(Document)
             .filter(
                 Document.filename == filename,
+                Document.collection_id == collection_id,
+            )
+            .first()
+        )
+
+    def get_document_by_original_filename_and_collection(
+        self, original_filename: str, collection_id: str
+    ) -> Document:
+        return (
+            self.db.query(Document)
+            .filter(
+                Document.original_filename == original_filename,
                 Document.collection_id == collection_id,
             )
             .first()

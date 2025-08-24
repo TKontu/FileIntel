@@ -59,7 +59,7 @@ def get_document_by_id_or_filename(
         document = storage.get_document(document_identifier)
     except ValueError:
         # If not a UUID, treat as a filename
-        document = storage.get_document_by_filename_and_collection(
+        document = storage.get_document_by_original_filename_and_collection(
             document_identifier, collection.id
         )
 
