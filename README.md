@@ -94,13 +94,3 @@ Once the application is running, you can use the API to create collections, uplo
 
 The application can be configured using the `config/default.yaml` file. This file contains various options for configuring the LLM, document processing, OCR, output, API, storage, and batch processing.
 
-## Security Considerations
-
-When deploying FileIntel to a production environment, it is important to consider the following security risks:
-
-*   **Hardcoded Credentials:** The `docker-compose.yml` file contains hardcoded database credentials. It is recommended to use a `.env` file to externalize these credentials, as described in the "Getting Started" section.
-*   **OpenAI API Key:** The `config/default.yaml` file contains a placeholder for the OpenAI API key. It is recommended to use an environment variable to store the API key and update the configuration to load the key from the environment.
-*   **CORS Policy:** The `config/default.yaml` file has a permissive CORS policy (`cors_origins: ["*"]`). It is recommended to restrict the CORS policy to only allow trusted domains.
-*   **Authentication and Authorization:** The API is currently open to the public. It is recommended to implement an authentication and authorization mechanism to secure the API endpoints.
-
-By addressing these security risks, you can help to ensure that your FileIntel deployment is secure and protected from unauthorized access.
