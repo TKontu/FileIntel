@@ -1,10 +1,12 @@
 services:
   postgres:
     image: "pgvector/pgvector:pg13"
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: fileintel
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
@@ -40,14 +42,16 @@ services:
       - ./scripts:/home/appuser/app/scripts
       - ./tests:/home/appuser/app/tests
       - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/home/appuser/app/src
       - PYTHONUNBUFFERED=1
-      - DB_USER=user
-      - DB_PASSWORD=password
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_NAME=fileintel
+      - DB_NAME=${POSTGRES_DB}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -71,14 +75,16 @@ services:
       - ./input:/home/appuser/app/input
       - ./output:/home/appuser/app/output
       - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/home/appuser/app/src
       - PYTHONUNBUFFERED=1
-      - DB_USER=user
-      - DB_PASSWORD=password
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_NAME=fileintel
+      - DB_NAME=${POSTGRES_DB}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -92,10 +98,12 @@ services:
     build:
       context: ./docker/backup
       dockerfile: Dockerfile
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: fileintel
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_HOST: postgres
     volumes:
       - backups:/backups

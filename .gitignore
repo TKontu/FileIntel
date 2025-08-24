@@ -1,46 +1,37 @@
+# Environment
 .venv/
-input/
-output/
-logs/
-*.pyc
-__pycache__/
-/__pycache/*
-/__pycache__/*
-pycache/*
-__pycache__
-mark-git-safe.ps1
-mark-git-safe.sh
-.pytest_cache/
-.vscode/
-__pycache__
 .env
-git-cheat-sheet.md
-local.env
-.env.worker
-.env.api
-testfile2.pdf
-testfile.pdf.pdf
+*.env
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+
+# Logs - Ignores the entire 'logs' directory
+/logs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Input/Output directories
+/input/
+/output/
+
+# User-uploaded files (example, adjust if needed)
+/uploads/
 *.pdf
-logs/document_analyzer.log
-prompts/templates/answer_format.md
-prompts/templates/answer_format.md
-prompts/templates/instruction.md
-prompts/templates/question.md
-prompts/templates/user_question.md
-result2.json
-result1.md
-result1.md
-prompts/templates/answer_format.md
-prompts/templates/instruction.md
-prompts/templates/user_question.md
-prompts/templates/question.md
-migrations/versions/1_remove_default_from_job_type.py
-migrations/versions/5172acc0a360_merge_heads.py
-migrations/versions/05340f10b3f9_change_embedding_dimension_to_1024.py
-migrations/versions/60896da84c95_make_content_hash_unique_per_collection.py
-logs/document_analyzer.log
-migrations/versions/1_remove_default_from_job_type.py
-migrations/versions/1_remove_default_from_job_type.py
-migrations/versions/1_remove_default_from_job_type.py
-migrations/versions/1_remove_default_from_job_type.py
-logs/document_analyzer.log
+
+# Documentation
+git-cheat-sheet.md
