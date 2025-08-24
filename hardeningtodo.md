@@ -8,16 +8,23 @@ This document outlines the necessary security enhancements to prepare the FileIn
 
 *These issues represent immediate risks and must be addressed before any public deployment.*
 
-### 1. Secure API Endpoints with Authentication
+### 1. Implement Optional API Key Authentication
 
--   **Risk:** The API is currently open, allowing unauthorized users to access, upload, and delete data, and to run expensive analysis jobs, leading to data breaches and resource abuse.
+-   **Risk:** If the API is exposed publicly, it is open to unauthorized use, leading to data breaches and resource abuse.
 -   **Action Plan:**
-    1.  **Implement API Key Authentication:** This is the most straightforward method for a service-to-service API.
-        -   Create a new `api_keys` table in the database to store hashed API keys associated with a user or client.
-        -   Create a FastAPI dependency (e.g., in `src/document_analyzer/api/dependencies.py`) that checks for a valid `X-API-Key` header in incoming requests.
-        -   Apply this dependency to all sensitive API routes to protect them.
-    2.  **Provide a Secure Way to Manage Keys:**
-        -   Add a CLI command or a secure script to generate and hash new API keys.
+    1.  **Make Authentication Configurable:** Add a new section to `config/default.yaml` to allow authentication to be enabled or disabled. This provides security for production while maintaining ease of use for local development.
+        ```yaml
+        api:
+          authentication:
+            enabled: false  # Default to off
+            api_key: ${API_KEY} # Load from environment
+        ```
+    2.  **Create a Reusable Security Dependency:** In `src/document_analyzer/api/dependencies.py`, create a single FastAPI dependency that:
+        -   Checks if `api.authentication.enabled` is `true`.
+        -   If enabled, it validates the `X-API-Key` header against the `API_KEY` environment variable.
+        -   If disabled, it allows the request to proceed without checks.
+    3.  **Apply Security to All Routes:** Apply the new dependency to all relevant API endpoints to protect them when authentication is enabled.
+    4.  **Document Usage:** Update the `README.md` or `API_USAGE.md` to explain how to enable authentication and use the API key.
 
 ### 2. Fix Insecure File Uploads (Path Traversal)
 
