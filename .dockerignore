@@ -1,0 +1,59 @@
+# Environment files
+#.env
+#.env.*
+
+# Git
+.git/
+.gitignore
+
+# Node.js
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+.pytest_cache/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and runtime data
+logs/
+*.log
+uploads/
+output/
+input/
+
+# Documentation and development files
+*.md
+todo.md
+hardeningtodo.md
+RAGtodo.md
+git-cheat-sheet.md
+
+# Docker files (not needed inside container)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Backup files
+*.bak
+*.backup
+
+# Development and test files
+tests/
+.coverage

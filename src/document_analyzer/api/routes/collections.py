@@ -10,11 +10,13 @@ from ...storage.base import StorageInterface
 from ...storage.models import Collection, Document
 from ..models import QueryRequest, AnalysisRequest
 from ...worker.job_manager import JobManager
+from ...core.config import get_config
 import hashlib
 import mimetypes
 import os
 import aiofiles
 import uuid
+import re
 
 router = APIRouter(dependencies=[Depends(get_api_key)])
 
@@ -58,14 +60,37 @@ def delete_collection(
     return
 
 
+def _parse_file_size(size_str: str) -> int:
+    """Convert file size string like '100MB' to bytes"""
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGT]?B)$", size_str.upper())
+    if not match:
+        raise ValueError(f"Invalid file size format: {size_str}")
+
+    size, unit = match.groups()
+    size = float(size)
+
+    multipliers = {
+        "B": 1,
+        "KB": 1024,
+        "MB": 1024**2,
+        "GB": 1024**3,
+        "TB": 1024**4,
+    }
+
+    return int(size * multipliers[unit])
+
+
 @router.post("/collections/{collection_identifier}/documents")
 async def upload_document_to_collection(
     file: UploadFile = File(...),
     collection: Collection = Depends(get_collection_by_id_or_name),
     storage: StorageInterface = Depends(get_storage),
 ):
+    config = get_config()
+    max_file_size = _parse_file_size(config.document_processing.max_file_size)
+
     # --- Secure File Handling ---
-    upload_dir = "uploads"
+    upload_dir = config.paths.uploads
     os.makedirs(upload_dir, exist_ok=True)
 
     # Generate a secure, unique filename
@@ -80,9 +105,21 @@ async def upload_document_to_collection(
     try:
         async with aiofiles.open(file_path, "wb") as f:
             while contents := await file.read(1024 * 1024):  # Read in 1MB chunks
+                file_size += len(contents)
+
+                # Check file size limit during streaming
+                if file_size > max_file_size:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {config.document_processing.max_file_size}",
+                    )
+
                 await f.write(contents)
                 file_hash.update(contents)
-                file_size += len(contents)
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
         # Clean up partially written file if something goes wrong
         if os.path.exists(file_path):

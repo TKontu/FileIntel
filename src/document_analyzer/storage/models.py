@@ -29,6 +29,9 @@ class Collection(Base):
     chunks = relationship(
         "DocumentChunk", back_populates="collection", cascade="all, delete-orphan"
     )
+    jobs = relationship(
+        "Job", back_populates="collection", cascade="all, delete-orphan"
+    )
 
 
 class Document(Base):
@@ -87,6 +90,7 @@ class Job(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     document = relationship("Document", back_populates="jobs")
+    collection = relationship("Collection", back_populates="jobs")
     result = relationship(
         "Result", back_populates="job", uselist=False, cascade="all, delete-orphan"
     )

@@ -6,15 +6,16 @@ llm:
   rate_limit: 60
   openai:
     base_url: "http://192.168.0.247:9003/v1"
-    api_key: "ollama"
+    api_key: ${OPENAI_API_KEY:-ollama}  # Use environment variable or default to "ollama" for local setups
     rate_limit: 30
   anthropic:
+    api_key: ${ANTHROPIC_API_KEY:-}  # Load from environment variable, empty if not set
     rate_limit: 15
 
 rag:
   strategy: "separate" # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
-  chunk_size: 1024
-  chunk_overlap: 200
+  chunk_size: 500
+  chunk_overlap: 100
   embedding_provider: "openai"
   embedding_model: "bge-large-en"
 
@@ -36,13 +37,20 @@ output:
   retry_attempts: 3
   timeout: 300
 
+paths:
+  uploads: ${UPLOADS_DIR:-/home/appuser/app/uploads}
+  prompts: ${PROMPTS_DIR:-/home/appuser/app/prompts}
+  input: ${INPUT_DIR:-/home/appuser/app/input}
+  output: ${OUTPUT_DIR:-/home/appuser/app/output}
+
 prompts:
-  directory: "/home/appuser/app/prompts/templates"
+  directory: "${PROMPTS_DIR:-/home/appuser/app/prompts}/templates"
 
 api:
   host: "0.0.0.0"
   port: 8000
-  cors_origins: ["*"]
+  cors_origins: ["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000", "http://127.0.0.1:8080"]  # Restrict to local development by default
+  # cors_origins: ["*"]  # Uncomment this line and comment the above for unrestricted access
   rate_limit: 100
   authentication:
     enabled: false
@@ -55,6 +63,6 @@ storage:
   redis_host: "localhost"
 
 batch_processing:
-  directory_input: "input"
-  directory_output: "output"
+  directory_input: ${INPUT_DIR:-/home/appuser/app/input}
+  directory_output: ${OUTPUT_DIR:-/home/appuser/app/output}
   default_format: "json"

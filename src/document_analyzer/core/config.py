@@ -10,6 +10,7 @@ class OpenAISettings(BaseModel):
 
 
 class AnthropicSettings(BaseModel):
+    api_key: Optional[str] = Field(default=None)
     rate_limit: int = Field(default=15)
 
 
@@ -84,6 +85,13 @@ class StorageSettings(BaseModel):
     job_queue_name: str = Field(default="document_analyzer:job_queue")
 
 
+class PathSettings(BaseModel):
+    uploads: str = Field(default="/home/appuser/app/uploads")
+    prompts: str = Field(default="/home/appuser/app/prompts")
+    input: str = Field(default="/home/appuser/app/input")
+    output: str = Field(default="/home/appuser/app/output")
+
+
 class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
@@ -94,6 +102,7 @@ class Settings(BaseModel):
     output: OutputSettings = Field(default_factory=OutputSettings)
     api: APISettings = Field(default_factory=APISettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    paths: PathSettings = Field(default_factory=PathSettings)
 
     def get(self, key: str, default: Any = None) -> Any:
         """
@@ -124,14 +133,21 @@ def load_config(path: str = "config/default.yaml") -> Settings:
     with open(path, "r") as f:
         config_str = f.read()
 
-    # Find all environment variable placeholders
-    placeholders = re.findall(r"\$\{(.*?)\}", config_str)
+    # Find all environment variable placeholders with optional defaults
+    placeholders = re.findall(r"\$\{([^}]+)\}", config_str)
 
     # Replace placeholders with environment variable values
     for placeholder in placeholders:
-        value = os.environ.get(placeholder)
-        if value is None:
-            raise ValueError(f"Environment variable '{placeholder}' not set")
+        # Handle default values in format ${VAR:-default}
+        if ":-" in placeholder:
+            var_name, default_value = placeholder.split(":-", 1)
+            value = os.environ.get(var_name, default_value)
+        else:
+            var_name = placeholder
+            value = os.environ.get(var_name)
+            if value is None:
+                raise ValueError(f"Environment variable '{var_name}' not set")
+
         config_str = config_str.replace(f"${{{placeholder}}}", value)
 
     config_data = yaml.safe_load(config_str)

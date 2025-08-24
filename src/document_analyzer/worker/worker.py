@@ -23,7 +23,9 @@ class Worker:
         self.llm_provider = OpenAIProvider()
         self.embedding_provider = OpenAIEmbeddingProvider()
 
-        prompts_dir_str = settings.get("prompts.directory", "/home/appuser/app/prompts")
+        prompts_dir_str = settings.get(
+            "prompts.directory", settings.paths.prompts + "/templates"
+        )
         prompts_dir = Path(prompts_dir_str)
         self.loader = PromptLoader(prompts_dir=prompts_dir)
         self.composer = PromptComposer(

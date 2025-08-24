@@ -52,6 +52,11 @@ services:
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${POSTGRES_DB}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -85,6 +90,11 @@ services:
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${POSTGRES_DB}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

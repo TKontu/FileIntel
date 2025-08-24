@@ -2,9 +2,17 @@
 
 # CLI:
 
-fileintel query from-document "secure-upload-test-2" "test_upload.txt" "What is this file about"
+fileintel collections create "Test"
 
-fileintel analyze from-document "secure-upload-test-2" "test_upload.txt" --task-name "expert_analysis"
+fileintel documents upload "Test" "file.pdf"
+
+fileintel query from-document "Test" "file.pdf" "What is this file about"
+
+fileintel jobs status "5d86ba3e-c33a-493d-987a-39236040f245"
+
+fileintel jobs result "5d86ba3e-c33a-493d-987a-39236040f245"
+
+fileintel analyze from-document "Test" "file.pdf" --task-name "expert_analysis"
 
 # API:
 
