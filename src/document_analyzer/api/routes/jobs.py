@@ -1,12 +1,12 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException
-from ..dependencies import get_storage
+from ..dependencies import get_storage, get_api_key
 from ...storage.base import StorageInterface
 from ..models import JobStatusResponse, JobResultResponse
 from ...output_management.factory import FormatterFactory
 from fastapi.responses import PlainTextResponse
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_api_key)])
 
 
 @router.get("/jobs/{job_id}/status", response_model=JobStatusResponse)

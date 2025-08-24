@@ -1,8 +1,24 @@
 from ..storage.postgresql_storage import PostgreSQLStorage
 from ..storage.models import SessionLocal, Collection, Document
 from ..storage.base import StorageInterface
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Security
+from fastapi.security import APIKeyHeader
+from ..core.config import get_config
 import uuid
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def get_api_key(api_key: str = Security(api_key_header)):
+    config = get_config()
+    if config.api.authentication.enabled:
+        if not api_key:
+            raise HTTPException(status_code=403, detail="API key is required")
+        if api_key == config.api.authentication.api_key:
+            return api_key
+        else:
+            raise HTTPException(status_code=401, detail="Invalid API Key")
+    return None
 
 
 def get_storage():

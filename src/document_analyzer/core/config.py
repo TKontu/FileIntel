@@ -64,6 +64,14 @@ class APISettings(BaseModel):
     port: int = Field(default=8000)
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     rate_limit: int = Field(default=100)
+    authentication: "AuthenticationSettings" = Field(
+        default_factory=lambda: {"enabled": False}
+    )
+
+
+class AuthenticationSettings(BaseModel):
+    enabled: bool = Field(default=False)
+    api_key: Optional[str] = Field(default=None)
 
 
 class StorageSettings(BaseModel):
@@ -106,10 +114,32 @@ class Settings(BaseModel):
         return value
 
 
+import os
+import re
+from pydantic import BaseModel, Field
+from typing import Optional, List, Any
+
+
 def load_config(path: str = "config/default.yaml") -> Settings:
     with open(path, "r") as f:
-        config_data = yaml.safe_load(f)
+        config_str = f.read()
+
+    # Find all environment variable placeholders
+    placeholders = re.findall(r"\$\{(.*?)\}", config_str)
+
+    # Replace placeholders with environment variable values
+    for placeholder in placeholders:
+        value = os.environ.get(placeholder)
+        if value is None:
+            raise ValueError(f"Environment variable '{placeholder}' not set")
+        config_str = config_str.replace(f"${{{placeholder}}}", value)
+
+    config_data = yaml.safe_load(config_str)
     return Settings.parse_obj(config_data)
 
 
 settings = load_config()
+
+
+def get_config() -> Settings:
+    return settings

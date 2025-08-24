@@ -4,6 +4,7 @@ from ..dependencies import (
     get_storage,
     get_collection_by_id_or_name,
     get_document_by_id_or_filename,
+    get_api_key,
 )
 from ...storage.base import StorageInterface
 from ...storage.models import Collection, Document
@@ -13,7 +14,7 @@ import hashlib
 import mimetypes
 import os
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_api_key)])
 
 
 @router.post("/collections", status_code=201)

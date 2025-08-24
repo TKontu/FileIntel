@@ -44,6 +44,9 @@ api:
   port: 8000
   cors_origins: ["*"]
   rate_limit: 100
+  authentication:
+    enabled: false
+    api_key: ${API_KEY}
 
 storage:
   type: "postgres"
