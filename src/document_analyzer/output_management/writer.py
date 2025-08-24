@@ -1,12 +1,24 @@
 from pathlib import Path
 from .base import OutputFormatter
 from ..storage.base import StorageInterface
+from .formatters.table import TableFormatter
+from .formatters.essay import EssayFormatter
+from .formatters.json import JSONFormatter
+from .formatters.list import ListFormatter
+
 
 class OutputWriter:
     def __init__(self, storage: StorageInterface = None):
         self.storage = storage
 
-    def write(self, data: str, destination: str, formatter: OutputFormatter, original_filename: str = None, **kwargs):
+    def write(
+        self,
+        data: str,
+        destination: str,
+        formatter: OutputFormatter,
+        original_filename: str = None,
+        **kwargs,
+    ):
         """
         Writes the data to the specified destination using the given formatter.
         """
@@ -22,13 +34,15 @@ class OutputWriter:
         else:
             raise ValueError(f"Unsupported output destination: {destination}")
 
-    def _get_output_path(self, original_filename: str, formatter: OutputFormatter, **kwargs) -> Path:
+    def _get_output_path(
+        self, original_filename: str, formatter: OutputFormatter, **kwargs
+    ) -> Path:
         if not original_filename:
             raise ValueError("Original filename must be provided for file output.")
-        
+
         base_name = Path(original_filename).stem
         format_extension = self._get_format_extension(formatter, **kwargs)
-        
+
         # This is a simple naming convention. A more robust implementation
         # could include timestamps or other metadata.
         return Path(f"{base_name}_output.{format_extension}")
@@ -52,5 +66,5 @@ class OutputWriter:
     def _write_to_database(self, data: str, job_id: str):
         if not job_id:
             raise ValueError("Job ID must be provided for database output.")
-        
+
         self.storage.save_result(job_id, {"result": data})

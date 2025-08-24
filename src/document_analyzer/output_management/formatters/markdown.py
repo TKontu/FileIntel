@@ -1,5 +1,6 @@
 from ..base import OutputFormatter
 
+
 class MarkdownFormatter(OutputFormatter):
     @property
     def file_extension(self) -> str:

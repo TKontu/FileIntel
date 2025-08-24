@@ -1,7 +1,9 @@
 from __future__ import with_statement
 
 import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from dotenv import load_dotenv
@@ -18,15 +20,17 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from src.document_analyzer.storage.models import Base
+
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 load_dotenv()
+
 
 def get_url():
     user = os.getenv("DB_USER", "user")

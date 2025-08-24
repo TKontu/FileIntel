@@ -1,0 +1,1 @@
+This text is the reference for the embedding. The RAG system will search for document chunks that are semantically similar to the content of this file, ignoring the user's direct question during the search phase. It's designed to find content related to system architecture and data processing pipelines.

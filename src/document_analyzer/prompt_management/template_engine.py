@@ -3,6 +3,7 @@ from jinja2.exceptions import TemplateSyntaxError
 from pathlib import Path
 from ..core.exceptions import ConfigException
 
+
 class TemplateEngine:
     def __init__(self, templates_dir: Path = None):
         if templates_dir:

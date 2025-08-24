@@ -1,5 +1,6 @@
 from ..base import OutputFormatter
 
+
 class ListFormatter(OutputFormatter):
     @property
     def file_extension(self) -> str:
@@ -15,4 +16,3 @@ class ListFormatter(OutputFormatter):
         if isinstance(items, list):
             return "\n".join(f"- {item}" for item in items)
         return str(items)
-

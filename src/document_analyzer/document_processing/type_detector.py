@@ -1,6 +1,7 @@
 import magic
 from pathlib import Path
 
+
 class DocumentTypeDetector:
     def __init__(self):
         self.magic = magic.Magic(mime=True)

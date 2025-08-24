@@ -1,7 +1,5 @@
-#!/bin/sh
+#!/bin/sh -e
 
-# Run the database initialization script
-python /home/appuser/app/scripts/init_db.py
-
-# Execute the command passed to this script
+# Execute the command passed to this script.
+echo "Executing command: $@"
 exec "$@"

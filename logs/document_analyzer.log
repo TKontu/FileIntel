@@ -1,3 +1,0 @@
-2025-08-11 20:00:51,103 - document_analyzer.llm_integration.openai_provider - INFO - Initializing OpenAIProvider with base_url: http://192.168.0.247:9003/v1
-2025-08-12 18:10:17,944 - document_analyzer.llm_integration.openai_provider - INFO - Initializing OpenAIProvider with base_url: http://192.168.0.247:9003/v1
-2025-08-12 18:11:36,773 - document_analyzer.llm_integration.openai_provider - INFO - Initializing OpenAIProvider with base_url: http://192.168.0.247:9003/v1

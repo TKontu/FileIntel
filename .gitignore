@@ -1,31 +1,42 @@
+# Environment
 .venv/
-input/
-output/
-*.pyc
-__pycache__/
-/__pycache/*
-/__pycache__/*
-pycache/*
-__pycache__
-mark-git-safe.ps1
-mark-git-safe.sh
-.pytest_cache/
-.vscode/
-__pycache__
 .env
-git-cheat-sheet.md
-local.env
-.env.worker
-.env.api
-testfile2.pdf
-testfile.pdf.pdf
+*.env
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+
+# Logs - Ignores the entire 'logs' directory
+/logs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Input/Output directories
+/input/
+/output/
+
+# User-uploaded files (example, adjust if needed)
+/uploads/
 *.pdf
-logs/document_analyzer.log
-prompts/templates/answer_format.md
-prompts/templates/answer_format.md
-prompts/templates/instruction.md
-prompts/templates/question.md
-prompts/templates/user_question.md
-result2.json
-result1.md
-result1.md
+
+# Documentation
+git-cheat-sheet.md
+
+# Node modules
+node_modules/
+
+prompts/default_analysis/

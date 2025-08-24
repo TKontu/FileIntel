@@ -5,19 +5,23 @@ import json
 from ..core.exceptions import LLMException
 from ..storage.cache import CacheInterface
 
+
 class LLMResponse(NamedTuple):
     """
     A standardized response object from an LLM provider.
     """
+
     content: str
     model: str
     cost: float
     metadata: Dict[str, Any]
 
+
 class LLMProvider(ABC):
     """
     Abstract base class for all LLM providers.
     """
+
     def __init__(self, cache: CacheInterface = None):
         self.cache = cache
 
@@ -27,10 +31,10 @@ class LLMProvider(ABC):
         request_data = {
             "prompt": prompt,
             "model": model,
-            "kwargs": sorted(kwargs.items())
+            "kwargs": sorted(kwargs.items()),
         }
         request_str = json.dumps(request_data)
-        
+
         # Hash the string to create a key
         return f"llm_cache:{hashlib.sha256(request_str.encode()).hexdigest()}"
 

@@ -1,14 +1,17 @@
 services:
   postgres:
-    image: "postgres:13"
+    image: "pgvector/pgvector:pg13"
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: fileintel
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/
+      - ./docker/postgres:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d fileintel"]
       interval: 5s
@@ -18,36 +21,18 @@ services:
   redis:
     image: "redis:alpine"
     ports:
-      - "6379:6379"
-
-  init-db:
-    build: .
-    command: ["python", "scripts/init_db.py"]
-    volumes:
-      - ./src:/home/appuser/app/src
-      - ./scripts:/home/appuser/app/scripts
-    environment:
-      - PYTHONPATH=/home/appuser/app/src
-      - PYTHONUNBUFFERED=1
-      - DB_USER=user
-      - DB_PASSWORD=password
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=fileintel
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - "6379:6779"
 
   api:
     build: .
-    entrypoint: []
+    entrypoint: ["./docker-entrypoint.sh"]
     command: ["uvicorn", "src.document_analyzer.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./prompts/templates:/home/appuser/app/prompts/templates
+      - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
       - ./uploads:/home/appuser/app/uploads
       - ./input:/home/appuser/app/input
@@ -55,49 +40,67 @@ services:
       - ./migrations:/home/appuser/app/migrations
       - ./alembic.ini:/home/appuser/app/alembic.ini
       - ./scripts:/home/appuser/app/scripts
+      - ./tests:/home/appuser/app/tests
+      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/home/appuser/app/src
       - PYTHONUNBUFFERED=1
-      - DB_USER=user
-      - DB_PASSWORD=password
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_NAME=fileintel
+      - DB_NAME=${POSTGRES_DB}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
     depends_on:
-      init-db:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_started
 
   worker:
     build: .
-    entrypoint: []
+    entrypoint: ["./docker-entrypoint.sh"]
     command: ["python", "run_worker.py"]
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./prompts/templates:/home/appuser/app/prompts/templates
+      - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
       - ./run_worker.py:/home/appuser/app/run_worker.py
       - ./uploads:/home/appuser/app/uploads
       - ./input:/home/appuser/app/input
       - ./output:/home/appuser/app/output
+      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/home/appuser/app/src
       - PYTHONUNBUFFERED=1
-      - DB_USER=user
-      - DB_PASSWORD=password
-      - DB_HOST=localhost
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_NAME=fileintel
+      - DB_NAME=${POSTGRES_DB}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    network_mode: "host"
+
     depends_on:
-      init-db:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_started
 
@@ -105,10 +108,12 @@ services:
     build:
       context: ./docker/backup
       dockerfile: Dockerfile
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: fileintel
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_HOST: postgres
     volumes:
       - backups:/backups

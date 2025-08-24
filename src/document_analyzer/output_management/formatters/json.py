@@ -2,6 +2,7 @@ import json
 from ..base import OutputFormatter
 import re
 
+
 class JSONFormatter(OutputFormatter):
     @property
     def file_extension(self) -> str:
@@ -12,7 +13,7 @@ class JSONFormatter(OutputFormatter):
         Formats the data as a JSON string.
         """
         content = data.get("content", "")
-        
+
         # Use regex to find the JSON block within the content string
         match = re.search(r"```json\n(.*?)\n```", content, re.DOTALL)
         if match:
@@ -24,6 +25,6 @@ class JSONFormatter(OutputFormatter):
             except json.JSONDecodeError:
                 # If the extracted string is not valid JSON, return it as is.
                 return json_string
-        
+
         # If no JSON block is found, return the original content
         return content
