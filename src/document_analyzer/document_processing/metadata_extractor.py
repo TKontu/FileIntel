@@ -136,43 +136,129 @@ class MetadataExtractor:
         self, file_metadata: Optional[Dict[str, Any]], llm_metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Merge file metadata with LLM-extracted metadata.
+        Merge file metadata with LLM-extracted metadata into clean, structured metadata.
 
-        LLM metadata takes precedence for bibliographic fields, but file metadata
-        is preserved for technical fields.
+        Only stores relevant bibliographic and document metadata, filtering out
+        technical file properties and duplicates.
 
         Args:
             file_metadata: Metadata from file properties
             llm_metadata: Metadata extracted by LLM
 
         Returns:
-            Merged metadata dictionary
+            Clean, structured metadata dictionary
         """
+        # Define canonical metadata schema - only these fields will be stored
+        canonical_fields = {
+            "title",
+            "authors",
+            "publication_date",
+            "publisher",
+            "doi",
+            "source_url",
+            "language",
+            "document_type",
+            "keywords",
+            "abstract",
+            "harvard_citation",
+        }
+
         merged = {}
 
-        # Start with file metadata
+        # Extract useful fields from file metadata (not technical junk)
         if file_metadata:
-            merged.update(file_metadata)
+            useful_file_metadata = self._extract_useful_file_metadata(file_metadata)
+            merged.update(useful_file_metadata)
 
-        # Add LLM-extracted metadata, removing null values
+        # LLM metadata takes precedence for bibliographic fields
         if llm_metadata:
             clean_llm_metadata = {
                 k: v
                 for k, v in llm_metadata.items()
-                if v is not None and v != "" and v != []
+                if v is not None and v != "" and v != [] and k in canonical_fields
             }
             merged.update(clean_llm_metadata)
 
-        # Add extraction metadata
-        merged["llm_extracted"] = True
-        merged["extraction_method"] = "llm_analysis"
+        # Only keep canonical fields in final metadata
+        final_metadata = {
+            k: v
+            for k, v in merged.items()
+            if k in canonical_fields and v is not None and v != "" and v != []
+        }
 
-        # Preserve original file metadata separately if it exists
+        # Add processing metadata only if we have actual content
+        if final_metadata:
+            final_metadata["llm_extracted"] = True
+            final_metadata["extraction_method"] = "llm_analysis"
+
+        # Store raw file metadata separately for debugging (prefixed with _)
         if file_metadata:
-            merged["original_file_metadata"] = file_metadata
+            final_metadata["_raw_file_metadata"] = file_metadata
 
-        logger.debug(f"Merged metadata fields: {list(merged.keys())}")
-        return merged
+        logger.debug(f"Clean metadata fields: {list(final_metadata.keys())}")
+        return final_metadata
+
+    def _extract_useful_file_metadata(
+        self, file_metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Extract only useful metadata from file properties, filtering out technical junk.
+
+        Args:
+            file_metadata: Raw metadata from file properties
+
+        Returns:
+            Dictionary with only useful metadata fields
+        """
+        useful_metadata = {}
+
+        # Map common PDF/file metadata fields to our canonical schema
+        field_mappings = {
+            # PDF fields -> canonical fields
+            "Title": "title",
+            "/Title": "title",
+            "title": "title",
+            "Subject": "abstract",
+            "/Subject": "abstract",
+            "Author": "authors",
+            "/Author": "authors",
+            "authors": "authors",
+            "publisher": "publisher",
+            "publication_date": "publication_date",
+            "language": "language",
+            "identifier": "doi",  # Sometimes ISBN/DOI in identifier field
+            # Fields to ignore (technical junk)
+            "Creator": None,  # Usually "Microsoft Word"
+            "/Creator": None,
+            "Producer": None,  # Usually "Adobe Acrobat"
+            "/Producer": None,
+            "CreationDate": None,  # File creation, not publication date
+            "/CreationDate": None,
+            "ModDate": None,
+            "/ModDate": None,
+        }
+
+        for file_key, canonical_key in field_mappings.items():
+            if file_key in file_metadata and canonical_key:
+                value = file_metadata[file_key]
+                if value and str(value).strip():
+                    # Special handling for authors - convert to list
+                    if canonical_key == "authors":
+                        if isinstance(value, str):
+                            # Split on common separators
+                            authors = [
+                                a.strip() for a in value.replace(";", ",").split(",")
+                            ]
+                            useful_metadata[canonical_key] = [a for a in authors if a]
+                        elif isinstance(value, list):
+                            useful_metadata[canonical_key] = [
+                                str(a).strip() for a in value if str(a).strip()
+                            ]
+                    else:
+                        useful_metadata[canonical_key] = str(value).strip()
+
+        logger.debug(f"Extracted useful file metadata: {list(useful_metadata.keys())}")
+        return useful_metadata
 
     @classmethod
     def create_from_settings(

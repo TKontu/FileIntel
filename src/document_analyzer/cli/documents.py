@@ -100,11 +100,19 @@ def get_document_details(
                 table.add_column("Value", style="white")
 
                 for key, value in metadata.items():
+                    # Skip internal debugging fields
+                    if key.startswith("_"):
+                        continue
+
+                    # Format display values
                     if isinstance(value, list):
                         value = ", ".join(str(v) for v in value)
                     elif isinstance(value, dict):
                         value = json.dumps(value, indent=2)
-                    table.add_row(key, str(value))
+
+                    # Make field names more readable
+                    display_key = key.replace("_", " ").title()
+                    table.add_row(display_key, str(value))
 
                 console.print(table)
             else:
