@@ -40,3 +40,6 @@ git-cheat-sheet.md
 node_modules/
 
 prompts/default_analysis/
+prompts/templates/*
+
+*.log

@@ -99,6 +99,16 @@ class FileIntelAPI:
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         return self._request("GET", f"jobs/{job_id}/status")
 
+    def get_document_details(self, document_id: str) -> Dict[str, Any]:
+        """Get detailed information about a document including its metadata."""
+        return self._request("GET", f"documents/{document_id}")
+
+    def update_document_metadata(
+        self, document_id: str, metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update metadata for a document."""
+        return self._request("PUT", f"documents/{document_id}/metadata", json=metadata)
+
     def get_job_result(self, job_id: str, markdown: bool = False) -> Any:
         import json
 

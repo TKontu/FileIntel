@@ -51,3 +51,17 @@ class QueryRequest(BaseModel):
 
 class AnalysisRequest(BaseModel):
     task_name: str = "default_analysis"
+
+
+class DocumentMetadataUpdate(BaseModel):
+    title: Optional[str] = None
+    authors: Optional[List[str]] = None
+    publication_date: Optional[str] = None
+    publisher: Optional[str] = None
+    doi: Optional[str] = None
+    source_url: Optional[str] = None
+    language: Optional[str] = None
+    document_type: Optional[str] = None
+    keywords: Optional[List[str]] = None
+    abstract: Optional[str] = None
+    harvard_citation: Optional[str] = None

@@ -8,7 +8,7 @@ from ..dependencies import (
 )
 from ...storage.base import StorageInterface
 from ...storage.models import Collection, Document
-from ..models import QueryRequest, AnalysisRequest
+from ..models import QueryRequest, AnalysisRequest, DocumentMetadataUpdate
 from ...worker.job_manager import JobManager
 from ...core.config import get_config
 import hashlib
@@ -283,3 +283,64 @@ def analyze_document_in_collection(
         collection_id=document.collection_id,
     )
     return {"job_id": job_id}
+
+
+@router.get("/documents/{document_id}")
+def get_document_details(
+    document_id: str, storage: StorageInterface = Depends(get_storage)
+):
+    """Get detailed information about a document including its metadata."""
+    document = storage.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return {
+        "id": document.id,
+        "collection_id": document.collection_id,
+        "filename": document.filename,
+        "original_filename": document.original_filename,
+        "content_hash": document.content_hash,
+        "file_size": document.file_size,
+        "mime_type": document.mime_type,
+        "document_metadata": document.document_metadata,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at,
+    }
+
+
+@router.put("/documents/{document_id}/metadata")
+def update_document_metadata(
+    document_id: str,
+    metadata_update: DocumentMetadataUpdate,
+    storage: StorageInterface = Depends(get_storage),
+):
+    """Manually update metadata for a document."""
+    document = storage.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Get current metadata
+    current_metadata = document.document_metadata or {}
+
+    # Update only the fields provided in the request
+    update_data = metadata_update.dict(exclude_unset=True)
+
+    # Filter out None values
+    update_data = {k: v for k, v in update_data.items() if v is not None}
+
+    # Merge with existing metadata
+    updated_metadata = current_metadata.copy()
+    updated_metadata.update(update_data)
+
+    # Mark as manually updated
+    updated_metadata["manually_updated"] = True
+    updated_metadata["manual_update_fields"] = list(update_data.keys())
+
+    # Update in storage
+    storage.update_document_metadata(document_id, updated_metadata)
+
+    return {
+        "message": "Metadata updated successfully",
+        "updated_fields": list(update_data.keys()),
+        "document_id": document_id,
+    }

@@ -1,7 +1,7 @@
 import ebooklib
 from ebooklib import epub
 from pathlib import Path
-from typing import List
+from typing import List, Tuple, Dict, Any
 from bs4 import BeautifulSoup
 import logging
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class EPUBReader(FileReader):
     def read(
         self, file_path: Path, adapter: logging.LoggerAdapter = None
-    ) -> List[DocumentElement]:
+    ) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
         Reads the text content from an EPUB file, returning a TextElement
         for each chapter/document within the EPUB.
@@ -25,9 +25,41 @@ class EPUBReader(FileReader):
             raise DocumentProcessingException(f"File not found: {file_path}")
 
         elements = []
+        doc_metadata = {}
         try:
             book = epub.read_epub(file_path)
             log.info(f"Processing EPUB file: {file_path.name}")
+
+            # Extract EPUB metadata
+            try:
+                doc_metadata = {
+                    "title": book.get_metadata("DC", "title")[0][0]
+                    if book.get_metadata("DC", "title")
+                    else None,
+                    "authors": [
+                        author[0] for author in book.get_metadata("DC", "creator")
+                    ]
+                    if book.get_metadata("DC", "creator")
+                    else [],
+                    "publisher": book.get_metadata("DC", "publisher")[0][0]
+                    if book.get_metadata("DC", "publisher")
+                    else None,
+                    "publication_date": book.get_metadata("DC", "date")[0][0]
+                    if book.get_metadata("DC", "date")
+                    else None,
+                    "language": book.get_metadata("DC", "language")[0][0]
+                    if book.get_metadata("DC", "language")
+                    else None,
+                    "identifier": book.get_metadata("DC", "identifier")[0][0]
+                    if book.get_metadata("DC", "identifier")
+                    else None,
+                }
+                # Remove None values
+                doc_metadata = {k: v for k, v in doc_metadata.items() if v is not None}
+                log.info(f"Extracted EPUB metadata: {doc_metadata}")
+            except Exception as meta_error:
+                log.warning(f"Could not extract EPUB metadata: {meta_error}")
+                doc_metadata = {}
             for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
                 content = item.get_content()
                 soup = BeautifulSoup(content, "html.parser")
@@ -37,7 +69,7 @@ class EPUBReader(FileReader):
                     metadata = {"source": str(file_path), "chapter": item.get_name()}
                     elements.append(TextElement(text=text, metadata=metadata))
             log.info(f"Successfully processed EPUB file: {file_path.name}")
-            return elements
+            return elements, doc_metadata
         except Exception as e:
             log.error(f"Error processing EPUB file {file_path}: {e}", exc_info=True)
             raise DocumentProcessingException(

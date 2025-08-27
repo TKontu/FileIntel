@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Tuple, Dict, Any
 import mobi
 from bs4 import BeautifulSoup
 import os
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class MOBIReader(FileReader):
     def read(
         self, file_path: Path, adapter: logging.LoggerAdapter = None
-    ) -> List[DocumentElement]:
+    ) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
         Reads the text content from a MOBI file by unpacking it and
         processing the resulting HTML/EPUB content.
@@ -28,6 +28,7 @@ class MOBIReader(FileReader):
 
         temp_dir = tempfile.mkdtemp()
         elements = []
+        doc_metadata = {}
         try:
             log.info(f"Extracting MOBI file: {file_path.name}")
             # mobi.extract returns the path to the unpacked content
@@ -48,7 +49,7 @@ class MOBIReader(FileReader):
                                     TextElement(text=text, metadata=metadata)
                                 )
             log.info(f"Successfully processed MOBI file: {file_path.name}")
-            return elements
+            return elements, doc_metadata
         except Exception as e:
             log.error(f"Error processing MOBI file {file_path}: {e}", exc_info=True)
             raise DocumentProcessingException(

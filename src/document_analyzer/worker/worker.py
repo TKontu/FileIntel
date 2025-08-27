@@ -1,6 +1,7 @@
 from .job_manager import JobManager
 from ..document_processing.factory import ReaderFactory
 from ..document_processing.chunking import TextChunker
+from ..document_processing.metadata_extractor import MetadataExtractor
 from ..llm_integration.openai_provider import OpenAIProvider
 from ..llm_integration.embedding_provider import OpenAIEmbeddingProvider
 from ..prompt_management.composer import PromptComposer
@@ -35,6 +36,15 @@ class Worker:
         )
         self.batch_processor = BatchProcessor(
             composer=self.composer, llm_provider=self.llm_provider
+        )
+
+        # Initialize metadata extractor
+        self.metadata_extractor = MetadataExtractor.create_from_settings(
+            llm_provider=self.llm_provider,
+            prompts_dir=prompts_dir,
+            max_length=settings.get("llm.context_length"),
+            model_name=settings.get("llm.model"),
+            max_chunks=3,
         )
 
     def process_job(self, job):
@@ -137,7 +147,7 @@ class Worker:
 
         adapter.info(f"Starting indexing for document: {file_path.name}")
 
-        adapter.info("Step 1/4: Reading and extracting text...")
+        adapter.info("Step 1/5: Reading and extracting text...")
         reader = self.reader_factory.get_reader(file_path)
         elements, doc_metadata = reader.read(file_path, adapter)
         document_text = "\n".join([el.text for el in elements if hasattr(el, "text")])
@@ -145,14 +155,22 @@ class Worker:
             f"Extracted {len(document_text)} characters and metadata: {doc_metadata}"
         )
 
-        self.job_manager.storage.update_document_metadata(document_id, doc_metadata)
-        adapter.info(f"Updated document {document_id} with extracted metadata.")
-
-        adapter.info("Step 2/4: Chunking text...")
+        adapter.info("Step 2/5: Chunking text...")
         chunks = self.text_chunker.chunk_text(document_text)
         adapter.info(f"Created {len(chunks)} chunks.")
 
-        adapter.info("Step 3/4: Generating embeddings for chunks...")
+        adapter.info("Step 3/5: Extracting metadata using LLM...")
+        enhanced_metadata = self.metadata_extractor.extract_metadata(
+            chunks, doc_metadata
+        )
+        adapter.info(f"Enhanced metadata with {len(enhanced_metadata)} fields")
+
+        self.job_manager.storage.update_document_metadata(
+            document_id, enhanced_metadata
+        )
+        adapter.info(f"Updated document {document_id} with LLM-enhanced metadata.")
+
+        adapter.info("Step 4/5: Generating embeddings for chunks...")
         embeddings = self.embedding_provider.get_embeddings(chunks)
         adapter.info("Embeddings generated.")
 
@@ -160,7 +178,7 @@ class Worker:
             {"text": chunk, "embedding": embedding}
             for chunk, embedding in zip(chunks, embeddings)
         ]
-        adapter.info(f"Step 4/4: Saving {len(chunks)} chunks to database...")
+        adapter.info(f"Step 5/5: Saving {len(chunks)} chunks to database...")
         self.job_manager.storage.add_document_chunks(
             document_id, collection_id, chunk_data
         )
