@@ -29,7 +29,7 @@ The new architecture is based on a collection-centric, two-phase process:
 
 **Goal:** Introduce more powerful ways to query documents and streamline the data ingestion process.
 
-- [ ] **Task 5.1: Implement Bulk Document Ingestion**
+- [x] **Task 5.1: Implement Bulk Document Ingestion**
 
   - **Description:** Allow users to add all files from a specified folder path to a collection with a single command.
   - **CLI:**

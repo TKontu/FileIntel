@@ -2,6 +2,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 import json
+import os
+import mimetypes
+from pathlib import Path
+from typing import List
 
 from .client import FileIntelAPI, print_json, print_table
 
@@ -25,6 +29,134 @@ def upload_document(
         result = api.upload_document(collection, path)
         print_json(result)
     except Exception:
+        raise typer.Exit(1)
+
+
+@app.command(
+    "add-folder",
+    epilog="Example: fileintel documents add-folder my-collection /path/to/folder --recursive",
+)
+def add_folder_to_collection(
+    collection: str = typer.Argument(
+        ..., help="The name or ID of the collection to upload to."
+    ),
+    path: str = typer.Argument(
+        ..., help="The path to the folder containing documents."
+    ),
+    recursive: bool = typer.Option(
+        False, "--recursive", "-r", help="Include files from subdirectories"
+    ),
+    extensions: str = typer.Option(
+        "pdf,txt,md,docx,epub,mobi",
+        "--extensions",
+        help="Comma-separated list of file extensions to include (without dots)",
+    ),
+    max_files: int = typer.Option(
+        999, "--max-files", help="Maximum number of files to process in batch"
+    ),
+):
+    """Add all files from a folder to a collection."""
+    try:
+        folder_path = Path(path)
+
+        if not folder_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Folder '{path}' does not exist")
+            raise typer.Exit(1)
+
+        if not folder_path.is_dir():
+            console.print(f"[bold red]Error:[/bold red] '{path}' is not a directory")
+            raise typer.Exit(1)
+
+        # Parse extensions
+        allowed_extensions = [ext.strip().lower() for ext in extensions.split(",")]
+
+        # Find files
+        console.print(f"[blue]Scanning folder:[/blue] {path}")
+        if recursive:
+            console.print("[blue]Including subdirectories[/blue]")
+
+        files_to_upload = []
+
+        if recursive:
+            for file_path in folder_path.rglob("*"):
+                if (
+                    file_path.is_file()
+                    and file_path.suffix.lower().lstrip(".") in allowed_extensions
+                ):
+                    files_to_upload.append(str(file_path))
+        else:
+            for file_path in folder_path.iterdir():
+                if (
+                    file_path.is_file()
+                    and file_path.suffix.lower().lstrip(".") in allowed_extensions
+                ):
+                    files_to_upload.append(str(file_path))
+
+        if not files_to_upload:
+            console.print(
+                f"[yellow]No files found with extensions: {', '.join(allowed_extensions)}[/yellow]"
+            )
+            raise typer.Exit(0)
+
+        console.print(f"[green]Found {len(files_to_upload)} files[/green]")
+
+        # Limit batch size
+        if len(files_to_upload) > max_files:
+            console.print(
+                f"[yellow]Warning: Found {len(files_to_upload)} files, but max-files is set to {max_files}[/yellow]"
+            )
+            console.print(
+                "[yellow]Only the first {max_files} files will be processed[/yellow]"
+            )
+            files_to_upload = files_to_upload[:max_files]
+
+        # Show files to be uploaded
+        if len(files_to_upload) <= 10:
+            console.print("[blue]Files to upload:[/blue]")
+            for file_path in files_to_upload:
+                console.print(f"  • {os.path.basename(file_path)}")
+        else:
+            console.print(
+                f"[blue]Sample files (showing first 5 of {len(files_to_upload)}):[/blue]"
+            )
+            for file_path in files_to_upload[:5]:
+                console.print(f"  • {os.path.basename(file_path)}")
+            console.print(f"  ... and {len(files_to_upload) - 5} more")
+
+        # Confirm upload
+        if not typer.confirm(
+            f"\nUpload {len(files_to_upload)} files to collection '{collection}'?"
+        ):
+            console.print("[yellow]Upload cancelled[/yellow]")
+            raise typer.Exit(0)
+
+        console.print(f"[green]Uploading {len(files_to_upload)} files...[/green]")
+
+        # Upload files in batch
+        result = api.upload_documents_batch(collection, files_to_upload)
+
+        console.print(f"[green]✅ {result.get('message')}[/green]")
+
+        if result.get("job_id"):
+            console.print(f"[blue]Job ID:[/blue] {result.get('job_id')}")
+            console.print(
+                "[blue]Use 'fileintel jobs status <job_id>' to check progress[/blue]"
+            )
+
+        if result.get("processed_files"):
+            console.print(
+                f"[green]Successfully queued: {len(result['processed_files'])} files[/green]"
+            )
+
+        if result.get("skipped_files"):
+            console.print(
+                f"[yellow]Skipped: {len(result['skipped_files'])} files[/yellow]"
+            )
+            for skipped in result["skipped_files"]:
+                console.print(f"  • {skipped['filename']}: {skipped['reason']}")
+
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
 

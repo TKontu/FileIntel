@@ -60,6 +60,7 @@ This document outlines the architecture for integrating FileIntel as a Model Con
 #### Core Components:
 
 **`server.py`** - Main MCP server implementation
+
 ```python
 class FileIntelMCPServer(Server):
     - Tool registration and discovery
@@ -69,6 +70,7 @@ class FileIntelMCPServer(Server):
 ```
 
 **`tools.py`** - Tool definitions and implementations
+
 ```python
 # Core document tools
 - create_collection
@@ -85,6 +87,7 @@ class FileIntelMCPServer(Server):
 ```
 
 **`client.py`** - FileIntel API client wrapper
+
 ```python
 class MCPFileIntelClient:
     - Async API client for FileIntel REST API
@@ -93,6 +96,7 @@ class MCPFileIntelClient:
 ```
 
 **`schemas.py`** - MCP tool schemas
+
 ```python
 # JSON Schema definitions for all MCP tools
 - Input validation schemas
@@ -103,6 +107,7 @@ class MCPFileIntelClient:
 ### 2. Tool Categories
 
 #### **Core Document Management**
+
 - `create_collection` - Create document collections
 - `list_collections` - List available collections
 - `upload_document` - Upload and index documents
@@ -110,18 +115,21 @@ class MCPFileIntelClient:
 - `get_document_details` - Retrieve document information
 
 #### **Metadata Operations**
+
 - `get_document_metadata` - Extract clean, structured metadata
 - `update_document_metadata` - Manual metadata corrections
 - `batch_update_metadata` - Bulk metadata operations
 - `validate_metadata` - Metadata quality checks
 
 #### **RAG Query Operations**
+
 - `query_collection` - Ask questions using RAG
 - `query_document` - Query specific documents
 - `analyze_collection` - Template-driven analysis
 - `multi_query` - Batch question processing
 
 #### **Advanced Analysis Tools**
+
 - `analyze_document_set` - Multi-document comparative analysis
 - `extract_citations` - Find and format citations with sources
 - `smart_document_summary` - Intelligent summarization
@@ -129,6 +137,7 @@ class MCPFileIntelClient:
 - `fact_check_claims` - Verify claims against reference documents
 
 #### **Workflow Automation**
+
 - `process_document_pipeline` - End-to-end document processing
 - `generate_research_report` - Automated report generation
 - `create_bibliography` - Generate formatted bibliographies
@@ -136,17 +145,19 @@ class MCPFileIntelClient:
 ### 3. Communication Patterns
 
 #### **Synchronous Operations**
+
 ```json
 {
   "method": "tools/call",
   "params": {
     "name": "get_document_metadata",
-    "arguments": {"document_id": "doc-123"}
+    "arguments": { "document_id": "doc-123" }
   }
 }
 ```
 
 #### **Asynchronous Operations**
+
 ```json
 {
   "method": "tools/call",
@@ -162,6 +173,7 @@ class MCPFileIntelClient:
 ```
 
 #### **Streaming Operations** (Future)
+
 ```json
 {
   "method": "tools/call",
@@ -179,6 +191,7 @@ class MCPFileIntelClient:
 ### 4. Job Management
 
 #### **Async Job Handling**
+
 ```python
 class JobManager:
     async def submit_job(self, tool_name: str, arguments: dict) -> str
@@ -188,6 +201,7 @@ class JobManager:
 ```
 
 #### **Job Status Types**
+
 - `pending` - Job queued for processing
 - `running` - Job currently being processed
 - `completed` - Job finished successfully
@@ -197,6 +211,7 @@ class JobManager:
 ### 5. Error Handling
 
 #### **MCP Error Categories**
+
 ```python
 class FileIntelMCPErrors:
     INVALID_COLLECTION = "Collection not found or invalid"
@@ -211,12 +226,13 @@ class FileIntelMCPErrors:
 ### 6. Configuration
 
 #### **MCP Server Configuration**
+
 ```yaml
 mcp:
   server:
     name: "fileintel"
     version: "1.0.0"
-    transport: "stdio"  # or "http", "websocket"
+    transport: "stdio" # or "http", "websocket"
 
   api:
     base_url: "http://localhost:8000/api/v1"
@@ -230,7 +246,7 @@ mcp:
   tools:
     enable_advanced: true
     max_concurrent_uploads: 5
-    max_document_size: "100MB"
+    max_document_size: "300MB"
 ```
 
 ## Integration Patterns
@@ -238,6 +254,7 @@ mcp:
 ### 1. Agent Usage Examples
 
 #### **Research Assistant Pattern**
+
 ```python
 # Agent workflow for literature review
 collections = await call_tool("list_collections")
@@ -266,6 +283,7 @@ summary = await call_tool("smart_document_summary", {
 ```
 
 #### **Document QA Pattern**
+
 ```python
 # Agent answers questions about uploaded documents
 answer = await call_tool("query_collection", {
@@ -284,6 +302,7 @@ citations = await call_tool("extract_citations", {
 ### 2. Composite Tool Operations
 
 #### **Research Pipeline Tool**
+
 ```python
 # High-level tool that orchestrates multiple operations
 await call_tool("process_research_pipeline", {
@@ -301,6 +320,7 @@ await call_tool("process_research_pipeline", {
 ### 3. Agent Collaboration
 
 #### **Multi-Agent Document Analysis**
+
 ```python
 # Agent A uploads and processes documents
 collection_id = await agent_a.call_tool("create_collection", {...})
@@ -323,18 +343,21 @@ report = await agent_c.call_tool("generate_research_report", {
 ## Security Considerations
 
 ### 1. Authentication & Authorization
+
 - **API Key Management**: Secure storage and rotation of FileIntel API keys
 - **Agent Authentication**: Verify agent identity before tool access
 - **Resource Isolation**: Ensure agents can only access their own collections
 - **Rate Limiting**: Prevent abuse through request throttling
 
 ### 2. Data Privacy
+
 - **Document Isolation**: Ensure documents are only accessible to authorized agents
 - **Metadata Sanitization**: Remove sensitive information from metadata
 - **Audit Logging**: Track all agent interactions for security monitoring
 - **Data Retention**: Configurable document and result retention policies
 
 ### 3. Input Validation
+
 - **Schema Validation**: Strict validation of all tool inputs
 - **File Type Validation**: Verify uploaded documents are safe
 - **Path Sanitization**: Prevent directory traversal attacks
@@ -343,18 +366,21 @@ report = await agent_c.call_tool("generate_research_report", {
 ## Performance Considerations
 
 ### 1. Scalability
+
 - **Connection Pooling**: Efficient management of API connections
 - **Request Queuing**: Handle multiple concurrent agent requests
 - **Resource Limits**: Prevent individual agents from monopolizing resources
 - **Load Balancing**: Distribute requests across FileIntel instances
 
 ### 2. Caching
+
 - **Result Caching**: Cache expensive query results
 - **Metadata Caching**: Cache document metadata for faster access
 - **Collection Caching**: Cache collection information
 - **TTL Management**: Configurable cache expiration policies
 
 ### 3. Optimization
+
 - **Batch Operations**: Group related operations for efficiency
 - **Lazy Loading**: Load data only when needed
 - **Background Processing**: Use async processing for long operations
@@ -363,18 +389,21 @@ report = await agent_c.call_tool("generate_research_report", {
 ## Deployment Patterns
 
 ### 1. Standalone MCP Server
+
 ```bash
 # Run as independent service
 fileintel-mcp --config mcp_config.yaml --transport stdio
 ```
 
 ### 2. Integrated with FileIntel
+
 ```bash
 # Run as part of FileIntel deployment
 docker-compose up fileintel-with-mcp
 ```
 
 ### 3. Cloud Deployment
+
 ```yaml
 # Kubernetes deployment
 apiVersion: apps/v1
@@ -386,11 +415,11 @@ spec:
   template:
     spec:
       containers:
-      - name: mcp-server
-        image: fileintel/mcp:latest
-        env:
-        - name: FILEINTEL_API_URL
-          value: "https://fileintel-api.internal"
+        - name: mcp-server
+          image: fileintel/mcp:latest
+          env:
+            - name: FILEINTEL_API_URL
+              value: "https://fileintel-api.internal"
 ```
 
 This architecture enables FileIntel to become a powerful, reusable document intelligence service that any MCP-compatible AI agent can leverage for sophisticated document analysis tasks.

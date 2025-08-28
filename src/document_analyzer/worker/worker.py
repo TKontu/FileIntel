@@ -8,6 +8,7 @@ from ..prompt_management.composer import PromptComposer
 from ..prompt_management.loader import PromptLoader
 from .batch_manager import BatchProcessor
 from pathlib import Path
+import os
 from typing import List
 from ..core.config import settings
 import logging
@@ -80,6 +81,9 @@ class Worker:
             elif job_type == "document_analysis":
                 adapter.info(f"Handling as DOCUMENT ANALYSIS job")
                 self._process_document_analysis_job(job, adapter)
+            elif job_type == "batch_indexing":
+                adapter.info(f"Handling as BATCH INDEXING job")
+                self._process_batch_indexing_job(job, adapter)
             else:  # Default to single_file (non-RAG)
                 adapter.info(f"Handling as SINGLE FILE job")
                 self._process_single_file_job(job, adapter)
@@ -183,6 +187,97 @@ class Worker:
             document_id, collection_id, chunk_data
         )
         adapter.info("Saved chunks and embeddings to storage.")
+
+    def _process_batch_indexing_job(self, job, adapter: LoggerAdapter):
+        """
+        Processes a batch indexing job - multiple documents in one job.
+        """
+        files = job.data.get("files", [])
+        collection_id = job.data.get("collection_id")
+
+        adapter.info(f"Starting batch indexing for {len(files)} documents")
+
+        total_processed = 0
+        failed_files = []
+
+        for file_info in files:
+            document_id = file_info["document_id"]
+            file_path_str = file_info["file_path"]
+            filename = file_info["filename"]
+
+            try:
+                adapter.info(
+                    f"Processing document {total_processed + 1}/{len(files)}: {filename}"
+                )
+                file_path = Path(file_path_str)
+
+                # Same process as single indexing job
+                adapter.debug(
+                    f"Step 1/5: Reading and extracting text from {filename}..."
+                )
+                reader = self.reader_factory.get_reader(file_path)
+                elements, doc_metadata = reader.read(file_path, adapter)
+                document_text = "\n".join(
+                    [el.text for el in elements if hasattr(el, "text")]
+                )
+                adapter.debug(
+                    f"Extracted {len(document_text)} characters from {filename}"
+                )
+
+                adapter.debug(f"Step 2/5: Chunking text for {filename}...")
+                chunks = self.text_chunker.chunk_text(document_text)
+                adapter.debug(f"Created {len(chunks)} chunks for {filename}")
+
+                adapter.debug(
+                    f"Step 3/5: Extracting metadata using LLM for {filename}..."
+                )
+                enhanced_metadata = self.metadata_extractor.extract_metadata(
+                    chunks, doc_metadata
+                )
+                adapter.debug(f"Enhanced metadata for {filename}")
+
+                self.job_manager.storage.update_document_metadata(
+                    document_id, enhanced_metadata
+                )
+
+                adapter.debug(f"Step 4/5: Generating embeddings for {filename}...")
+                embeddings = self.embedding_provider.get_embeddings(chunks)
+
+                chunk_data = [
+                    {"text": chunk, "embedding": embedding}
+                    for chunk, embedding in zip(chunks, embeddings)
+                ]
+
+                adapter.debug(
+                    f"Step 5/5: Saving {len(chunks)} chunks for {filename}..."
+                )
+                self.job_manager.storage.add_document_chunks(
+                    document_id, collection_id, chunk_data
+                )
+
+                # Clean up the uploaded file
+                if os.path.exists(file_path_str):
+                    os.remove(file_path_str)
+
+                total_processed += 1
+                adapter.info(
+                    f"Successfully processed {filename} ({total_processed}/{len(files)})"
+                )
+
+            except Exception as e:
+                adapter.error(f"Failed to process {filename}: {str(e)}")
+                failed_files.append({"filename": filename, "error": str(e)})
+
+                # Clean up the uploaded file even if processing failed
+                if os.path.exists(file_path_str):
+                    os.remove(file_path_str)
+
+        adapter.info(
+            f"Batch indexing completed. {total_processed} successful, {len(failed_files)} failed"
+        )
+
+        if failed_files:
+            adapter.warning(f"Failed files: {failed_files}")
 
     def _process_query_job(self, job, adapter: LoggerAdapter):
         """
