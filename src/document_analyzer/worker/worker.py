@@ -1,12 +1,14 @@
 from .job_manager import JobManager
 from ..document_processing.factory import ReaderFactory
 from ..document_processing.chunking import TextChunker
+from ..document_processing.metadata_extractor import MetadataExtractor
 from ..llm_integration.openai_provider import OpenAIProvider
 from ..llm_integration.embedding_provider import OpenAIEmbeddingProvider
 from ..prompt_management.composer import PromptComposer
 from ..prompt_management.loader import PromptLoader
 from .batch_manager import BatchProcessor
 from pathlib import Path
+import os
 from typing import List
 from ..core.config import settings
 import logging
@@ -35,6 +37,15 @@ class Worker:
         )
         self.batch_processor = BatchProcessor(
             composer=self.composer, llm_provider=self.llm_provider
+        )
+
+        # Initialize metadata extractor
+        self.metadata_extractor = MetadataExtractor.create_from_settings(
+            llm_provider=self.llm_provider,
+            prompts_dir=prompts_dir,
+            max_length=settings.get("llm.context_length"),
+            model_name=settings.get("llm.model"),
+            max_chunks=3,
         )
 
     def process_job(self, job):
@@ -70,6 +81,9 @@ class Worker:
             elif job_type == "document_analysis":
                 adapter.info(f"Handling as DOCUMENT ANALYSIS job")
                 self._process_document_analysis_job(job, adapter)
+            elif job_type == "batch_indexing":
+                adapter.info(f"Handling as BATCH INDEXING job")
+                self._process_batch_indexing_job(job, adapter)
             else:  # Default to single_file (non-RAG)
                 adapter.info(f"Handling as SINGLE FILE job")
                 self._process_single_file_job(job, adapter)
@@ -137,7 +151,7 @@ class Worker:
 
         adapter.info(f"Starting indexing for document: {file_path.name}")
 
-        adapter.info("Step 1/4: Reading and extracting text...")
+        adapter.info("Step 1/5: Reading and extracting text...")
         reader = self.reader_factory.get_reader(file_path)
         elements, doc_metadata = reader.read(file_path, adapter)
         document_text = "\n".join([el.text for el in elements if hasattr(el, "text")])
@@ -145,14 +159,22 @@ class Worker:
             f"Extracted {len(document_text)} characters and metadata: {doc_metadata}"
         )
 
-        self.job_manager.storage.update_document_metadata(document_id, doc_metadata)
-        adapter.info(f"Updated document {document_id} with extracted metadata.")
-
-        adapter.info("Step 2/4: Chunking text...")
+        adapter.info("Step 2/5: Chunking text...")
         chunks = self.text_chunker.chunk_text(document_text)
         adapter.info(f"Created {len(chunks)} chunks.")
 
-        adapter.info("Step 3/4: Generating embeddings for chunks...")
+        adapter.info("Step 3/5: Extracting metadata using LLM...")
+        enhanced_metadata = self.metadata_extractor.extract_metadata(
+            chunks, doc_metadata
+        )
+        adapter.info(f"Enhanced metadata with {len(enhanced_metadata)} fields")
+
+        self.job_manager.storage.update_document_metadata(
+            document_id, enhanced_metadata
+        )
+        adapter.info(f"Updated document {document_id} with LLM-enhanced metadata.")
+
+        adapter.info("Step 4/5: Generating embeddings for chunks...")
         embeddings = self.embedding_provider.get_embeddings(chunks)
         adapter.info("Embeddings generated.")
 
@@ -160,11 +182,102 @@ class Worker:
             {"text": chunk, "embedding": embedding}
             for chunk, embedding in zip(chunks, embeddings)
         ]
-        adapter.info(f"Step 4/4: Saving {len(chunks)} chunks to database...")
+        adapter.info(f"Step 5/5: Saving {len(chunks)} chunks to database...")
         self.job_manager.storage.add_document_chunks(
             document_id, collection_id, chunk_data
         )
         adapter.info("Saved chunks and embeddings to storage.")
+
+    def _process_batch_indexing_job(self, job, adapter: LoggerAdapter):
+        """
+        Processes a batch indexing job - multiple documents in one job.
+        """
+        files = job.data.get("files", [])
+        collection_id = job.data.get("collection_id")
+
+        adapter.info(f"Starting batch indexing for {len(files)} documents")
+
+        total_processed = 0
+        failed_files = []
+
+        for file_info in files:
+            document_id = file_info["document_id"]
+            file_path_str = file_info["file_path"]
+            filename = file_info["filename"]
+
+            try:
+                adapter.info(
+                    f"Processing document {total_processed + 1}/{len(files)}: {filename}"
+                )
+                file_path = Path(file_path_str)
+
+                # Same process as single indexing job
+                adapter.debug(
+                    f"Step 1/5: Reading and extracting text from {filename}..."
+                )
+                reader = self.reader_factory.get_reader(file_path)
+                elements, doc_metadata = reader.read(file_path, adapter)
+                document_text = "\n".join(
+                    [el.text for el in elements if hasattr(el, "text")]
+                )
+                adapter.debug(
+                    f"Extracted {len(document_text)} characters from {filename}"
+                )
+
+                adapter.debug(f"Step 2/5: Chunking text for {filename}...")
+                chunks = self.text_chunker.chunk_text(document_text)
+                adapter.debug(f"Created {len(chunks)} chunks for {filename}")
+
+                adapter.debug(
+                    f"Step 3/5: Extracting metadata using LLM for {filename}..."
+                )
+                enhanced_metadata = self.metadata_extractor.extract_metadata(
+                    chunks, doc_metadata
+                )
+                adapter.debug(f"Enhanced metadata for {filename}")
+
+                self.job_manager.storage.update_document_metadata(
+                    document_id, enhanced_metadata
+                )
+
+                adapter.debug(f"Step 4/5: Generating embeddings for {filename}...")
+                embeddings = self.embedding_provider.get_embeddings(chunks)
+
+                chunk_data = [
+                    {"text": chunk, "embedding": embedding}
+                    for chunk, embedding in zip(chunks, embeddings)
+                ]
+
+                adapter.debug(
+                    f"Step 5/5: Saving {len(chunks)} chunks for {filename}..."
+                )
+                self.job_manager.storage.add_document_chunks(
+                    document_id, collection_id, chunk_data
+                )
+
+                # Clean up the uploaded file
+                if os.path.exists(file_path_str):
+                    os.remove(file_path_str)
+
+                total_processed += 1
+                adapter.info(
+                    f"Successfully processed {filename} ({total_processed}/{len(files)})"
+                )
+
+            except Exception as e:
+                adapter.error(f"Failed to process {filename}: {str(e)}")
+                failed_files.append({"filename": filename, "error": str(e)})
+
+                # Clean up the uploaded file even if processing failed
+                if os.path.exists(file_path_str):
+                    os.remove(file_path_str)
+
+        adapter.info(
+            f"Batch indexing completed. {total_processed} successful, {len(failed_files)} failed"
+        )
+
+        if failed_files:
+            adapter.warning(f"Failed files: {failed_files}")
 
     def _process_query_job(self, job, adapter: LoggerAdapter):
         """

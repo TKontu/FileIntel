@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Tuple, Dict, Any
 import pdfplumber
 import logging
 
@@ -29,7 +29,7 @@ class UnifiedPDFProcessor(FileReader):
 
     def read(
         self, file_path: Path, adapter: logging.LoggerAdapter = None
-    ) -> List[DocumentElement]:
+    ) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
         Reads a PDF file, determines its type, and uses the best
         processor to extract its content.

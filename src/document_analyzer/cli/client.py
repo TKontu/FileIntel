@@ -49,6 +49,31 @@ class FileIntelAPI:
                 "POST", f"collections/{collection_identifier}/documents", files=files
             )
 
+    def upload_documents_batch(
+        self, collection_identifier: str, file_paths: List[str]
+    ) -> Dict[str, Any]:
+        """Upload multiple documents to a collection in batch."""
+        files = []
+        file_handles = []
+
+        try:
+            # Open all files
+            for file_path in file_paths:
+                f = open(file_path, "rb")
+                file_handles.append(f)
+                files.append(("files", (os.path.basename(file_path), f)))
+
+            # Make the request
+            return self._request(
+                "POST",
+                f"collections/{collection_identifier}/documents/batch",
+                files=files,
+            )
+        finally:
+            # Always close all file handles
+            for f in file_handles:
+                f.close()
+
     def list_documents(self, collection_identifier: str) -> List[Dict[str, Any]]:
         return self._request("GET", f"collections/{collection_identifier}/documents")
 
@@ -98,6 +123,16 @@ class FileIntelAPI:
 
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         return self._request("GET", f"jobs/{job_id}/status")
+
+    def get_document_details(self, document_id: str) -> Dict[str, Any]:
+        """Get detailed information about a document including its metadata."""
+        return self._request("GET", f"documents/{document_id}")
+
+    def update_document_metadata(
+        self, document_id: str, metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update metadata for a document."""
+        return self._request("PUT", f"documents/{document_id}/metadata", json=metadata)
 
     def get_job_result(self, job_id: str, markdown: bool = False) -> Any:
         import json

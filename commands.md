@@ -14,6 +14,17 @@ fileintel jobs result "5d86ba3e-c33a-493d-987a-39236040f245"
 
 fileintel analyze from-document "Test" "file.pdf" --task-name "expert_analysis"
 
+fileintel documents add-folder collection "input/folder"
+
+  1. Basic usage:
+  fileintel documents add-folder my-collection /path/to/documents
+  2. With recursive scanning:
+  fileintel documents add-folder my-collection /path/to/documents --recursive
+  3. Custom file extensions:
+  fileintel documents add-folder my-collection /path/to/documents --extensions pdf,docx,txt
+  4. Full example with all options:
+  fileintel documents add-folder my-collection /path/to/documents --recursive --extensions pdf,docx --max-files 100
+
 # API:
 
 ### Single file

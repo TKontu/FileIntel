@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Tuple, Dict, Any
 import pdfplumber
 import pytesseract
 from PIL import Image
@@ -19,7 +19,7 @@ class OCRProcessor(FileReader):
 
     def read(
         self, file_path: Path, adapter: logging.LoggerAdapter = None
-    ) -> List[DocumentElement]:
+    ) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
         Reads an image-based PDF, performs OCR on each page, and
         returns the extracted text.
@@ -34,6 +34,7 @@ class OCRProcessor(FileReader):
         """
         log = adapter or logger
         elements = []
+        doc_metadata = {"ocr_processed": True}
         try:
             with pdfplumber.open(file_path) as pdf:
                 total_pages = len(pdf.pages)
@@ -69,10 +70,10 @@ class OCRProcessor(FileReader):
                         text="[OCR completed, but no text was found.]",
                         metadata={"source": str(file_path)},
                     )
-                ]
+                ], doc_metadata
 
             log.info(f"Successfully finished OCR processing for {file_path.name}.")
-            return elements
+            return elements, doc_metadata
         except Exception as e:
             log.error(
                 f"Error during Tesseract OCR processing of {file_path}: {e}",
