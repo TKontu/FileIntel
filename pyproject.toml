@@ -1,0 +1,99 @@
+[tool.poetry]
+name = "fileintel"
+version = "0.1.0"
+description = "A Python-based document analysis system"
+authors = ["Your Name <you@example.com>"]
+packages = [
+    { include = "fileintel", from = "src" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+fastapi = "^0.109.0"
+pydantic = ">=2.10.3"
+python-decouple = "^3.8"
+uvicorn = "^0.25.0"
+httptools = "*"
+uvloop = {version = "*", markers = "sys_platform != 'win32'"}
+websockets = "*"
+orjson = "*"
+ebooklib = "^0.18"
+pdfplumber = "^0.10.3"
+Jinja2 = "^3.1.3"
+openai = ">=1.68.0"
+anthropic = "^0.15.1"
+PyYAML = ">=6.0.2"
+SQLAlchemy = "^2.0.25"
+alembic = "^1.13.1"
+redis = "^5.0.1"
+celery = "^5.3.6"
+kombu = "^5.3.4"
+flower = "^2.0.1"
+python-magic = "^0.4.27"
+python-magic-bin = {version = "^0.4.14", markers = "sys_platform == 'win32'"}
+pytesseract = "^0.3.10"
+click = ">=8.1.7,<8.2.0"
+typer = ">=0.16.0"
+beautifulsoup4 = "^4.12.3"
+mobi = "*"
+psycopg2-binary = "^2.9.9"
+python-multipart = "^0.0.9"
+mistune = "^3.0.2"
+tenacity = "^8.2.3"
+tiktoken = ">=0.9.0"
+regex = "^2024.4.16"
+python-dotenv = ">=1.0.1"
+pgvector = "^0.2.5"
+langchain = "^0.2.11"
+rich = "^13.6.0"
+requests = "^2.32.5"
+aiofiles = ">=24.1.0"
+networkx = ">=3.4.2"
+pybreaker = "^1.0.0"
+cachetools = "^5.3.0"
+fnllm = {extras = ["azure", "openai"], version = ">=0.4.1"}
+azure-cosmos = ">=4.9.0"
+azure-identity = ">=1.19.0"
+azure-storage-blob = ">=12.24.0"
+azure-search-documents = ">=11.5.2"
+spacy = ">=3.8.4"
+textblob = ">=0.18.0.post0"
+prometheus-client = "^0.22.1"
+devtools = ">=0.12.2"
+environs = ">=11.0.0"
+lancedb = ">=0.17.0"
+json-repair = ">=0.30.3"
+nltk = "==3.9.1"
+numpy = ">=1.25.2"
+graspologic = ">=3.4.1"
+pandas = ">=2.2.3"
+pyarrow = ">=17.0.0"
+umap-learn = ">=0.5.6"
+typing-extensions = ">=4.12.2"
+future = ">=1.0.0"
+tqdm = ">=4.67.1"
+psutil = "^5.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.4"
+pytest-asyncio = "^0.21.0"
+pytest-mock = "^3.11.0"
+black = "^23.12.1"
+flake8 = "^7.0.0"
+mypy = "^1.8.0"
+pre-commit = "^3.6.0"
+pytest-cov = "^4.1.0"
+httpx = "^0.27.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+fileintel = "fileintel.cli.main:app"
+
+[tool.black]
+line-length = 88
+
+[tool.mypy]
+ignore_missing_imports = true

@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # Test PostgreSQL database
+  test-db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: fileintel_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5433:5432"
+    volumes:
+      - test-db-data:/var/lib/postgresql/data
+      - ./init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d fileintel_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Test Redis for caching
+  test-redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # FileIntel test environment
+  fileintel-test:
+    build:
+      context: ../..
+      dockerfile: docker/test-environment/Dockerfile
+    environment:
+      - DB_HOST=test-db
+      - DB_PORT=5432
+      - DB_NAME=fileintel_test
+      - DB_USER=test
+      - DB_PASSWORD=test
+      - REDIS_HOST=test-redis
+      - REDIS_PORT=6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-test-key}
+      - PYTHONPATH=/app/src
+      - TESTING=true
+    volumes:
+      - ../../src:/app/src
+      - ../../tests:/app/tests
+      - ../../scripts:/app/scripts
+      - ../../config:/app/config
+      - test-logs:/app/test-logs
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    command: ["./test-entrypoint.sh"]
+
+  # Test runner for different test types
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: docker/test-environment/Dockerfile
+    environment:
+      - DB_HOST=test-db
+      - DB_PORT=5432
+      - DB_NAME=fileintel_test
+      - DB_USER=test
+      - DB_PASSWORD=test
+      - REDIS_HOST=test-redis
+      - REDIS_PORT=6379
+      - PYTHONPATH=/app/src
+      - TESTING=true
+    volumes:
+      - ../../src:/app/src
+      - ../../tests:/app/tests
+      - ../../scripts:/app/scripts
+      - test-results:/app/test-results
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    profiles:
+      - test
+    command: ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
+
+volumes:
+  test-db-data:
+  test-logs:
+  test-results:

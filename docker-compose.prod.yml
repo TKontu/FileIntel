@@ -1,0 +1,105 @@
+networks:
+  fileintel:
+    driver: bridge
+
+services:
+  postgres:
+    image: "pgvector/pgvector:pg13"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fileintel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-fileintel}
+    # No external port exposure - only accessible within the network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fileintel_user} -d ${POSTGRES_DB:-fileintel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+  redis:
+    image: "redis:alpine"
+    # No external port exposure - only accessible within the network
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+  api:
+    image: fileintel:latest
+    entrypoint: ["./docker-entrypoint.sh"]
+    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"  # Only the API is exposed to the host network
+    volumes:
+      - ./prompts:/home/appuser/app/prompts
+      - ./logs:/home/appuser/app/logs
+      - ./uploads:/home/appuser/app/uploads
+      - ./input:/home/appuser/app/input
+      - ./output:/home/appuser/app/output
+      - ./config:/home/appuser/app/config
+    environment:
+      - PYTHONPATH=/home/appuser/app/src
+      - PYTHONUNBUFFERED=1
+      - DB_USER=${POSTGRES_USER:-fileintel_user}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-your_secure_password}
+      - DB_HOST=postgres  # Uses internal Docker network hostname
+      - DB_PORT=5432      # Uses default PostgreSQL port internally
+      - DB_NAME=${POSTGRES_DB:-fileintel}
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+  worker:
+    image: fileintel:latest
+    entrypoint: []
+    command: ["python", "run_worker.py"]
+    # No external port exposure - worker only communicates internally
+    volumes:
+      - ./prompts:/home/appuser/app/prompts
+      - ./logs:/home/appuser/app/logs
+      - ./uploads:/home/appuser/app/uploads
+      - ./input:/home/appuser/app/input
+      - ./output:/home/appuser/app/output
+      - ./config:/home/appuser/app/config
+    environment:
+      - PYTHONPATH=/home/appuser/app/src
+      - PYTHONUNBUFFERED=1
+      - DB_USER=${POSTGRES_USER:-fileintel_user}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-your_secure_password}
+      - DB_HOST=postgres  # Uses internal Docker network hostname
+      - DB_PORT=5432      # Uses default PostgreSQL port internally
+      - DB_NAME=${POSTGRES_DB:-fileintel}
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+volumes:
+  postgres_data:

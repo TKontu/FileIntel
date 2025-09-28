@@ -1,0 +1,128 @@
+llm:
+  provider: "openai"
+  model: "gemma3-4B"
+  context_length: 128000
+  temperature: 0.1
+  rate_limit: 999
+  circuit_breaker:
+    failure_threshold: 5
+    failure_window: 60
+    open_duration: 30
+  openai:
+    base_url: "http://192.168.0.247:9003/v1"
+    embedding_base_url: "http://192.168.0.247:9003/v1"  # Separate embedding server (optional - defaults to base_url if not set)
+    api_key: ${OPENAI_API_KEY:-ollama}  # Use environment variable or default to "ollama" for local setups
+    rate_limit: 999
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY:-}  # Load from environment variable, empty if not set
+    rate_limit: 15
+
+rag:
+  strategy: "separate" # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
+  chunk_size: 1200  # ~300 tokens (safe conservative limit for 512 token model)
+  chunk_overlap: 100
+  target_sentences: 4  # Target sentences per Vector RAG chunk (conservative)
+  overlap_sentences: 1  # Sentences to overlap between Vector RAG chunks (forward overlap)
+  embedding_provider: "openai"
+  embedding_model: "bge-large-en"
+  embedding_max_tokens: 400  # Maximum tokens for embedding input (conservative safety margin below 512 token model limit)
+
+graphrag:
+  # Microsoft GraphRAG settings
+  llm_model: "gemma3-4B"  # Match main LLM model
+  embedding_model: "bge-large-en"  # Match embedding model
+  chunk_size: 1400  # ~350 tokens (conservative limit for 512 token model)
+  chunk_overlap: 100
+  target_sentences: 12  # Target sentences per GraphRAG chunk (conservative)
+  overlap_sentences: 2  # Sentences to overlap between GraphRAG chunks (forward overlap)
+  community_levels: 3  # Good for hierarchical community detection
+  max_tokens: 12000  # Sufficient for complex analysis
+  # Index storage
+  index_base_path: "./graphrag_indices"
+  cache:
+    enabled: true
+    ttl_seconds: 3600
+    max_size_mb: 500
+    redis_host: "redis"
+    redis_port: 6379
+    redis_db: 0
+  # Automatic indexing after vector RAG completion
+  auto_index_after_upload: true  # NEW: Enable background GraphRAG indexing
+  auto_index_delay_seconds: 30   # NEW: Wait time after vector indexing completes
+  # Query routing
+  query_classification_model: "gemma3-4B"
+  hybrid_query_threshold: 0.7
+  # Fallback keyword classification
+  graph_keywords:
+    - "relationship"
+    - "connection"
+    - "entity"
+    - "community"
+    - "network"
+    - "how are"
+    - "related to"
+  vector_keywords:
+    - "what is"
+    - "define"
+    - "explain"
+    - "summarize"
+    - "list facts about"
+  # Async processing for RTX 3090 24GB optimization
+  async_processing:
+    enabled: true                    # ON/OFF switch (set to false to disable)
+    batch_size: 4                   # Concurrent requests per batch
+    max_concurrent_requests: 8      # Must match vLLM --max-num-seqs
+    batch_timeout: 30               # Timeout per batch (seconds)
+    fallback_to_sequential: true    # Fallback if batching fails
+  # Embedding configuration
+  embedding_batch_max_tokens: 350   # Max tokens per embedding request (safe for 512 token model limit)
+
+document_processing:
+  chunk_size: 1800  # ~450 tokens (safe for 500 token embedding limit)
+  overlap: 200
+  max_file_size: "300MB"
+  supported_formats: ["pdf", "epub", "mobi"]
+
+ocr:
+  primary_engine: "pdf_extract_kit"
+  fallback_engines: ["tesseract", "google_vision"]
+
+output:
+  default_format: "json"
+  output_directory: "./results"
+  include_metadata: true
+  max_concurrent_jobs: 5
+
+logging:
+  level: "INFO"
+
+paths:
+  uploads: ${UPLOADS_DIR:-/home/appuser/app/uploads}
+  prompts: ${PROMPTS_DIR:-/home/appuser/app/prompts}
+  input: ${INPUT_DIR:-/home/appuser/app/input}
+  output: ${OUTPUT_DIR:-/home/appuser/app/output}
+
+prompts:
+  directory: "${PROMPTS_DIR:-/home/appuser/app/prompts}/templates"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins: ["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000", "http://127.0.0.1:8080"]  # Restrict to local development by default
+  # cors_origins: ["*"]  # Uncomment this line and comment the above for unrestricted access
+  rate_limit: 9999
+  authentication:
+    enabled: false
+
+    api_key: ${API_KEY:-}
+
+storage:
+  type: "postgres"
+  connection_string: "postgresql://${DB_USER:-user}:${DB_PASSWORD:-password}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-fileintel}"
+  cache_ttl: 3600
+  redis_host: "localhost"
+
+batch_processing:
+  directory_input: ${INPUT_DIR:-/home/appuser/app/input}
+  directory_output: ${OUTPUT_DIR:-/home/appuser/app/output}
+  default_format: "json"

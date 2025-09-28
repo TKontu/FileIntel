@@ -1,0 +1,56 @@
+# Environment
+.venv/
+.env
+*.env
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+
+# Logs - Ignores the entire 'logs' directory
+/logs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Input/Output directories
+/input/
+/output/
+
+# User-uploaded files (example, adjust if needed)
+/uploads/
+*.pdf
+
+# Documentation
+git-cheat-sheet.md
+
+# Node modules
+node_modules/
+
+prompts/default_analysis/
+#prompts/templates/*
+
+*.log
+result.md
+result.json
+fileintel-image.tar
+debug_similarity.py
+cheatsheet_venv.md
+cheatsheet_git.md
+cheatsheet_docker.md
+src/graphrag/*
+CLAUDE.md
+graphrag_indices/*
+*.tar

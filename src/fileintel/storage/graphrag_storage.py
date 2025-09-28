@@ -1,0 +1,381 @@
+"""
+GraphRAG storage operations for entities, communities, and relationships.
+
+Handles GraphRAG-specific storage operations separated from
+core document storage functionality.
+"""
+
+import logging
+import json
+from typing import List, Dict, Any, Optional
+from sqlalchemy import text, and_
+from .base_storage import BaseStorageInfrastructure
+from .models import GraphRAGIndex, GraphRAGEntity, GraphRAGCommunity
+
+logger = logging.getLogger(__name__)
+
+
+class GraphRAGStorage:
+    """
+    Handles GraphRAG-specific storage operations.
+
+    Manages GraphRAG indexes, entities, communities, and relationships
+    separated from basic document storage.
+    """
+
+    def __init__(self, config_or_session):
+        """Initialize with shared infrastructure."""
+        self.base = BaseStorageInfrastructure(config_or_session)
+        self.db = self.base.db
+
+    # GraphRAG Index Operations
+    def save_graphrag_index_info(
+        self,
+        collection_id: str,
+        index_path: str,
+        documents_count: int = 0,
+        entities_count: int = 0,
+        communities_count: int = 0,
+    ) -> None:
+        """Save GraphRAG index information."""
+        try:
+            # Check if index info already exists
+            existing = self.get_graphrag_index_info(collection_id)
+
+            if existing:
+                # Update existing
+                index_info = (
+                    self.db.query(GraphRAGIndex)
+                    .filter(GraphRAGIndex.collection_id == collection_id)
+                    .first()
+                )
+
+                if index_info:
+                    index_info.index_path = index_path
+                    index_info.documents_count = documents_count
+                    index_info.entities_count = entities_count
+                    index_info.communities_count = communities_count
+            else:
+                # Create new
+                index_info = GraphRAGIndex(
+                    collection_id=collection_id,
+                    index_path=index_path,
+                    documents_count=documents_count,
+                    entities_count=entities_count,
+                    communities_count=communities_count,
+                )
+                self.db.add(index_info)
+
+            self.base._safe_commit()
+            logger.info(f"Saved GraphRAG index info for collection {collection_id}")
+
+        except Exception as e:
+            logger.error(f"Error saving GraphRAG index info: {e}")
+            self.base._handle_session_error(e)
+
+    def get_graphrag_index_info(self, collection_id: str) -> Optional[Dict[str, Any]]:
+        """Get GraphRAG index information for a collection."""
+        try:
+            index_info = (
+                self.db.query(GraphRAGIndex)
+                .filter(GraphRAGIndex.collection_id == collection_id)
+                .first()
+            )
+
+            if index_info:
+                return {
+                    "collection_id": index_info.collection_id,
+                    "index_path": index_info.index_path,
+                    "documents_count": index_info.documents_count,
+                    "entities_count": index_info.entities_count,
+                    "communities_count": index_info.communities_count,
+                    "created_at": index_info.created_at,
+                    "updated_at": index_info.updated_at,
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting GraphRAG index info: {e}")
+            return None
+
+    def remove_graphrag_index_info(self, collection_id: str) -> bool:
+        """Remove GraphRAG index information for a collection."""
+        try:
+            index_info = (
+                self.db.query(GraphRAGIndex)
+                .filter(GraphRAGIndex.collection_id == collection_id)
+                .first()
+            )
+
+            if index_info:
+                self.db.delete(index_info)
+                self.base._safe_commit()
+                logger.info(
+                    f"Removed GraphRAG index info for collection {collection_id}"
+                )
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error removing GraphRAG index info: {e}")
+            self.base._handle_session_error(e)
+            return False
+
+    # GraphRAG Entity Operations
+    def save_graphrag_entities(self, collection_id: str, entities: List[dict]) -> None:
+        """Save GraphRAG entities for a collection."""
+        try:
+            # Clear existing entities for this collection
+            self.db.query(GraphRAGEntity).filter(
+                GraphRAGEntity.collection_id == collection_id
+            ).delete()
+
+            # Add new entities
+            for entity_data in entities:
+                entity = GraphRAGEntity(
+                    collection_id=collection_id,
+                    entity_id=entity_data.get("id"),
+                    name=self.base._clean_text(entity_data.get("name", "")),
+                    type=entity_data.get("type"),
+                    description=self.base._clean_text(
+                        entity_data.get("description", "")
+                    ),
+                    source_id=entity_data.get("source_id"),
+                    entity_data=entity_data,  # Store full data as JSON
+                )
+                self.db.add(entity)
+
+            self.base._safe_commit()
+            logger.info(
+                f"Saved {len(entities)} GraphRAG entities for collection {collection_id}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error saving GraphRAG entities: {e}")
+            self.base._handle_session_error(e)
+
+    def get_graphrag_entities(self, collection_id: str) -> List[dict]:
+        """Get GraphRAG entities for a collection."""
+        try:
+            entities = (
+                self.db.query(GraphRAGEntity)
+                .filter(GraphRAGEntity.collection_id == collection_id)
+                .all()
+            )
+
+            entity_list = []
+            for entity in entities:
+                entity_dict = {
+                    "id": entity.entity_id,
+                    "name": entity.name,
+                    "type": entity.type,
+                    "description": entity.description,
+                    "source_id": entity.source_id,
+                    "collection_id": entity.collection_id,
+                }
+
+                # Add full entity data if available
+                if entity.entity_data:
+                    entity_dict.update(entity.entity_data)
+
+                entity_list.append(self.base._clean_result_data(entity_dict))
+
+            logger.info(
+                f"Retrieved {len(entity_list)} GraphRAG entities for collection {collection_id}"
+            )
+            return entity_list
+
+        except Exception as e:
+            logger.error(f"Error getting GraphRAG entities: {e}")
+            return []
+
+    def _get_graphrag_entities_from_db(
+        self, collection_id: str, entity_ids: List[str] = None
+    ) -> List[dict]:
+        """Get specific GraphRAG entities from database."""
+        try:
+            query = self.db.query(GraphRAGEntity).filter(
+                GraphRAGEntity.collection_id == collection_id
+            )
+
+            if entity_ids:
+                query = query.filter(GraphRAGEntity.entity_id.in_(entity_ids))
+
+            entities = query.all()
+
+            entity_list = []
+            for entity in entities:
+                entity_dict = {
+                    "id": entity.entity_id,
+                    "name": entity.name,
+                    "type": entity.type,
+                    "description": entity.description,
+                    "source_id": entity.source_id,
+                }
+
+                if entity.entity_data:
+                    entity_dict.update(entity.entity_data)
+
+                entity_list.append(entity_dict)
+
+            return entity_list
+
+        except Exception as e:
+            logger.error(f"Error getting entities from database: {e}")
+            return []
+
+    # GraphRAG Community Operations
+    def save_graphrag_communities(
+        self, collection_id: str, communities: List[dict]
+    ) -> None:
+        """Save GraphRAG communities for a collection."""
+        try:
+            # Clear existing communities for this collection
+            self.db.query(GraphRAGCommunity).filter(
+                GraphRAGCommunity.collection_id == collection_id
+            ).delete()
+
+            # Add new communities
+            for community_data in communities:
+                community = GraphRAGCommunity(
+                    collection_id=collection_id,
+                    community_id=community_data.get("id"),
+                    title=self.base._clean_text(community_data.get("title", "")),
+                    summary=self.base._clean_text(community_data.get("summary", "")),
+                    findings=community_data.get("findings", []),
+                    rank=community_data.get("rank", 0),
+                    rank_explanation=self.base._clean_text(
+                        community_data.get("rank_explanation", "")
+                    ),
+                    community_data=community_data,  # Store full data as JSON
+                )
+                self.db.add(community)
+
+            self.base._safe_commit()
+            logger.info(
+                f"Saved {len(communities)} GraphRAG communities for collection {collection_id}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error saving GraphRAG communities: {e}")
+            self.base._handle_session_error(e)
+
+    def get_graphrag_communities(self, collection_id: str) -> List[dict]:
+        """Get GraphRAG communities for a collection."""
+        try:
+            communities = (
+                self.db.query(GraphRAGCommunity)
+                .filter(GraphRAGCommunity.collection_id == collection_id)
+                .order_by(GraphRAGCommunity.rank.desc())
+                .all()
+            )
+
+            community_list = []
+            for community in communities:
+                community_dict = {
+                    "id": community.community_id,
+                    "title": community.title,
+                    "summary": community.summary,
+                    "findings": community.findings or [],
+                    "rank": community.rank,
+                    "rank_explanation": community.rank_explanation,
+                    "collection_id": community.collection_id,
+                }
+
+                # Add full community data if available
+                if community.community_data:
+                    community_dict.update(community.community_data)
+
+                community_list.append(self.base._clean_result_data(community_dict))
+
+            logger.info(
+                f"Retrieved {len(community_list)} GraphRAG communities for collection {collection_id}"
+            )
+            return community_list
+
+        except Exception as e:
+            logger.error(f"Error getting GraphRAG communities: {e}")
+            return []
+
+    def _get_graphrag_communities_from_db(self, collection_id: str) -> List[dict]:
+        """Get GraphRAG communities from database."""
+        try:
+            communities = (
+                self.db.query(GraphRAGCommunity)
+                .filter(GraphRAGCommunity.collection_id == collection_id)
+                .order_by(GraphRAGCommunity.rank.desc())
+                .all()
+            )
+
+            community_list = []
+            for community in communities:
+                community_dict = {
+                    "id": community.community_id,
+                    "title": community.title,
+                    "summary": community.summary,
+                    "findings": community.findings or [],
+                    "rank": community.rank,
+                    "rank_explanation": community.rank_explanation,
+                }
+
+                if community.community_data:
+                    community_dict.update(community.community_data)
+
+                community_list.append(community_dict)
+
+            return community_list
+
+        except Exception as e:
+            logger.error(f"Error getting communities from database: {e}")
+            return []
+
+    def get_graphrag_relationships(self, collection_id: str) -> List[dict]:
+        """
+        Get GraphRAG relationships for a collection.
+
+        Note: This extracts relationships from entity data since there's
+        no separate relationships table in the current schema.
+        """
+        try:
+            entities = self.get_graphrag_entities(collection_id)
+            relationships = []
+
+            for entity in entities:
+                # Extract relationships from entity data
+                if isinstance(entity.get("entity_data"), dict):
+                    entity_relationships = entity["entity_data"].get(
+                        "relationships", []
+                    )
+                    for rel in entity_relationships:
+                        relationship = {
+                            "source": entity.get("id"),
+                            "target": rel.get("target"),
+                            "relationship": rel.get("relationship", ""),
+                            "description": self.base._clean_text(
+                                rel.get("description", "")
+                            ),
+                            "weight": rel.get("weight", 1.0),
+                            "collection_id": collection_id,
+                        }
+                        relationships.append(self.base._clean_result_data(relationship))
+
+            logger.info(
+                f"Retrieved {len(relationships)} GraphRAG relationships for collection {collection_id}"
+            )
+            return relationships
+
+        except Exception as e:
+            logger.error(f"Error getting GraphRAG relationships: {e}")
+            return []
+
+    def close(self):
+        """Close the storage connection."""
+        self.base.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

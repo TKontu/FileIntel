@@ -1,0 +1,175 @@
+services:
+  postgres:
+    image: "pgvector/pgvector:pg13"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+      - ./docker/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d fileintel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    entrypoint: ["./docker-entrypoint.sh"]
+    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/home/appuser/app/src
+      - ./config:/home/appuser/app/config
+      - ./prompts:/home/appuser/app/prompts
+      - ./logs:/home/appuser/app/logs
+      - ./uploads:/home/appuser/app/uploads
+      - ./input:/home/appuser/app/input
+      - ./output:/home/appuser/app/output
+      - ./migrations:/home/appuser/app/migrations
+      - ./alembic.ini:/home/appuser/app/alembic.ini
+      - ./scripts:/home/appuser/app/scripts
+      - ./tests:/home/appuser/app/tests
+      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+      - ./graphrag_indices:/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/home/appuser/app/src:/home/appuser/.local/lib/python3.9/site-packages
+      - PYTHONUNBUFFERED=1
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB}
+      # Configurable paths
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
+      # Celery configuration for task submission
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Database migration management
+      - RUN_MIGRATIONS=true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Legacy worker service removed - replaced by celery-worker
+  # worker:
+  #   build: .
+  #   entrypoint: ["sh", "-c"]
+  #   command: ["echo 'Starting worker...' && python run_worker.py"]
+  #   ...
+
+  celery-worker:
+    build: .
+    entrypoint: ["./docker-entrypoint.sh"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--concurrency=4", "--pool=prefork", "--max-tasks-per-child=1000"]
+    volumes:
+      - ./src:/home/appuser/app/src
+      - ./config:/home/appuser/app/config
+      - ./prompts:/home/appuser/app/prompts
+      - ./logs:/home/appuser/app/logs
+      - ./uploads:/home/appuser/app/uploads
+      - ./input:/home/appuser/app/input
+      - ./output:/home/appuser/app/output
+      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+      - ./graphrag_indices:/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/home/appuser/app/src:/home/appuser/.local/lib/python3.9/site-packages
+      - PYTHONUNBUFFERED=1
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB}
+      - UPLOADS_DIR=/home/appuser/app/uploads
+      - PROMPTS_DIR=/home/appuser/app/prompts
+      - INPUT_DIR=/home/appuser/app/input
+      - OUTPUT_DIR=/home/appuser/app/output
+      # Celery configuration
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  flower:
+    build: .
+    entrypoint: ["./docker-entrypoint.sh"]
+    command: ["celery", "-A", "fileintel.flower_celery:app", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./src:/home/appuser/app/src
+      - ./config:/home/appuser/app/config
+      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/home/appuser/app/src:/home/appuser/.local/lib/python3.9/site-packages
+      - PYTHONUNBUFFERED=1
+      # Set dummy database config to prevent connection attempts
+      - DB_USER=dummy
+      - DB_PASSWORD=dummy
+      - DB_HOST=dummy
+      - DB_PORT=5432
+      - DB_NAME=dummy
+      # Celery configuration for monitoring
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Disable database features for Flower
+      - DISABLE_DATABASE=true
+    depends_on:
+      redis:
+        condition: service_started
+
+  backup:
+    build:
+      context: ./docker/backup
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+    volumes:
+      - backups:/backups
+    command: >
+      sh -c "while true; do
+        /usr/local/bin/backup.sh
+        sleep 86400
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  backups:
