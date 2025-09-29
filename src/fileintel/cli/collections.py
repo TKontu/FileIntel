@@ -97,6 +97,9 @@ def process_collection(
     embeddings: bool = typer.Option(
         True, "--embeddings/--no-embeddings", help="Include embedding generation."
     ),
+    metadata: bool = typer.Option(
+        True, "--metadata/--no-metadata", help="Extract document metadata using LLM analysis."
+    ),
     wait: bool = typer.Option(
         False, "--wait", "-w", help="Wait for processing to complete."
     ),
@@ -104,7 +107,7 @@ def process_collection(
         None, "--max-workers", help="Maximum number of worker processes."
     ),
 ):
-    """Process a collection with document analysis and optional embeddings."""
+    """Process a collection with document analysis, metadata extraction, and optional embeddings."""
 
     def _process(api):
         options = {}
@@ -114,6 +117,7 @@ def process_collection(
         return api.process_collection(
             identifier,
             include_embeddings=embeddings,
+            extract_metadata=metadata,
             options=options if options else None,
         )
 
@@ -162,11 +166,14 @@ def upload_and_process(
     embeddings: bool = typer.Option(
         True, "--embeddings/--no-embeddings", help="Include embedding generation."
     ),
+    metadata: bool = typer.Option(
+        True, "--metadata/--no-metadata", help="Extract document metadata using LLM analysis."
+    ),
     wait: bool = typer.Option(
         False, "--wait", "-w", help="Wait for processing to complete."
     ),
 ):
-    """Upload a document and immediately start collection processing."""
+    """Upload a document and immediately start collection processing with metadata extraction."""
     from .shared import validate_file_exists, validate_supported_format
 
     # Validate file
@@ -174,7 +181,7 @@ def upload_and_process(
     validate_supported_format(file_path)
 
     def _upload_and_process(api):
-        return api.upload_and_process_document(identifier, file_path, embeddings)
+        return api.upload_and_process_document(identifier, file_path, embeddings, metadata)
 
     result = cli_handler.handle_api_call(
         _upload_and_process, "upload and process document"
@@ -188,3 +195,5 @@ def upload_and_process(
             monitor_task_with_progress(task_id, "Document processing")
     else:
         cli_handler.display_error("Upload and process request failed")
+
+

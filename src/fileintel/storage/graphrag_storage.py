@@ -7,6 +7,7 @@ core document storage functionality.
 
 import logging
 import json
+import uuid
 from typing import List, Dict, Any, Optional
 from sqlalchemy import text, and_
 from .base_storage import BaseStorageInfrastructure
@@ -58,6 +59,7 @@ class GraphRAGStorage:
             else:
                 # Create new
                 index_info = GraphRAGIndex(
+                    id=str(uuid.uuid4()),
                     collection_id=collection_id,
                     index_path=index_path,
                     documents_count=documents_count,
@@ -127,29 +129,34 @@ class GraphRAGStorage:
     def save_graphrag_entities(self, collection_id: str, entities: List[dict]) -> None:
         """Save GraphRAG entities for a collection."""
         try:
+            # Filter out contaminated entities before saving
+            from fileintel.utils.entity_filter import filter_entities
+            filtered_entities = filter_entities(entities)
+
             # Clear existing entities for this collection
             self.db.query(GraphRAGEntity).filter(
                 GraphRAGEntity.collection_id == collection_id
             ).delete()
 
-            # Add new entities
-            for entity_data in entities:
+            # Add new filtered entities
+            for entity_data in filtered_entities:
                 entity = GraphRAGEntity(
+                    id=str(uuid.uuid4()),
                     collection_id=collection_id,
-                    entity_id=entity_data.get("id"),
-                    name=self.base._clean_text(entity_data.get("name", "")),
-                    type=entity_data.get("type"),
+                    entity_name=self.base._clean_text(entity_data.get("title", "")),  # GraphRAG uses "title" not "name"
+                    entity_type=entity_data.get("type"),
                     description=self.base._clean_text(
                         entity_data.get("description", "")
                     ),
-                    source_id=entity_data.get("source_id"),
-                    entity_data=entity_data,  # Store full data as JSON
+                    importance_score=entity_data.get("degree", 0),  # GraphRAG uses "degree" not "rank"
+                    entity_metadata=entity_data,  # Store full data as JSON
                 )
                 self.db.add(entity)
 
             self.base._safe_commit()
             logger.info(
-                f"Saved {len(entities)} GraphRAG entities for collection {collection_id}"
+                f"Saved {len(filtered_entities)} GraphRAG entities for collection {collection_id} "
+                f"(filtered from {len(entities)} total)"
             )
 
         except Exception as e:
@@ -168,17 +175,17 @@ class GraphRAGStorage:
             entity_list = []
             for entity in entities:
                 entity_dict = {
-                    "id": entity.entity_id,
-                    "name": entity.name,
-                    "type": entity.type,
+                    "id": entity.id,
+                    "name": entity.entity_name,
+                    "type": entity.entity_type,
                     "description": entity.description,
-                    "source_id": entity.source_id,
+                    "importance_score": entity.importance_score,
                     "collection_id": entity.collection_id,
                 }
 
-                # Add full entity data if available
-                if entity.entity_data:
-                    entity_dict.update(entity.entity_data)
+                # Add full entity metadata if available
+                if entity.entity_metadata:
+                    entity_dict.update(entity.entity_metadata)
 
                 entity_list.append(self.base._clean_result_data(entity_dict))
 
@@ -232,30 +239,33 @@ class GraphRAGStorage:
     ) -> None:
         """Save GraphRAG communities for a collection."""
         try:
+            # Filter out communities containing contaminated entities
+            from fileintel.utils.entity_filter import filter_communities
+            filtered_communities = filter_communities(communities)
+
             # Clear existing communities for this collection
             self.db.query(GraphRAGCommunity).filter(
                 GraphRAGCommunity.collection_id == collection_id
             ).delete()
 
-            # Add new communities
-            for community_data in communities:
+            # Add new filtered communities
+            for community_data in filtered_communities:
                 community = GraphRAGCommunity(
+                    id=str(uuid.uuid4()),
                     collection_id=collection_id,
-                    community_id=community_data.get("id"),
+                    community_id=community_data.get("community"),  # GraphRAG uses "community" field
+                    level=community_data.get("level", 0),
                     title=self.base._clean_text(community_data.get("title", "")),
-                    summary=self.base._clean_text(community_data.get("summary", "")),
-                    findings=community_data.get("findings", []),
-                    rank=community_data.get("rank", 0),
-                    rank_explanation=self.base._clean_text(
-                        community_data.get("rank_explanation", "")
-                    ),
-                    community_data=community_data,  # Store full data as JSON
+                    summary=self.base._clean_text(community_data.get("summary", "")),  # May not exist in GraphRAG
+                    entities=community_data.get("entity_ids", []),  # GraphRAG uses "entity_ids"
+                    size=community_data.get("size", 0),
                 )
                 self.db.add(community)
 
             self.base._safe_commit()
             logger.info(
-                f"Saved {len(communities)} GraphRAG communities for collection {collection_id}"
+                f"Saved {len(filtered_communities)} GraphRAG communities for collection {collection_id} "
+                f"(filtered from {len(communities)} total)"
             )
 
         except Exception as e:
@@ -268,25 +278,22 @@ class GraphRAGStorage:
             communities = (
                 self.db.query(GraphRAGCommunity)
                 .filter(GraphRAGCommunity.collection_id == collection_id)
-                .order_by(GraphRAGCommunity.rank.desc())
+                .order_by(GraphRAGCommunity.size.desc())
                 .all()
             )
 
             community_list = []
             for community in communities:
                 community_dict = {
-                    "id": community.community_id,
+                    "id": community.id,
+                    "community_id": community.community_id,
+                    "level": community.level,
                     "title": community.title,
                     "summary": community.summary,
-                    "findings": community.findings or [],
-                    "rank": community.rank,
-                    "rank_explanation": community.rank_explanation,
+                    "entities": community.entities or [],
+                    "size": community.size,
                     "collection_id": community.collection_id,
                 }
-
-                # Add full community data if available
-                if community.community_data:
-                    community_dict.update(community.community_data)
 
                 community_list.append(self.base._clean_result_data(community_dict))
 
@@ -305,23 +312,22 @@ class GraphRAGStorage:
             communities = (
                 self.db.query(GraphRAGCommunity)
                 .filter(GraphRAGCommunity.collection_id == collection_id)
-                .order_by(GraphRAGCommunity.rank.desc())
+                .order_by(GraphRAGCommunity.size.desc())
                 .all()
             )
 
             community_list = []
             for community in communities:
                 community_dict = {
-                    "id": community.community_id,
+                    "id": community.id,
+                    "community_id": community.community_id,
+                    "level": community.level,
                     "title": community.title,
                     "summary": community.summary,
-                    "findings": community.findings or [],
-                    "rank": community.rank,
-                    "rank_explanation": community.rank_explanation,
+                    "entities": community.entities or [],
+                    "size": community.size,
+                    "collection_id": community.collection_id,
                 }
-
-                if community.community_data:
-                    community_dict.update(community.community_data)
 
                 community_list.append(community_dict)
 

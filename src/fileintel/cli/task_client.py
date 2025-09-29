@@ -365,6 +365,7 @@ class TaskAPIClient:
         self,
         collection_identifier: str,
         include_embeddings: bool = True,
+        extract_metadata: bool = True,
         options: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """Process a collection with document analysis and optional embeddings."""
@@ -372,7 +373,7 @@ class TaskAPIClient:
             "collection_id": collection_identifier,
             "operation_type": "complete_analysis",
             "build_graph": True,
-            "extract_metadata": True,
+            "extract_metadata": extract_metadata,
             "generate_embeddings": include_embeddings,
             "parameters": options or {},
         }
@@ -386,14 +387,16 @@ class TaskAPIClient:
         collection_identifier: str,
         file_path: str,
         include_embeddings: bool = True,
+        extract_metadata: bool = True,
+        build_graph: bool = False,
     ) -> Dict[str, Any]:
         """Upload a document and immediately start collection processing."""
         with open(file_path, "rb") as f:
             files = {"files": (os.path.basename(file_path), f)}
             data = {
                 "process_immediately": "true",
-                "build_graph": "true",
-                "extract_metadata": "true",
+                "build_graph": str(build_graph).lower(),
+                "extract_metadata": str(extract_metadata).lower(),
                 "generate_embeddings": str(include_embeddings).lower(),
             }
             response = self._request(

@@ -6,12 +6,20 @@ with proper rate limiting, retry logic, and error handling.
 """
 
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from celery import group, chain
 
 from fileintel.celery_config import app
 from .base import BaseFileIntelTask
 from fileintel.core.config import get_config
+
+# Get configurable rate limit for LLM tasks
+# Default: 60/m (60 requests per minute) - appropriate for local LLMs
+# For cloud APIs: set FILEINTEL_LLM_RATE_LIMIT="10/m" or "3/m" depending on your plan
+# For powerful local LLMs: set FILEINTEL_LLM_RATE_LIMIT="120/m" or higher
+# To disable rate limiting: set FILEINTEL_LLM_RATE_LIMIT="" (empty string)
+LLM_RATE_LIMIT = os.getenv("FILEINTEL_LLM_RATE_LIMIT", "60/m")
 
 logger = logging.getLogger(__name__)
 
@@ -34,25 +42,66 @@ def create_embedding_client():
 
 def prepare_text_for_embedding(text: str, max_tokens: int = 400) -> str:
     """
-    Pure function to prepare text for embedding by truncating if needed.
+    Pure function to prepare text for embedding by cleaning and truncating if needed.
 
     Args:
         text: Input text
         max_tokens: Maximum number of tokens allowed
 
     Returns:
-        Truncated text if necessary
+        Cleaned and truncated text, or None if text is too poor quality
     """
     import tiktoken
+    import re
+
+    # Clean the text first
+    cleaned_text = text.strip()
+
+    # Remove excessive whitespace and normalize
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+
+    # Fix tokenizer divergence patterns that cause vLLM failures
+    # Replace excessive dots (table of contents artifacts) with single spaces
+    cleaned_text = re.sub(r'\.{4,}', ' ', cleaned_text)
+    # Clean up page number artifacts (dots followed by numbers)
+    cleaned_text = re.sub(r'\.{3,}\s*\d+\s*$', '', cleaned_text, flags=re.MULTILINE)
+    # Remove standalone sequences of dots and dashes
+    cleaned_text = re.sub(r'^\s*[.\-]{4,}\s*$', '', cleaned_text, flags=re.MULTILINE)
+
+    # Remove lines that are mostly dots or punctuation (table of contents artifacts)
+    lines = cleaned_text.split('\n')
+    clean_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Skip lines that are >70% punctuation/dots/spaces
+        non_punct_chars = len(re.sub(r'[^\w\s]', '', line))
+        total_chars = len(line)
+
+        if total_chars > 0 and (non_punct_chars / total_chars) >= 0.3:
+            clean_lines.append(line)
+
+    cleaned_text = ' '.join(clean_lines).strip()
+
+    # If text is too short or empty after cleaning, return original
+    if len(cleaned_text) < 10:
+        cleaned_text = text.strip()
+
+    # If still too short, skip embedding
+    if len(cleaned_text) < 5:
+        return ""
 
     try:
         tokenizer = tiktoken.get_encoding("cl100k_base")
     except Exception:
         tokenizer = tiktoken.encoding_for_model("text-embedding-ada-002")
 
-    tokens = tokenizer.encode(text)
+    tokens = tokenizer.encode(cleaned_text)
     if len(tokens) <= max_tokens:
-        return text
+        return cleaned_text
 
     # Truncate and decode back to text
     truncated_tokens = tokens[:max_tokens]
@@ -62,7 +111,7 @@ def prepare_text_for_embedding(text: str, max_tokens: int = 400) -> str:
 @app.task(
     base=BaseFileIntelTask,
     bind=True,
-    queue="llm_processing",
+    queue="embedding_processing",
     rate_limit="30/m",
     max_retries=3,
     default_retry_delay=60,
@@ -89,8 +138,23 @@ def generate_text_embedding(
     try:
         self.update_progress(0, 2, "Preparing text for embedding")
 
-        # Prepare text (truncate if needed)
+        # Prepare text (clean and truncate if needed)
         prepared_text = prepare_text_for_embedding(text)
+
+        # Skip embedding if text is too poor quality
+        if not prepared_text or len(prepared_text.strip()) < 5:
+            logger.info(f"Skipping embedding for low-quality text: '{text[:100]}...'")
+            return {
+                "text": text,
+                "text_length": len(text),
+                "prepared_text_length": 0,
+                "embedding": None,
+                "embedding_dimension": 0,
+                "model": model,
+                "tokens_used": 0,
+                "status": "skipped",
+                "skip_reason": "poor_quality_text"
+            }
 
         self.update_progress(1, 2, "Generating embedding")
 
@@ -137,7 +201,7 @@ def generate_text_embedding(
 # Completion handling is now integrated into generate_collection_embeddings_simple
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="llm_processing")
+@app.task(base=BaseFileIntelTask, bind=True, queue="embedding_processing")
 def generate_and_store_chunk_embedding(
     self, chunk_id: str, text: str, model: str = None, **kwargs
 ) -> Dict[str, Any]:
@@ -155,7 +219,7 @@ def generate_and_store_chunk_embedding(
     """
     try:
         from fileintel.llm_integration.embedding_provider import OpenAIEmbeddingProvider
-        from fileintel.storage.postgresql_storage import PostgreSQLStorage
+        from fileintel.celery_config import get_shared_storage
         from fileintel.core.config import get_config
 
         config = get_config()
@@ -169,8 +233,8 @@ def generate_and_store_chunk_embedding(
 
         embedding = embeddings[0]  # Get the first (and only) embedding
 
-        # Store embedding in database
-        storage = PostgreSQLStorage(config)
+        # Store embedding using shared storage
+        storage = get_shared_storage()
         try:
             success = storage.update_chunk_embedding(chunk_id, embedding)
 
@@ -184,7 +248,6 @@ def generate_and_store_chunk_embedding(
             else:
                 raise ValueError(f"Failed to update chunk {chunk_id} in database")
         finally:
-            # Ensure proper cleanup of database connection
             storage.close()
 
     except Exception as e:
@@ -202,7 +265,7 @@ def generate_and_store_chunk_embedding(
     base=BaseFileIntelTask,
     bind=True,
     queue="llm_processing",
-    rate_limit="10/m",
+    rate_limit=LLM_RATE_LIMIT,
     max_retries=3,
     default_retry_delay=120,
 )
@@ -232,9 +295,9 @@ def analyze_with_llm(
 
         # Use sync UnifiedLLMProvider directly (no event loop needed)
         from fileintel.llm_integration.unified_provider import UnifiedLLMProvider
-        from fileintel.storage.postgresql_storage import PostgreSQLStorage
+        from fileintel.celery_config import get_shared_storage
 
-        storage = PostgreSQLStorage(config)
+        storage = get_shared_storage()
         try:
             llm_provider = UnifiedLLMProvider(config, storage)
 
@@ -342,6 +405,115 @@ def summarize_content(
         return {
             "original_text_length": len(text),
             "summary_type": summary_type,
+            "error": str(e),
+            "status": "failed",
+        }
+
+
+@app.task(
+    base=BaseFileIntelTask,
+    bind=True,
+    queue="llm_processing",
+    rate_limit=LLM_RATE_LIMIT,
+    max_retries=3,
+    default_retry_delay=120,
+)
+def extract_document_metadata(
+    self, document_id: str, text_chunks: List[str], file_metadata: Optional[Dict[str, Any]] = None, **kwargs
+) -> Dict[str, Any]:
+    """
+    Extract structured metadata from document chunks using LLM analysis.
+
+    Args:
+        document_id: Document ID to extract metadata for
+        text_chunks: List of text chunks from the document
+        file_metadata: Existing metadata from file properties (optional)
+        **kwargs: Additional parameters
+
+    Returns:
+        Dict containing extracted metadata and processing info
+    """
+    self.validate_input(["document_id", "text_chunks"], document_id=document_id, text_chunks=text_chunks)
+
+    config = get_config()
+
+    try:
+        self.update_progress(0, 3, "Initializing metadata extraction")
+
+        from fileintel.llm_integration.unified_provider import UnifiedLLMProvider
+        from fileintel.celery_config import get_shared_storage
+        from fileintel.document_processing.metadata_extractor import MetadataExtractor
+        from pathlib import Path
+
+        storage = get_shared_storage()
+        try:
+            llm_provider = UnifiedLLMProvider(config, storage)
+
+            # Get prompts directory - use environment variable or fallback to relative path
+            import os
+            prompts_base = os.getenv("PROMPTS_DIR", "./prompts")
+            prompts_dir = Path(prompts_base) / "templates"
+
+            # Debug logging
+            logger.info(f"Prompts base directory: {prompts_base}")
+            logger.info(f"Prompts templates directory: {prompts_dir}")
+            logger.info(f"Templates directory exists: {prompts_dir.exists()}")
+
+            metadata_extraction_dir = prompts_dir / "metadata_extraction"
+            logger.info(f"Metadata extraction directory: {metadata_extraction_dir}")
+            logger.info(f"Metadata extraction directory exists: {metadata_extraction_dir.exists()}")
+
+            if metadata_extraction_dir.exists():
+                prompt_file = metadata_extraction_dir / "prompt.md"
+                logger.info(f"Prompt file path: {prompt_file}")
+                logger.info(f"Prompt file exists: {prompt_file.exists()}")
+
+            metadata_extractor = MetadataExtractor(
+                llm_provider=llm_provider,
+                prompts_dir=prompts_dir,
+                max_length=config.llm.context_length,
+                max_chunks_for_extraction=3,
+            )
+
+            self.update_progress(1, 3, "Extracting metadata with LLM")
+
+            # Extract metadata
+            extracted_metadata = metadata_extractor.extract_metadata(text_chunks, file_metadata)
+
+            self.update_progress(2, 3, "Storing metadata in database")
+
+            # Store extracted metadata in document
+            if extracted_metadata:
+                document = storage.get_document(document_id)
+                if document:
+                    storage.update_document_metadata(document_id, extracted_metadata)
+                    logger.info(f"Updated document {document_id} with extracted metadata")
+                else:
+                    logger.warning(f"Document {document_id} not found, cannot store metadata")
+
+            result = {
+                "document_id": document_id,
+                "extracted_metadata": extracted_metadata,
+                "chunks_processed": len(text_chunks),
+                "file_metadata_provided": file_metadata is not None,
+                "fields_extracted": len(extracted_metadata) if extracted_metadata else 0,
+                "status": "completed",
+            }
+
+            self.update_progress(3, 3, "Metadata extraction completed")
+            return result
+        finally:
+            storage.close()
+
+    except Exception as e:
+        logger.error(f"Error extracting metadata for document {document_id}: {e}")
+        # Retry for API errors
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e, countdown=120)
+
+        return {
+            "document_id": document_id,
+            "chunks_processed": len(text_chunks),
             "error": str(e),
             "status": "failed",
         }

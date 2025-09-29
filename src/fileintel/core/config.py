@@ -21,7 +21,7 @@ class AnthropicSettings(BaseModel):
 
 class LLMSettings(BaseModel):
     provider: str = Field(default="openai")
-    model: str = Field(default="gpt-4")
+    model: str = Field(default="gemma3-4B")
     max_tokens: int = Field(default=4000)
     context_length: int = Field(default=4096)
     temperature: float = Field(default=0.1)
@@ -42,7 +42,7 @@ class AsyncProcessingSettings(BaseModel):
         default=4, ge=1, le=8, description="Concurrent requests per batch"
     )
     max_concurrent_requests: int = Field(
-        default=8, ge=1, le=16, description="Total concurrent HTTP connections"
+        default=25, ge=1, le=32, description="Total concurrent HTTP connections"
     )
     batch_timeout: int = Field(
         default=30, ge=10, le=120, description="Timeout per batch in seconds"
@@ -69,9 +69,9 @@ class ChunkingSettings(BaseModel):
     """Unified chunking configuration for all RAG operations."""
 
     chunk_size: int = Field(
-        default=1200, description="Default chunk size for text processing"
+        default=500, description="Default chunk size for text processing (optimized for 512-token embedding models)"
     )
-    chunk_overlap: int = Field(default=100, description="Overlap between chunks")
+    chunk_overlap: int = Field(default=50, description="Overlap between chunks (adjusted for smaller chunk size)")
     target_sentences: int = Field(default=18, description="Target sentences per chunk")
     overlap_sentences: int = Field(
         default=2, description="Sentence overlap between chunks"
@@ -83,7 +83,7 @@ class RAGSettings(BaseModel):
 
     strategy: str = Field(default="merge")
     embedding_provider: str = Field(default="openai")
-    embedding_model: str = Field(default="text-embedding-3-small")
+    embedding_model: str = Field(default="bge-large-en")
 
     # Unified chunking configuration
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
@@ -99,11 +99,11 @@ class RAGSettings(BaseModel):
         default=True, description="Enable hybrid query routing"
     )
     classification_model: str = Field(
-        default="gpt-3.5-turbo", description="Model for query classification"
+        default="gemma3-4B", description="Model for query classification"
     )
 
     # GraphRAG-specific settings (moved here to eliminate duplication)
-    llm_model: str = Field(default="gpt-4")
+    llm_model: str = Field(default="gemma3-4B")
     community_levels: int = Field(default=3)
     max_tokens: int = Field(default=12000)
     root_dir: str = Field(default="/data/graphrag_indices")
@@ -200,7 +200,7 @@ class CelerySettings(BaseModel):
             "fileintel.tasks.document.*": {"queue": "document_processing"},
             "fileintel.tasks.rag.*": {"queue": "rag_processing"},
             "fileintel.tasks.llm.*": {"queue": "llm_processing"},
-            "fileintel.tasks.indexing.*": {"queue": "indexing"},
+            "fileintel.tasks.graphrag.*": {"queue": "graphrag_indexing"},
         }
     )
 

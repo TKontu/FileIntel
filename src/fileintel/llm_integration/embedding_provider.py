@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Tuple
 import tiktoken
 import logging
 from openai import OpenAI
@@ -30,38 +30,95 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         )
         self.model = settings.rag.embedding_model
 
-        # Initialize tokenizer for text truncation
+        # Initialize primary tokenizer (OpenAI)
         try:
-            self.tokenizer = tiktoken.get_encoding(
+            self.openai_tokenizer = tiktoken.get_encoding(
                 "cl100k_base"
             )  # Standard OpenAI tokenizer
         except Exception:
-            self.tokenizer = tiktoken.encoding_for_model(
+            self.openai_tokenizer = tiktoken.encoding_for_model(
                 "text-embedding-ada-002"
             )  # Fallback
+
+        # Initialize BERT tokenizer for vLLM compatibility check
+        self.bert_tokenizer = None
+        try:
+            from transformers import AutoTokenizer
+            # Common BERT-style tokenizer used by many embedding models
+            self.bert_tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+            logger = logging.getLogger(__name__)
+            logger.info("BERT tokenizer loaded for dual validation")
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Could not load BERT tokenizer: {e}. Using OpenAI tokenizer only.")
+
+        # Maintain backward compatibility
+        self.tokenizer = self.openai_tokenizer
 
         # Set token limit from configuration (with fallback)
         self.max_tokens = getattr(settings.rag, "embedding_max_tokens", 480)
 
-        # Use even more conservative limit to prevent any edge cases
-        self.max_tokens = min(
-            self.max_tokens, 400
-        )  # Hard cap at 400 tokens (safe margin for 512 limit)
+        # Use conservative limit accounting for tokenizer differences
+        # If we have BERT tokenizer, use even more conservative limit
+        safety_margin = 300 if self.bert_tokenizer else 400
+        self.max_tokens = min(self.max_tokens, safety_margin)
 
         logger = logging.getLogger(__name__)
         logger.info(
             f"Embedding provider initialized - Model: {self.model}, Base URL: {embedding_base_url}, Max tokens: {self.max_tokens}"
         )
 
-    def _count_tokens(self, text: str) -> int:
-        """Count tokens in text using the same tokenizer as truncation."""
+    def _count_tokens_dual(self, text: str) -> Tuple[int, int, str]:
+        """
+        Count tokens using both OpenAI and BERT tokenizers.
+
+        Returns:
+            Tuple of (openai_tokens, bert_tokens, analysis)
+        """
+        logger = logging.getLogger(__name__)
+
+        # Count with OpenAI tokenizer
         try:
-            return len(self.tokenizer.encode(text))
+            openai_tokens = len(self.openai_tokenizer.encode(text))
         except Exception as e:
-            # Fallback to character estimation
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Token counting failed, using character estimation: {e}")
-            return len(text) // 4  # Conservative estimate
+            logger.warning(f"OpenAI token counting failed: {e}")
+            openai_tokens = len(text) // 4
+
+        # Count with BERT tokenizer if available
+        bert_tokens = None
+        if self.bert_tokenizer:
+            try:
+                bert_encoding = self.bert_tokenizer(text, return_tensors=None, add_special_tokens=True)
+                bert_tokens = len(bert_encoding['input_ids'])
+            except Exception as e:
+                logger.warning(f"BERT token counting failed: {e}")
+                bert_tokens = len(text) // 3  # BERT tends to use more tokens
+
+        # Analysis and warning generation
+        analysis = ""
+        if bert_tokens is not None:
+            ratio = bert_tokens / openai_tokens if openai_tokens > 0 else float('inf')
+            if ratio > 2.0:
+                analysis = f"HIGH_DIVERGENCE (BERT {ratio:.1f}x OpenAI)"
+            elif ratio > 1.5:
+                analysis = f"MEDIUM_DIVERGENCE (BERT {ratio:.1f}x OpenAI)"
+            else:
+                analysis = f"LOW_DIVERGENCE (BERT {ratio:.1f}x OpenAI)"
+
+            # Use the higher count for safety
+            max_tokens = max(openai_tokens, bert_tokens)
+        else:
+            analysis = "OPENAI_ONLY"
+            max_tokens = openai_tokens
+            bert_tokens = openai_tokens  # Fallback for return value
+
+        return openai_tokens, bert_tokens, analysis
+
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens using the most conservative approach between tokenizers."""
+        openai_tokens, bert_tokens, _ = self._count_tokens_dual(text)
+        # Return the higher count for safety
+        return max(openai_tokens, bert_tokens) if self.bert_tokenizer else openai_tokens
 
     def _truncate_text(self, text: str) -> str:
         """
@@ -95,15 +152,21 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         """Gets embeddings from OpenAI with automatic text truncation."""
         logger = logging.getLogger(__name__)
 
-        # Debug: Log input text stats
+        # Debug: Log input text stats with dual tokenizer analysis
         token_counts = [self._count_tokens(text) for text in texts]
         max_tokens = max(token_counts) if token_counts else 0
         avg_tokens = sum(token_counts) / len(token_counts) if token_counts else 0
 
+        # Detailed analysis for first text if using dual tokenizers
+        dual_analysis = ""
+        if texts and self.bert_tokenizer:
+            openai_count, bert_count, analysis = self._count_tokens_dual(texts[0])
+            dual_analysis = f", first_text_analysis: {analysis} (OpenAI:{openai_count}/BERT:{bert_count})"
+
         logger.info(
             f"Embedding request: {len(texts)} texts, "
             f"token range: {min(token_counts) if token_counts else 0}-{max_tokens}, "
-            f"avg: {avg_tokens:.1f}, limit: {self.max_tokens}"
+            f"avg: {avg_tokens:.1f}, limit: {self.max_tokens}{dual_analysis}"
         )
 
         # Critical check before processing
@@ -116,9 +179,18 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                 f"Indices: {oversized[:5]}... This will cause vLLM failures!"
             )
             for idx in oversized[:3]:  # Log first few oversized texts
-                logger.error(
-                    f"Oversized text {idx}: {token_counts[idx]} tokens: {texts[idx][:200]}..."
-                )
+                text = texts[idx]
+                if self.bert_tokenizer:
+                    openai_count, bert_count, analysis = self._count_tokens_dual(text)
+                    logger.error(
+                        f"Oversized text {idx}: {analysis} - OpenAI:{openai_count}, BERT:{bert_count}, "
+                        f"chars:{len(text)}, preview: {text[:100]}..."
+                    )
+                else:
+                    logger.error(
+                        f"Oversized text {idx}: {token_counts[idx]} tokens, "
+                        f"chars:{len(text)}, preview: {text[:100]}..."
+                    )
 
         # Truncate all texts to fit within token limits
         truncated_texts = [self._truncate_text(text) for text in texts]

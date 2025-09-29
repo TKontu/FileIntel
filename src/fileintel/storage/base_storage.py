@@ -46,8 +46,8 @@ class BaseStorageInfrastructure:
             self.engine = create_engine(
                 database_url,
                 pool_pre_ping=True,
-                pool_size=5,  # Small pool size for efficient use
-                max_overflow=10,  # Allow burst connections
+                pool_size=10,  # Base pool for concurrent Celery tasks
+                max_overflow=20,  # Allow burst connections during heavy processing
                 pool_recycle=3600,  # Recycle connections every hour
                 pool_timeout=30,  # 30 second timeout for getting connection
             )

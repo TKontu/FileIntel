@@ -120,7 +120,7 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
 @app.task(
     base=BaseFileIntelTask,
     bind=True,
-    queue="memory_intensive",
+    queue="graphrag_indexing",
     soft_time_limit=1800,
     time_limit=3600,
 )  # 30 min soft, 1 hour hard limit
@@ -240,7 +240,7 @@ def build_graph_index(
 
 
 @app.task(
-    base=BaseFileIntelTask, bind=True, queue="io_bound", rate_limit="5/m", max_retries=3
+    base=BaseFileIntelTask, bind=True, queue="graphrag_queries", rate_limit="60/m", max_retries=3
 )
 def query_graph_global(
     self, query: str, collection_id: str, **kwargs
@@ -335,8 +335,8 @@ def query_graph_global(
 @app.task(
     base=BaseFileIntelTask,
     bind=True,
-    queue="io_bound",
-    rate_limit="10/m",
+    queue="graphrag_queries",
+    rate_limit="60/m",
     max_retries=3,
 )
 def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[str, Any]:
@@ -427,7 +427,7 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
         }
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="io_bound")
+@app.task(base=BaseFileIntelTask, bind=True, queue="graphrag_queries")
 def adaptive_graphrag_query(
     self, query: str, collection_id: str, **kwargs
 ) -> Dict[str, Any]:
@@ -523,7 +523,7 @@ def adaptive_graphrag_query(
         }
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+@app.task(base=BaseFileIntelTask, bind=True, queue="rag_processing")
 def get_graphrag_index_status(self, collection_id: str) -> Dict[str, Any]:
     """
     Check the status of GraphRAG index for a collection.
@@ -603,7 +603,7 @@ def get_graphrag_index_status(self, collection_id: str) -> Dict[str, Any]:
 @app.task(
     base=BaseFileIntelTask,
     bind=True,
-    queue="memory_intensive",
+    queue="graphrag_indexing",
     soft_time_limit=1800,
     time_limit=3600,
 )
@@ -621,93 +621,89 @@ def build_graphrag_index_task(
         Dict containing indexing results
     """
     from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
-    from fileintel.storage.postgresql_storage import PostgreSQLStorage
+    from fileintel.celery_config import get_shared_storage
     from fileintel.core.config import get_config
 
     self.validate_input(["collection_id"], collection_id=collection_id)
 
-    storage = None
     try:
         logger.info(f"Starting GraphRAG index build for collection {collection_id}")
         self.update_progress(0, 5, "Initializing GraphRAG indexing")
 
         # Initialize services
         config = get_config()
-        storage = PostgreSQLStorage(config)
-        graphrag_service = GraphRAGService(storage, config)
+        storage = get_shared_storage()
+        try:
+            graphrag_service = GraphRAGService(storage, config)
 
-        # Get collection
-        collection = storage.get_collection(collection_id)
-        if not collection:
-            return {
+            # Get collection
+            collection = storage.get_collection(collection_id)
+            if not collection:
+                return {
+                    "collection_id": collection_id,
+                    "error": f"Collection {collection_id} not found",
+                    "status": "failed",
+                }
+
+            self.update_progress(1, 5, "Loading document chunks")
+
+            # Get all document chunks for the collection
+            documents = storage.get_documents_by_collection(collection_id)
+            if not documents:
+                return {
+                    "collection_id": collection_id,
+                    "error": "No documents found in collection",
+                    "status": "failed",
+                }
+
+            # Get all chunks for the collection (more efficient than iterating documents)
+            all_chunks = storage.get_all_chunks_for_collection(collection_id)
+
+            if not all_chunks:
+                return {
+                    "collection_id": collection_id,
+                    "error": "No processed chunks found. Please process documents first.",
+                    "status": "failed",
+                }
+
+            self.update_progress(
+                2, 5, f"Building GraphRAG index from {len(all_chunks)} chunks"
+            )
+
+            # Use GraphRAG service to build index
+            import asyncio
+
+            workspace_path = asyncio.run(
+                graphrag_service.build_index(all_chunks, collection_id)
+            )
+
+            self.update_progress(4, 5, "GraphRAG index completed")
+
+            # Get final status
+            status = asyncio.run(graphrag_service.get_index_status(collection_id))
+
+            result = {
                 "collection_id": collection_id,
-                "error": f"Collection {collection_id} not found",
-                "status": "failed",
+                "workspace_path": workspace_path,
+                "documents_processed": len(documents),
+                "chunks_processed": len(all_chunks),
+                "status": "completed",
+                "index_status": status,
             }
 
-        self.update_progress(1, 5, "Loading document chunks")
-
-        # Get all document chunks for the collection
-        documents = storage.get_documents_in_collection(collection_id)
-        if not documents:
-            return {
-                "collection_id": collection_id,
-                "error": "No documents found in collection",
-                "status": "failed",
-            }
-
-        # Get all chunks from all documents
-        all_chunks = []
-        for doc in documents:
-            chunks = storage.get_document_chunks(doc.id)
-            all_chunks.extend(chunks)
-
-        if not all_chunks:
-            return {
-                "collection_id": collection_id,
-                "error": "No processed chunks found. Please process documents first.",
-                "status": "failed",
-            }
-
-        self.update_progress(
-            2, 5, f"Building GraphRAG index from {len(all_chunks)} chunks"
-        )
-
-        # Use GraphRAG service to build index
-        import asyncio
-
-        workspace_path = asyncio.run(
-            graphrag_service.build_index(all_chunks, collection_id)
-        )
-
-        self.update_progress(4, 5, "GraphRAG index completed")
-
-        # Get final status
-        status = asyncio.run(graphrag_service.get_index_status(collection_id))
-
-        result = {
-            "collection_id": collection_id,
-            "workspace_path": workspace_path,
-            "documents_processed": len(documents),
-            "chunks_processed": len(all_chunks),
-            "status": "completed",
-            "index_status": status,
-        }
-
-        self.update_progress(5, 5, "GraphRAG indexing task completed")
-        return result
+            self.update_progress(5, 5, "GraphRAG indexing task completed")
+            return result
+        finally:
+            storage.close()
 
     except Exception as e:
         logger.error(
             f"Error building GraphRAG index for collection {collection_id}: {e}"
         )
         return {"collection_id": collection_id, "error": str(e), "status": "failed"}
-    finally:
-        if storage:
-            storage.close()
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+@app.task(base=BaseFileIntelTask, bind=True, queue="rag_processing")
 def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
     """
     Remove GraphRAG index for a collection.
@@ -719,19 +715,16 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
         Dict with removal status and details
     """
     from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
-    from fileintel.storage.postgresql_storage import PostgreSQLStorage
-    from fileintel.storage.models import SessionLocal
+    from fileintel.celery_config import get_shared_storage
 
     try:
         logger.info(f"Removing GraphRAG index for collection {collection_id}")
 
         # Initialize services
         config = get_config()
-        session = SessionLocal()
-        storage = PostgreSQLStorage(session)
-        graphrag_service = GraphRAGService(storage=storage, settings=config)
-
+        storage = get_shared_storage()
         try:
+            graphrag_service = GraphRAGService(storage=storage, settings=config)
             # Remove index using GraphRAG service
             # Note: remove_index should be sync since this is a Celery task
             result = graphrag_service.remove_index(collection_id)
@@ -750,7 +743,7 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
             }
 
         finally:
-            session.close()
+            storage.close()
 
     except Exception as e:
         logger.error(

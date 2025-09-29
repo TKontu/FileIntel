@@ -77,38 +77,25 @@ def clean_and_chunk_text(
     text: str, chunk_size: int = None, overlap: int = None
 ) -> List[str]:
     """
-    Pure function to clean and chunk text content.
+    Clean and chunk text using sentence-aware chunking for better semantic coherence.
 
     Args:
         text: Raw text content
-        chunk_size: Size of each chunk (defaults from config)
-        overlap: Overlap between chunks (defaults from config)
+        chunk_size: Size of each chunk (ignored - uses sentence-based chunking)
+        overlap: Overlap between chunks (ignored - uses sentence-based overlap)
 
     Returns:
-        List of text chunks
+        List of text chunks with preserved sentence boundaries
     """
-    import re
+    from fileintel.document_processing.chunking import TextChunker
 
-    config = get_config()
-    if chunk_size is None:
-        chunk_size = config.rag.chunking.chunk_size
-    if overlap is None:
-        overlap = config.rag.chunking.chunk_overlap
-
-    # Clean text
+    # Clean text first
     text = text.encode("utf-8", "ignore").decode("utf-8")
-    text = re.sub(r"\s+", " ", text).strip()
 
-    # Chunk text
-    if len(text) <= chunk_size:
-        return [text]
+    # Use sentence-aware chunker instead of primitive character splitting
+    chunker = TextChunker()
+    chunks = chunker.chunk_text(text)
 
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
     return chunks
 
 
@@ -150,52 +137,76 @@ def process_document(
 
         # Store chunks in database
         if document_id and collection_id:
-            from fileintel.storage.postgresql_storage import PostgreSQLStorage
+            from fileintel.celery_config import get_shared_storage
             from fileintel.core.config import get_config
             import os
             import hashlib
 
             config = get_config()
-            storage = PostgreSQLStorage(config)
+            storage = get_shared_storage()
             try:
-                # Create document record first
-                try:
-                    # Get file information for document creation
-                    file_size = os.path.getsize(file_path)
+                # Check if document already exists (from upload-and-process workflow)
+                existing_document = None
+                if document_id.startswith(f"{collection_id}_doc_"):
+                    # This is a generated document_id from workflow task, find existing document by file path
+                    documents = storage.get_documents_by_collection(collection_id)
                     filename = os.path.basename(file_path)
+                    for doc in documents:
+                        # Check if document metadata contains this file path or has same filename
+                        doc_metadata = doc.document_metadata or {}
+                        if (doc_metadata.get("file_path") == file_path or
+                            doc.filename == filename or
+                            doc.original_filename == filename):
+                            existing_document = doc
+                            logger.info(f"Found existing document {doc.id} for {filename}")
+                            break
+                else:
+                    # Try to get document by provided ID
+                    existing_document = storage.get_document(document_id)
 
-                    # Generate content hash
-                    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                if existing_document:
+                    # Use existing document
+                    actual_document_id = existing_document.id
+                    logger.info(f"Using existing document record {actual_document_id}")
+                else:
+                    # Create new document record only if it doesn't exist
+                    try:
+                        # Get file information for document creation
+                        file_size = os.path.getsize(file_path)
+                        filename = os.path.basename(file_path)
 
-                    # Determine MIME type based on file extension
-                    mime_type = (
-                        "application/pdf"
-                        if file_path.lower().endswith(".pdf")
-                        else "text/plain"
-                    )
+                        # Generate content hash
+                        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-                    # Create the document record
-                    document = storage.create_document(
-                        filename=filename,
-                        original_filename=filename,
-                        content_hash=content_hash,
-                        file_size=file_size,
-                        mime_type=mime_type,
-                        collection_id=collection_id,
-                        metadata={"processed_by": "celery_task"},
-                    )
+                        # Determine MIME type based on file extension
+                        mime_type = (
+                            "application/pdf"
+                            if file_path.lower().endswith(".pdf")
+                            else "text/plain"
+                        )
 
-                    # Update the document_id to use the one from the created document
-                    actual_document_id = document.id
-                    logger.info(
-                        f"Created document record {actual_document_id} for {filename}"
-                    )
+                        # Create the document record
+                        document = storage.create_document(
+                            filename=filename,
+                            original_filename=filename,
+                            content_hash=content_hash,
+                            file_size=file_size,
+                            mime_type=mime_type,
+                            collection_id=collection_id,
+                            metadata={"processed_by": "celery_task"},
+                        )
 
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to create document record, using provided document_id {document_id}: {e}"
-                    )
-                    actual_document_id = document_id
+                        # Update the document_id to use the one from the created document
+                        actual_document_id = document.id
+                        logger.info(
+                            f"Created new document record {actual_document_id} for {filename}"
+                        )
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to create document record, using provided document_id {document_id}: {e}"
+                        )
+                        actual_document_id = document_id
 
                 # Format chunks for storage
                 chunk_data = [
@@ -261,11 +272,9 @@ def process_collection(
 
     try:
         # Update collection status to processing
-        from fileintel.storage.postgresql_storage import PostgreSQLStorage
-        from fileintel.core.config import get_config
+        from fileintel.celery_config import get_shared_storage
 
-        config = get_config()
-        storage = PostgreSQLStorage(config)
+        storage = get_shared_storage()
         try:
             storage.update_collection_status(collection_id, "processing")
 
@@ -305,11 +314,8 @@ def process_collection(
 
         # Update collection status to failed
         try:
-            storage = PostgreSQLStorage(config)
-            try:
-                storage.update_collection_status(collection_id, "failed")
-            finally:
-                storage.close()
+            storage = get_shared_storage()
+            storage.update_collection_status(collection_id, "failed")
         except:
             pass  # Don't fail the task if status update fails
 
@@ -345,11 +351,11 @@ def extract_document_metadata(
 
         # Create sync LLM provider directly
         from fileintel.llm_integration.unified_provider import UnifiedLLMProvider
-        from fileintel.storage.postgresql_storage import PostgreSQLStorage
+        from fileintel.celery_config import get_shared_storage
         from fileintel.core.config import get_config
 
         config = get_config()
-        storage = PostgreSQLStorage(config)
+        storage = get_shared_storage()
         try:
             llm_provider = UnifiedLLMProvider(config, storage)
             prompts_dir = Path("prompts/templates")

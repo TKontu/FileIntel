@@ -1,10 +1,14 @@
 {{ instruction }}
 
-## Document Text:
-{{ document_text }}
+{{ answer_format }}
 
-## Task:
 {{ question }}
 
-## Output Format:
-{{ answer_format }}
+---
+
+**Document Text to Analyze:**
+{{ document_text }}
+
+---
+
+**Your Response (JSON only):**

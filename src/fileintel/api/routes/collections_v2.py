@@ -281,6 +281,51 @@ async def delete_document(
     )
 
 
+@router.get("/documents/{document_id}/chunks", response_model=ApiResponseV2)
+@api_error_handler("get document chunks")
+async def get_document_chunks(
+    document_id: str,
+    limit: Optional[int] = 100,
+    offset: Optional[int] = 0,
+    storage: PostgreSQLStorage = Depends(get_storage)
+) -> ApiResponseV2:
+    """Get chunks for a specific document."""
+    document = storage.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
+
+    # Get chunks for the document
+    chunks = storage.get_all_chunks_for_document(document_id)
+
+    # Apply pagination
+    total_chunks = len(chunks)
+    paginated_chunks = chunks[offset:offset + limit] if chunks else []
+
+    # Format chunks for API response
+    chunk_data = []
+    for i, chunk in enumerate(paginated_chunks):
+        chunk_info = {
+            "chunk_id": chunk.id,
+            "chunk_index": chunk.chunk_index if hasattr(chunk, 'chunk_index') else offset + i,
+            "text": chunk.chunk_text,
+            "has_embedding": chunk.embedding is not None,
+            "embedding_dimensions": len(chunk.embedding) if chunk.embedding else None,
+            "chunk_metadata": chunk.chunk_metadata or {},
+        }
+        chunk_data.append(chunk_info)
+
+    response_data = {
+        "document_id": document_id,
+        "total_chunks": total_chunks,
+        "chunks_returned": len(chunk_data),
+        "offset": offset,
+        "limit": limit,
+        "chunks": chunk_data,
+    }
+
+    return create_success_response(response_data)
+
+
 # Processing Operations
 @router.post(
     "/collections/{collection_identifier}/process", response_model=ApiResponseV2

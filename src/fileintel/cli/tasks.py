@@ -81,7 +81,14 @@ def get_task(
         return api.get_task_status(task_id)
 
     task_data = cli_handler.handle_api_call(_get_task, "get task")
-    cli_handler.display_json(task_data.get("data", task_data), f"Task: {task_id}")
+
+    # Check if API call was successful
+    if not task_data.get("success", False):
+        error_msg = task_data.get("error", "Unknown error occurred")
+        cli_handler.display_error(f"Failed to get task status: {error_msg}")
+        return
+
+    cli_handler.display_json(task_data.get("data", {}), f"Task: {task_id}")
 
 
 @app.command("cancel")
@@ -124,9 +131,16 @@ def get_task_result(
         return api.get_task_result(task_id)
 
     result_data = cli_handler.handle_api_call(_get_result, "get task result")
-    task_result = result_data.get("data", result_data)
 
-    if task_result.get("ready"):
+    # Check if API call was successful
+    if not result_data.get("success", False):
+        error_msg = result_data.get("error", "Unknown error occurred")
+        cli_handler.display_error(f"Failed to get task result: {error_msg}")
+        return
+
+    task_result = result_data.get("data", {})
+
+    if task_result and task_result.get("ready"):
         if task_result.get("successful"):
             cli_handler.display_success("Task completed successfully")
             if "result" in task_result:

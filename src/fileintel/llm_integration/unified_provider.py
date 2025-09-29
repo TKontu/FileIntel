@@ -174,7 +174,7 @@ class UnifiedLLMProvider:
 
         # Initialize HTTP client with appropriate timeout
         self.http_client = httpx.Client(
-            timeout=httpx.Timeout(60.0),
+            timeout=httpx.Timeout(300.0),  # Increased from 60s to 5 minutes for gemma3-4B
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
 
@@ -204,7 +204,7 @@ class UnifiedLLMProvider:
                 or self.config.llm.base_url
                 or "https://api.openai.com/v1"
             )
-            self.default_model = self.config.llm.model or "gpt-4"
+            self.default_model = self.config.llm.model or "gemma3-4B"
 
         elif self.provider_type == LLMProviderType.ANTHROPIC:
             self.api_key = self.config.llm.anthropic.api_key
@@ -369,17 +369,24 @@ class UnifiedLLMProvider:
         Returns:
             LLMResponse with contextual answer
         """
-        # Prepare context from chunks
+        # Prepare context from chunks with enhanced citation formatting
         context_parts = []
         for i, chunk in enumerate(context_chunks[:8], 1):  # Limit to top 8 chunks
             chunk_text = (
                 chunk.get("text", "") if isinstance(chunk, dict) else str(chunk)
             )
-            source_info = (
-                chunk.get("filename", f"Source {i}")
-                if isinstance(chunk, dict)
-                else f"Source {i}"
-            )
+
+            # Use enhanced citation formatting
+            if isinstance(chunk, dict):
+                try:
+                    from fileintel.citation import format_source_reference
+                    source_info = format_source_reference(chunk)
+                except ImportError:
+                    # Fallback to filename if citation module not available
+                    source_info = chunk.get("original_filename", chunk.get("filename", f"Source {i}"))
+            else:
+                source_info = f"Source {i}"
+
             context_parts.append(f"[{source_info}]: {chunk_text}")
 
         context = "\n\n".join(context_parts)

@@ -113,22 +113,36 @@ class VectorRAGService:
             query_type = self._classify_query_type(query)
             answer = self._generate_answer(query, similar_chunks, query_type)
 
-            # Format sources using the enhanced chunk format
-            sources = [
-                {
+            # Format sources using enhanced citation formatting
+            sources = []
+            for chunk in similar_chunks:
+                # Get enhanced citation for the source
+                try:
+                    from fileintel.citation import format_source_reference, format_in_text_citation
+                    citation = format_source_reference(chunk)
+                    in_text_citation = format_in_text_citation(chunk)
+                except ImportError:
+                    # Fallback to original filename
+                    citation = chunk["original_filename"]
+                    in_text_citation = f"({chunk['original_filename']})"
+
+                source_data = {
                     "document_id": chunk["document_id"],
                     "chunk_id": chunk["chunk_id"],
-                    "filename": chunk["original_filename"],
+                    "filename": chunk["original_filename"],  # Keep original for compatibility
+                    "citation": citation,  # Enhanced citation format
+                    "in_text_citation": in_text_citation,  # For Harvard style in-text references
                     "text": chunk["text"][:200] + "..."
                     if len(chunk["text"]) > 200
                     else chunk["text"],
                     "similarity_score": chunk["similarity"],
+                    "relevance_score": chunk["similarity"],  # For CLI compatibility
                     "distance": 1 - chunk["similarity"],  # Convert similarity to distance
                     "position": chunk.get("chunk_index", chunk.get("position", 0)),
                     "chunk_metadata": chunk.get("metadata", chunk.get("chunk_metadata", {})),
+                    "document_metadata": chunk.get("document_metadata", {}),  # Include document metadata
                 }
-                for chunk in similar_chunks
-            ]
+                sources.append(source_data)
 
             # Calculate confidence based on similarity scores
             confidence = self._calculate_confidence(similar_chunks)

@@ -1,25 +1,28 @@
-Provide the extracted metadata as a valid JSON object with the following structure. Use `null` for any field that cannot be clearly identified from the document text:
+**Response Format Requirements:**
+
+Return your response as a JSON object with these fields (only include fields where you found information):
 
 ```json
 {
-    "title": "string or null",
-    "authors": ["array of author names"] or null,
-    "publication_date": "YYYY-MM-DD or YYYY" or null,
-    "publisher": "string or null",
-    "doi": "string or null",
-    "source_url": "string or null",
-    "language": "string or null",
-    "document_type": "string or null",
-    "keywords": ["array of keywords"] or null,
-    "abstract": "string or null",
-    "harvard_citation": "string or null"
+  "title": "Document title as it appears in the text",
+  "authors": ["Author 1", "Author 2", "Author 3"],
+  "publication_date": "YYYY-MM-DD or YYYY or Month YYYY format",
+  "publisher": "Publisher name or organization",
+  "doi": "DOI identifier if found",
+  "source_url": "URL if mentioned in the document",
+  "language": "Document language (e.g., English, Spanish)",
+  "document_type": "Type (e.g., research paper, report, manual, thesis)",
+  "keywords": ["keyword1", "keyword2", "keyword3"],
+  "abstract": "Abstract or summary text if present",
+  "harvard_citation": "Properly formatted Harvard-style citation"
 }
 ```
 
-**Important**:
-- Return ONLY the JSON object, no additional text or explanations
-- Ensure the JSON is properly formatted and valid
-- Be conservative - use null rather than guessing
-- For authors, extract full names as they appear in the document
-- For dates, prefer full dates but use year-only if that's all that's available
-- The harvard_citation should follow proper Harvard referencing style based on available metadata
+**Important Rules:**
+- Only include fields where you found actual information in the text
+- Do not include empty strings, null values, or empty arrays
+- For authors, extract full names as they appear
+- For dates, use the most specific format possible (prefer YYYY-MM-DD)
+- For keywords, extract 3-8 relevant terms from the document
+- Keep abstracts under 500 characters
+- Generate a Harvard citation only if you have sufficient information (author, title, year)

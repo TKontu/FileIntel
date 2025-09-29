@@ -195,10 +195,10 @@ async def get_graphrag_entities(
         entities = []
         for _, row in entities_df.iterrows():
             entity = {
-                "name": row.get("name", "Unknown"),
+                "name": row.get("title", "Unknown"),  # GraphRAG uses "title" not "name"
                 "type": row.get("type", "Unknown"),
                 "description": row.get("description", ""),
-                "importance_score": float(row.get("rank", 0.0)),
+                "importance_score": float(row.get("degree", 0.0)),  # GraphRAG uses "degree" not "rank"
             }
             entities.append(entity)
 

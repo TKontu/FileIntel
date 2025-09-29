@@ -218,7 +218,7 @@ class DocumentStorage:
         """Update document metadata."""
         document = self.get_document(document_id)
         if document:
-            document.metadata = metadata
+            document.document_metadata = metadata
             self.base._safe_commit()
 
     # Chunk Operations

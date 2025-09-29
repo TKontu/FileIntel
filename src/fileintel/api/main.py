@@ -11,6 +11,7 @@ from fileintel.api.routes import (
     websocket_v2,
     query,
     graphrag_v2,
+    metadata_v2,
 )
 from fileintel.rag.graph_rag.services.dataframe_cache import GraphRAGDataFrameCache
 from fileintel.api.dependencies import get_storage
@@ -50,6 +51,7 @@ app.include_router(collections_v2.router, prefix=API_V2_PREFIX, tags=["collectio
 app.include_router(tasks_v2.router, prefix=API_V2_PREFIX, tags=["tasks-v2"])
 app.include_router(query.router, prefix=API_V2_PREFIX, tags=["query-v2"])
 app.include_router(graphrag_v2.router, prefix=API_V2_PREFIX, tags=["graphrag-v2"])
+app.include_router(metadata_v2.router, prefix=API_V2_PREFIX, tags=["metadata-v2"])
 app.include_router(websocket_v2.router, prefix=API_V2_PREFIX, tags=["websocket-v2"])
 # V1 websocket routes removed - functionality replaced by V2 task-based monitoring
 

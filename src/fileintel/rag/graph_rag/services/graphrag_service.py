@@ -136,6 +136,9 @@ class GraphRAGService:
             communities_count=communities_count,
         )
 
+        # Load and save entities and communities to database
+        await self._save_graphrag_data_to_database(collection_id, workspace_path)
+
         return workspace_path
 
     def _count_graphrag_results(self, workspace_path: str) -> tuple[int, int, int]:
@@ -326,6 +329,62 @@ class GraphRAGService:
 
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    async def _save_graphrag_data_to_database(self, collection_id: str, workspace_path: str):
+        """Load GraphRAG parquet files and save entities/communities to database."""
+        try:
+            import os
+            import numpy as np
+            import json
+
+            # Load entities from parquet
+            entities_file = os.path.join(workspace_path, "entities.parquet")
+            if os.path.exists(entities_file):
+                entities_df = pd.read_parquet(entities_file)
+                entities_data = entities_df.to_dict('records')
+
+                # Convert numpy arrays to lists and handle NaN values for JSON serialization
+                def convert_numpy_arrays(obj):
+                    """Recursively convert numpy arrays to lists and NaN to None."""
+                    if isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif isinstance(obj, dict):
+                        return {k: convert_numpy_arrays(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [convert_numpy_arrays(item) for item in obj]
+                    elif pd.isna(obj):  # Handle NaN values
+                        return None
+                    else:
+                        return obj
+
+                # Clean the entities data for JSON serialization
+                entities_data_clean = [convert_numpy_arrays(entity) for entity in entities_data]
+
+                await asyncio.to_thread(
+                    self.storage.save_graphrag_entities,
+                    collection_id,
+                    entities_data_clean
+                )
+                logger.info(f"Saved {len(entities_data_clean)} entities to database for collection {collection_id}")
+
+            # Load communities from parquet
+            communities_file = os.path.join(workspace_path, "communities.parquet")
+            if os.path.exists(communities_file):
+                communities_df = pd.read_parquet(communities_file)
+                communities_data = communities_df.to_dict('records')
+
+                # Clean the communities data for JSON serialization
+                communities_data_clean = [convert_numpy_arrays(community) for community in communities_data]
+
+                await asyncio.to_thread(
+                    self.storage.save_graphrag_communities,
+                    collection_id,
+                    communities_data_clean
+                )
+                logger.info(f"Saved {len(communities_data_clean)} communities to database for collection {collection_id}")
+
+        except Exception as e:
+            logger.error(f"Error saving GraphRAG data to database: {e}")
 
     def _calculate_confidence(self, raw_response, sources) -> float:
         """

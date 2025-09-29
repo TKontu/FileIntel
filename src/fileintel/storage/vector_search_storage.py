@@ -101,6 +101,7 @@ class VectorSearchStorage:
                     d.filename,
                     d.original_filename,
                     d.id as document_id,
+                    d.document_metadata,
                     1 - (c.embedding <=> CAST(:query_embedding AS vector)) as similarity
                 FROM document_chunks c
                 JOIN documents d ON c.document_id = d.id
@@ -128,6 +129,7 @@ class VectorSearchStorage:
                     "filename": row.filename,
                     "original_filename": row.original_filename,
                     "document_id": row.document_id,
+                    "document_metadata": row.document_metadata or {},
                     "similarity": float(row.similarity),
                     "similarity_score": float(row.similarity),  # Backward compatibility
                 }
@@ -172,6 +174,7 @@ class VectorSearchStorage:
                     d.filename,
                     d.original_filename,
                     d.id as document_id,
+                    d.document_metadata,
                     1 - (c.embedding <=> CAST(:query_embedding AS vector)) as similarity
                 FROM document_chunks c
                 JOIN documents d ON c.document_id = d.id
@@ -206,6 +209,7 @@ class VectorSearchStorage:
                     "filename": row.filename,
                     "original_filename": row.original_filename,
                     "document_id": row.document_id,
+                    "document_metadata": row.document_metadata or {},
                     "similarity": float(row.similarity),
                     "similarity_score": float(row.similarity),  # Backward compatibility
                 }

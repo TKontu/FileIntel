@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from . import collections, documents, tasks, query, graphrag
+from . import collections, documents, tasks, query, graphrag, metadata
 from .shared import cli_handler
 
 app = typer.Typer(
@@ -30,6 +30,7 @@ app.add_typer(documents.app, name="documents", help="Manage documents.")
 app.add_typer(tasks.app, name="tasks", help="Monitor and manage Celery tasks.")
 app.add_typer(query.app, name="query", help="Query collections using RAG.")
 app.add_typer(graphrag.app, name="graphrag", help="GraphRAG operations.")
+app.add_typer(metadata.app, name="metadata", help="Extract and manage document metadata.")
 
 
 @app.command("version")
@@ -94,6 +95,7 @@ def overall_status():
         ("Collections", "collections"),
         ("Query System", "query/status"),
         ("GraphRAG System", "graphrag/status"),
+        ("Metadata System", "metadata/system-status"),
     ]
 
     for component_name, endpoint in components:

@@ -56,9 +56,10 @@ def query_collection(
     if sources:
         cli_handler.console.print(f"\n[bold blue]Sources ({len(sources)}):[/bold blue]")
         for i, source in enumerate(sources, 1):
-            filename = source.get("filename", "Unknown")
-            relevance = source.get("relevance_score", 0)
-            cli_handler.console.print(f"  {i}. {filename} (relevance: {relevance:.3f})")
+            # Use enhanced citation if available, otherwise fallback to filename
+            citation = source.get("citation", source.get("filename", "Unknown"))
+            relevance = source.get("similarity_score", source.get("relevance_score", 0))
+            cli_handler.console.print(f"  {i}. {citation} (relevance: {relevance:.3f})")
 
 
 @app.command("document")

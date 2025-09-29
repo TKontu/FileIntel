@@ -58,23 +58,37 @@ class TextChunker:
         )
 
     def _split_into_sentences(self, text: str) -> List[str]:
-        """Split text into sentences using simple regex pattern."""
+        """Split text into sentences while preserving punctuation."""
         # Protect common abbreviations that shouldn't break sentences
         text = self.abbreviation_pattern.sub(
             lambda m: m.group(0).replace(".", "<ABBREV>"), text
         )
 
-        # Split on sentence boundaries
-        sentences = self.sentence_pattern.split(text)
+        # Find sentence boundaries and split while preserving punctuation
+        import re
+        sentences = []
+        current_pos = 0
 
-        # Clean up and restore abbreviations
-        result = []
-        for sentence in sentences:
-            sentence = sentence.replace("<ABBREV>", ".").strip()
+        for match in re.finditer(self.sentence_pattern, text):
+            # Get text from current position to end of sentence (including punctuation)
+            sentence_end = match.start() + len(match.group().rstrip())
+            sentence = text[current_pos:sentence_end].strip()
+
             if sentence:
-                result.append(sentence)
+                # Restore abbreviations and add to result
+                sentence = sentence.replace("<ABBREV>", ".")
+                sentences.append(sentence)
 
-        return result
+            current_pos = match.end()
+
+        # Add any remaining text as final sentence
+        if current_pos < len(text):
+            final_sentence = text[current_pos:].strip()
+            if final_sentence:
+                final_sentence = final_sentence.replace("<ABBREV>", ".")
+                sentences.append(final_sentence)
+
+        return sentences
 
     def _count_tokens(self, text: str) -> int:
         """Count tokens in text using the tokenizer."""

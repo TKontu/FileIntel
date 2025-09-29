@@ -128,11 +128,11 @@ async def get_task_status_endpoint(task_id: str) -> ApiResponseV2:
     # Format the response
     status_response = TaskStatusResponse(
         task_id=task_id,
-        status=_map_celery_state_to_task_state(task_info["state"]),
+        status=_map_celery_state_to_task_state(task_info["status"]),
         result=_format_task_result(task_info.get("result"))
-        if task_info["state"] == "SUCCESS"
+        if task_info["status"] == "SUCCESS"
         else None,
-        error=str(task_info.get("result")) if task_info["state"] == "FAILURE" else None,
+        error=str(task_info.get("result")) if task_info["status"] == "FAILURE" else None,
         progress=progress,
         started_at=None,  # Celery doesn't provide this easily
         completed_at=None,  # Would need to be stored separately
@@ -213,10 +213,10 @@ async def cancel_task_endpoint(
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
     # Check if task is in a cancellable state
-    if task_info["state"] in ["SUCCESS", "FAILURE", "REVOKED"]:
+    if task_info["status"] in ["SUCCESS", "FAILURE", "REVOKED"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Task {task_id} is already completed ({task_info['state']}) and cannot be cancelled",
+            detail=f"Task {task_id} is already completed ({task_info['status']}) and cannot be cancelled",
         )
 
     # Cancel the task
@@ -252,10 +252,10 @@ async def get_task_result(task_id: str) -> ApiResponseV2:
     if not task_info:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-    if task_info["state"] != "SUCCESS":
+    if task_info["status"] != "SUCCESS":
         raise HTTPException(
             status_code=400,
-            detail=f"Task {task_id} is not completed successfully (current state: {task_info['state']})",
+            detail=f"Task {task_id} is not completed successfully (current state: {task_info['status']})",
         )
 
     result = _format_task_result(task_info.get("result"))
@@ -375,12 +375,12 @@ async def cancel_batch_tasks(
                     )
                     continue
 
-                if task_info["state"] in ["SUCCESS", "FAILURE", "REVOKED"]:
+                if task_info["status"] in ["SUCCESS", "FAILURE", "REVOKED"]:
                     results.append(
                         {
                             "task_id": task_id,
                             "success": False,
-                            "message": f"Task already completed ({task_info['state']})",
+                            "message": f"Task already completed ({task_info['status']})",
                         }
                     )
                     continue
@@ -444,10 +444,10 @@ async def retry_task(task_id: str) -> ApiResponseV2:
         if not task_info:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-        if task_info["state"] != "FAILURE":
+        if task_info["status"] != "FAILURE":
             raise HTTPException(
                 status_code=400,
-                detail=f"Task {task_id} is not in failed state (current state: {task_info['state']})",
+                detail=f"Task {task_id} is not in failed state (current state: {task_info['status']})",
             )
 
         # In a real implementation, you'd need to store original task parameters

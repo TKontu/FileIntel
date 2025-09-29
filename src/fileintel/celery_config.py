@@ -13,6 +13,90 @@ import logging
 # Create Celery application instance
 app = Celery("fileintel")
 
+# Shared storage configuration for Celery tasks
+_shared_engine = None
+_shared_session_factory = None
+_storage_lock = None
+
+def get_shared_storage():
+    """
+    Get a new storage instance with shared connection pool.
+
+    This creates a new storage instance for each task while sharing
+    the underlying connection pool across all workers.
+
+    Usage in tasks:
+        storage = get_shared_storage()
+        try:
+            # Use storage
+            result = storage.some_operation()
+        finally:
+            storage.close()
+    """
+    import threading
+    global _shared_engine, _shared_session_factory, _storage_lock
+
+    # Initialize lock if not exists
+    if _storage_lock is None:
+        _storage_lock = threading.Lock()
+
+    # Thread-safe initialization using double-checked locking pattern
+    if _shared_engine is None:
+        with _storage_lock:
+            # Check again after acquiring lock
+            if _shared_engine is None:
+                from sqlalchemy import create_engine
+                from sqlalchemy.orm import sessionmaker
+
+                config = get_config()
+                database_url = config.storage.connection_string
+
+                # Create shared engine with optimized pool settings for Celery
+                _shared_engine = create_engine(
+                    database_url,
+                    pool_pre_ping=True,
+                    pool_size=15,  # Increased for concurrent Celery tasks
+                    max_overflow=25,  # Allow burst connections during heavy processing
+                    pool_recycle=3600,  # Recycle connections every hour
+                    pool_timeout=30,  # 30 second timeout for getting connection
+                    echo=False,  # Disable SQL logging in production
+                )
+
+                # Create session factory
+                _shared_session_factory = sessionmaker(
+                    autocommit=False,
+                    autoflush=False,
+                    bind=_shared_engine
+                )
+
+    # Create new session for this task
+    from fileintel.storage.postgresql_storage import PostgreSQLStorage
+    session = _shared_session_factory()
+    return PostgreSQLStorage(session)
+
+
+def get_storage_context():
+    """
+    Get a context manager for storage that automatically handles session cleanup.
+
+    Usage in tasks:
+        with get_storage_context() as storage:
+            # Use storage
+            result = storage.some_operation()
+        # Session is automatically closed
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def storage_context():
+        storage = get_shared_storage()
+        try:
+            yield storage
+        finally:
+            storage.close()
+
+    return storage_context()
+
 
 def configure_celery_app(config=None):
     """Configure Celery application with provided or default configuration."""
@@ -43,11 +127,13 @@ def configure_celery_app(config=None):
         # Queue configuration for different task types
         task_default_queue="default",
         task_queues=(
-            Queue("default", routing_key="default"),
-            Queue("document_processing", routing_key="document_processing"),
-            Queue("rag_processing", routing_key="rag_processing"),
-            Queue("llm_processing", routing_key="llm_processing"),
-            Queue("indexing", routing_key="indexing"),
+            Queue("default", routing_key="default"),                            # Catch-all
+            Queue("document_processing", routing_key="document_processing"),    # File processing, chunking
+            Queue("embedding_processing", routing_key="embedding_processing"),  # High-throughput embedding generation
+            Queue("llm_processing", routing_key="llm_processing"),              # Text generation, summarization
+            Queue("rag_processing", routing_key="rag_processing"),              # Vector queries, lightweight ops
+            Queue("graphrag_indexing", routing_key="graphrag_indexing"),        # Heavy GraphRAG index building
+            Queue("graphrag_queries", routing_key="graphrag_queries"),          # GraphRAG query operations
         ),
         # Result settings
         result_expires=3600,  # Results expire after 1 hour
@@ -190,9 +276,11 @@ def get_queue_lengths() -> dict:
             for queue_name in [
                 "default",
                 "document_processing",
+                "embedding_processing",
                 "llm_processing",
-                "memory_intensive",
-                "io_bound",
+                "rag_processing",
+                "graphrag_indexing",
+                "graphrag_queries",
             ]:
                 try:
                     queue = conn.SimpleQueue(queue_name)
@@ -282,126 +370,3 @@ def task_retry_handler(sender=None, task_id=None, reason=None, einfo=None, **kwa
     """Handle task retries for monitoring."""
     # Log retry for monitoring systems
     pass
-
-
-# Celery monitoring functions
-def get_celery_app():
-    """Get the configured Celery application instance."""
-    return app
-
-
-def get_worker_stats():
-    """Get worker statistics from Celery."""
-    try:
-        inspect = app.control.inspect()
-        stats = inspect.stats()
-        if not stats:
-            return {}
-
-        # Aggregate stats from all workers
-        total_stats = {
-            "total_workers": len(stats),
-            "total_tasks_executed": 0,
-            "total_tasks_active": 0,
-            "workers": {},
-        }
-
-        for worker_name, worker_stats in stats.items():
-            total_stats["workers"][worker_name] = worker_stats
-            if "total" in worker_stats:
-                total_stats["total_tasks_executed"] += worker_stats["total"].get(
-                    "total", 0
-                )
-            if "len" in worker_stats.get("pool", {}):
-                total_stats["total_tasks_active"] += worker_stats["pool"]["len"]
-
-        return total_stats
-    except Exception as e:
-        logger.warning(f"Failed to get worker stats: {e}")
-        return {}
-
-
-def get_active_tasks():
-    """Get currently active tasks from all workers."""
-    try:
-        inspect = app.control.inspect()
-        active_tasks = inspect.active()
-        if not active_tasks:
-            return {}
-
-        # Flatten tasks from all workers
-        all_tasks = {}
-        for worker_name, tasks in active_tasks.items():
-            for task in tasks:
-                task_id = task.get("id")
-                if task_id:
-                    all_tasks[task_id] = {
-                        "id": task_id,
-                        "name": task.get("name"),
-                        "args": task.get("args", []),
-                        "kwargs": task.get("kwargs", {}),
-                        "worker": worker_name,
-                        "time_start": task.get("time_start"),
-                        "delivery_info": task.get("delivery_info", {}),
-                    }
-
-        return all_tasks
-    except Exception as e:
-        logger.warning(f"Failed to get active tasks: {e}")
-        return {}
-
-
-def get_task_status(task_id: str):
-    """Get detailed status of a specific task."""
-    try:
-        from celery.result import AsyncResult
-
-        result = AsyncResult(task_id, app=app)
-
-        # Get basic status
-        status_info = {
-            "id": task_id,
-            "status": result.status,
-            "result": None,
-            "traceback": None,
-            "worker": None,
-            "timestamp": None,
-        }
-
-        # Add result if task is completed
-        if result.successful():
-            status_info["result"] = result.result
-        elif result.failed():
-            status_info["result"] = str(result.result) if result.result else None
-            status_info["traceback"] = result.traceback
-
-        # Try to find worker info from active tasks
-        active_tasks = get_active_tasks()
-        if task_id in active_tasks:
-            task_info = active_tasks[task_id]
-            status_info["worker"] = task_info.get("worker")
-            status_info["timestamp"] = task_info.get("time_start")
-            status_info["name"] = task_info.get("name")
-            status_info["args"] = task_info.get("args", [])
-            status_info["kwargs"] = task_info.get("kwargs", {})
-
-        return status_info
-    except Exception as e:
-        logger.warning(f"Failed to get task status for {task_id}: {e}")
-        return None
-
-
-def cancel_task(task_id: str, terminate: bool = False):
-    """Cancel a running task."""
-    try:
-        # Revoke the task
-        app.control.revoke(task_id, terminate=terminate)
-
-        # Verify cancellation by checking if task is still active
-        active_tasks = get_active_tasks()
-        is_still_active = task_id in active_tasks
-
-        return not is_still_active
-    except Exception as e:
-        logger.warning(f"Failed to cancel task {task_id}: {e}")
-        return False
