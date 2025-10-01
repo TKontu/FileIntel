@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 import re
 import tiktoken
 import logging
@@ -24,24 +24,39 @@ class TextChunker:
         self.overlap_sentences = chunking_config.overlap_sentences
         self.max_chars = chunking_config.chunk_size
 
+        # Two-tier chunking feature flag
+        self.enable_two_tier = getattr(config.rag, 'enable_two_tier_chunking', False)
+
         # Token-based limits for embedding safety (configurable)
         self.vector_max_tokens = getattr(
-            config.rag, "max_tokens", 450
+            config.rag, "embedding_max_tokens", 400
         )  # Safe limit for 512 token embedding models
         self.graphrag_max_tokens = (
             config.rag.embedding_batch_max_tokens
         )  # Use configured GraphRAG token limit
 
-        # Initialize tokenizer for accurate token counting
+        # Initialize primary tokenizer (OpenAI)
         try:
-            self.tokenizer = tiktoken.get_encoding(
+            self.openai_tokenizer = tiktoken.get_encoding(
                 "cl100k_base"
             )  # Standard OpenAI tokenizer
         except (KeyError, ValueError) as e:
             logger.warning(f"Failed to load cl100k_base tokenizer: {e}, using fallback")
-            self.tokenizer = tiktoken.encoding_for_model(
+            self.openai_tokenizer = tiktoken.encoding_for_model(
                 "text-embedding-ada-002"
             )  # Fallback
+
+        # Initialize BGE tokenizer for accurate embedding compatibility
+        self.bge_tokenizer = None
+        try:
+            from transformers import AutoTokenizer
+            self.bge_tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-large-en')
+            logger.info("BGE tokenizer loaded for embedding compatibility")
+        except Exception as e:
+            logger.warning(f"Could not load BGE tokenizer: {e}. Using OpenAI tokenizer only.")
+
+        # Maintain backward compatibility
+        self.tokenizer = self.openai_tokenizer
 
         # Simple sentence boundary pattern - matches periods, exclamation marks, and question marks
         self.sentence_pattern = re.compile(r"[.!?]+\s+")
@@ -51,10 +66,13 @@ class TextChunker:
             r"\b(Dr|Mr|Mrs|Ms|Prof|etc|vs|i\.e|e\.g)\."
         )
 
+        tokenizer_info = "BGE+OpenAI" if self.bge_tokenizer else "OpenAI"
+        chunking_mode = "Two-tier" if self.enable_two_tier else "Traditional"
         logger.info(
-            f"TextChunker initialized - Unified chunking: {self.max_chars} chars max, "
+            f"TextChunker initialized - Mode: {chunking_mode}, Unified chunking: {self.max_chars} chars max, "
             f"Vector: {self.vector_max_tokens} tokens max, GraphRAG: {self.graphrag_max_tokens} tokens max, "
-            f"Target sentences: {self.target_sentences}, Overlap: {self.overlap_sentences}"
+            f"Target sentences: {self.target_sentences}, Overlap: {self.overlap_sentences}, "
+            f"Tokenizers: {tokenizer_info}"
         )
 
     def _split_into_sentences(self, text: str) -> List[str]:
@@ -90,16 +108,445 @@ class TextChunker:
 
         return sentences
 
-    def _count_tokens(self, text: str) -> int:
-        """Count tokens in text using the tokenizer."""
+    def _split_into_sentence_objects(self, text: str, start_id: int = 0) -> List[Dict[str, Any]]:
+        """Split text into sentence objects with unique IDs and token counts."""
+        sentences = self._split_into_sentences(text)
+        sentence_objects = []
+
+        for i, sentence_text in enumerate(sentences):
+            token_count = self._count_tokens(sentence_text)
+            sentence_obj = {
+                'id': start_id + i,
+                'text': sentence_text,
+                'token_count': token_count,
+                'char_count': len(sentence_text)
+            }
+            sentence_objects.append(sentence_obj)
+
+        return sentence_objects
+
+    def process_document_sentences(self, text: str, page_mappings: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process document into sentence objects with optional page mapping integration."""
+        sentence_objects = self._split_into_sentence_objects(text)
+
+        # Integrate page mappings if provided
+        if page_mappings:
+            for sentence_obj in sentence_objects:
+                sentence_obj['page_info'] = self._find_sentence_pages(
+                    sentence_obj, text, page_mappings
+                )
+
+        return {
+            'sentences': sentence_objects,
+            'total_sentences': len(sentence_objects),
+            'total_tokens': sum(s['token_count'] for s in sentence_objects),
+            'total_chars': sum(s['char_count'] for s in sentence_objects)
+        }
+
+    def _find_sentence_pages(self, sentence_obj: Dict[str, Any], full_text: str,
+                            page_mappings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Find which pages a sentence spans across."""
+        sentence_text = sentence_obj['text']
+
+        # Find sentence position in full text
+        sentence_start = full_text.find(sentence_text)
+        if sentence_start == -1:
+            return {'pages': [], 'page_range': None}
+
+        sentence_end = sentence_start + len(sentence_text)
+
+        # Find overlapping pages
+        pages_involved = set()
+        for page_info in page_mappings:
+            page_start = page_info.get('start_pos', 0)
+            page_end = page_info.get('end_pos', 0)
+            page_number = page_info.get('page_number')
+
+            # Check if sentence overlaps with this page
+            if page_number and sentence_start < page_end and sentence_end > page_start:
+                pages_involved.add(page_number)
+
+        pages_list = sorted(list(pages_involved))
+        page_range = f"{min(pages_list)}-{max(pages_list)}" if len(pages_list) > 1 else str(pages_list[0]) if pages_list else None
+
+        return {
+            'pages': pages_list,
+            'page_range': page_range
+        }
+
+    def create_vector_chunks_from_sentences(self, sentence_objects: List[Dict[str, Any]],
+                                           target_tokens: int = 300, max_tokens: int = 400,
+                                           overlap_sentences: int = 3) -> List[Dict[str, Any]]:
+        """Create overlapping vector chunks optimized for semantic retrieval."""
+        if not sentence_objects:
+            return []
+
+        chunks = []
+        i = 0
+
+        while i < len(sentence_objects):
+            current_chunk_sentences = []
+            total_tokens = 0
+
+            # Add sentences until reaching target tokens
+            j = i
+            while j < len(sentence_objects) and total_tokens < target_tokens:
+                sentence = sentence_objects[j]
+                sentence_tokens = sentence['token_count']
+
+                # Check if adding this sentence would exceed max limit
+                if total_tokens + sentence_tokens > max_tokens:
+                    break
+
+                current_chunk_sentences.append(sentence)
+                total_tokens += sentence_tokens
+                j += 1
+
+            # Only create chunk if we have sentences
+            if current_chunk_sentences:
+                chunk_text = ' '.join(s['text'] for s in current_chunk_sentences)
+                sentence_ids = [s['id'] for s in current_chunk_sentences]
+
+                # Aggregate page information
+                all_pages = set()
+                for sentence in current_chunk_sentences:
+                    if 'page_info' in sentence and sentence['page_info']['pages']:
+                        all_pages.update(sentence['page_info']['pages'])
+
+                pages_list = sorted(list(all_pages))
+                page_range = (f"{min(pages_list)}-{max(pages_list)}" if len(pages_list) > 1
+                             else str(pages_list[0]) if pages_list else None)
+
+                chunk = {
+                    'id': f'vec_{len(chunks)}',
+                    'type': 'vector',
+                    'sentence_ids': sentence_ids,
+                    'text': chunk_text,
+                    'token_count': total_tokens,
+                    'sentence_count': len(current_chunk_sentences),
+                    'sentences': current_chunk_sentences,
+                    'page_info': {
+                        'pages': pages_list,
+                        'page_range': page_range
+                    }
+                }
+                chunks.append(chunk)
+
+            # Move forward with overlap for next chunk
+            sentences_added = j - i
+            if sentences_added <= overlap_sentences:
+                i += 1  # If we only added few sentences, move by 1
+            else:
+                i = j - overlap_sentences  # Normal overlap
+
+        return chunks
+
+    def create_graph_chunks_from_vector_chunks(self, vector_chunks: List[Dict[str, Any]],
+                                              chunks_per_graph: int = 5, overlap_chunks: int = 2,
+                                              target_tokens: int = 1500) -> List[Dict[str, Any]]:
+        """Create deduplicated graph chunks from vector chunks for relationship extraction."""
+        if not vector_chunks:
+            return []
+
+        graph_chunks = []
+        i = 0
+
+        while i < len(vector_chunks):
+            # Select chunk group
+            chunk_group = vector_chunks[i:i + chunks_per_graph]
+
+            # Collect all unique sentence IDs
+            all_sentence_ids = set()
+            sentence_lookup = {}  # sentence_id -> sentence_object
+
+            for chunk in chunk_group:
+                for sentence in chunk.get('sentences', []):
+                    sentence_id = sentence['id']
+                    all_sentence_ids.add(sentence_id)
+                    sentence_lookup[sentence_id] = sentence
+
+            # Sort to maintain document order
+            unique_sentence_ids = sorted(list(all_sentence_ids))
+
+            # Reconstruct deduplicated text and calculate tokens
+            deduplicated_sentences = []
+            total_tokens = 0
+
+            for sentence_id in unique_sentence_ids:
+                sentence = sentence_lookup[sentence_id]
+                deduplicated_sentences.append(sentence)
+                total_tokens += sentence['token_count']
+
+            deduplicated_text = ' '.join(s['text'] for s in deduplicated_sentences)
+
+            # Aggregate page information from all unique sentences
+            all_pages = set()
+            for sentence in deduplicated_sentences:
+                if 'page_info' in sentence and sentence['page_info']['pages']:
+                    all_pages.update(sentence['page_info']['pages'])
+
+            pages_list = sorted(list(all_pages))
+            page_range = (f"{min(pages_list)}-{max(pages_list)}" if len(pages_list) > 1
+                         else str(pages_list[0]) if pages_list else None)
+
+            graph_chunk = {
+                'id': f'graph_{len(graph_chunks)}',
+                'type': 'graph',
+                'vector_chunk_ids': [c['id'] for c in chunk_group],
+                'unique_sentence_ids': unique_sentence_ids,
+                'deduplicated_text': deduplicated_text,
+                'sentence_count': len(unique_sentence_ids),
+                'token_count': total_tokens,
+                'original_chunks_count': len(chunk_group),
+                'sentences': deduplicated_sentences,
+                'page_info': {
+                    'pages': pages_list,
+                    'page_range': page_range
+                },
+                'deduplication_stats': {
+                    'original_sentence_count': sum(len(c.get('sentences', [])) for c in chunk_group),
+                    'deduplicated_sentence_count': len(unique_sentence_ids),
+                    'deduplication_ratio': len(unique_sentence_ids) / max(1, sum(len(c.get('sentences', [])) for c in chunk_group))
+                }
+            }
+
+            graph_chunks.append(graph_chunk)
+
+            # Move forward with overlap
+            advance = max(1, chunks_per_graph - overlap_chunks)
+            i += advance
+
+        return graph_chunks
+
+    def process_two_tier_chunking(self, text: str, page_mappings: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Complete two-tier chunking process: sentences -> vector chunks -> graph chunks."""
+        # Phase 1: Process sentences
+        sentence_data = self.process_document_sentences(text, page_mappings)
+        sentence_objects = sentence_data['sentences']
+
+        # Phase 2: Create vector chunks (300 tokens, optimized for retrieval)
+        vector_chunks = self.create_vector_chunks_from_sentences(
+            sentence_objects,
+            target_tokens=300,
+            max_tokens=self.vector_max_tokens,
+            overlap_sentences=3
+        )
+
+        # Phase 3: Create graph chunks (1500 tokens, deduplicated for analysis)
+        graph_chunks = self.create_graph_chunks_from_vector_chunks(
+            vector_chunks,
+            chunks_per_graph=5,
+            overlap_chunks=2,
+            target_tokens=1500
+        )
+
+        return {
+            'sentence_data': sentence_data,
+            'vector_chunks': vector_chunks,
+            'graph_chunks': graph_chunks,
+            'statistics': {
+                'total_sentences': sentence_data['total_sentences'],
+                'total_tokens': sentence_data['total_tokens'],
+                'vector_chunk_count': len(vector_chunks),
+                'graph_chunk_count': len(graph_chunks),
+                'avg_vector_tokens': sum(c['token_count'] for c in vector_chunks) / len(vector_chunks) if vector_chunks else 0,
+                'avg_graph_tokens': sum(c['token_count'] for c in graph_chunks) / len(graph_chunks) if graph_chunks else 0,
+                'deduplication_efficiency': sum(c['deduplication_stats']['deduplication_ratio'] for c in graph_chunks) / len(graph_chunks) if graph_chunks else 0
+            }
+        }
+
+    def validate_two_tier_chunking(self, text: str, page_mappings: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Comprehensive validation of two-tier chunking functionality."""
+        validation_results = {
+            'success': True,
+            'errors': [],
+            'warnings': [],
+            'metrics': {}
+        }
+
         try:
-            return len(self.tokenizer.encode(text))
+            # Run two-tier chunking
+            result = self.process_two_tier_chunking(text, page_mappings)
+
+            # Validate vector chunks
+            vector_validation = self._validate_vector_chunks(result['vector_chunks'])
+            validation_results['metrics']['vector'] = vector_validation
+
+            # Validate graph chunks
+            graph_validation = self._validate_graph_chunks(result['graph_chunks'])
+            validation_results['metrics']['graph'] = graph_validation
+
+            # Validate deduplication
+            dedup_validation = self._validate_deduplication(result['vector_chunks'], result['graph_chunks'])
+            validation_results['metrics']['deduplication'] = dedup_validation
+
+            # Validate token accuracy
+            token_validation = self._validate_token_accuracy(result['sentence_data']['sentences'])
+            validation_results['metrics']['tokenization'] = token_validation
+
+            # Aggregate results
+            all_validations = [vector_validation, graph_validation, dedup_validation, token_validation]
+            for validation in all_validations:
+                validation_results['errors'].extend(validation.get('errors', []))
+                validation_results['warnings'].extend(validation.get('warnings', []))
+
+            validation_results['success'] = len(validation_results['errors']) == 0
+
+        except Exception as e:
+            validation_results['success'] = False
+            validation_results['errors'].append(f"Validation failed with exception: {str(e)}")
+
+        return validation_results
+
+    def _validate_vector_chunks(self, vector_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate vector chunk properties."""
+        validation = {'errors': [], 'warnings': [], 'metrics': {}}
+
+        if not vector_chunks:
+            validation['errors'].append("No vector chunks generated")
+            return validation
+
+        token_counts = [chunk['token_count'] for chunk in vector_chunks]
+        validation['metrics'] = {
+            'count': len(vector_chunks),
+            'avg_tokens': sum(token_counts) / len(token_counts),
+            'min_tokens': min(token_counts),
+            'max_tokens': max(token_counts),
+            'target_utilization': sum(token_counts) / (len(token_counts) * self.vector_max_tokens)
+        }
+
+        # Check token limits
+        oversized = [i for i, count in enumerate(token_counts) if count > self.vector_max_tokens]
+        if oversized:
+            validation['errors'].append(f"{len(oversized)} vector chunks exceed {self.vector_max_tokens} token limit")
+
+        # Check utilization efficiency
+        if validation['metrics']['avg_tokens'] < 200:
+            validation['warnings'].append(f"Low token utilization: avg {validation['metrics']['avg_tokens']:.1f} tokens")
+
+        return validation
+
+    def _validate_graph_chunks(self, graph_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate graph chunk properties."""
+        validation = {'errors': [], 'warnings': [], 'metrics': {}}
+
+        if not graph_chunks:
+            validation['warnings'].append("No graph chunks generated")
+            return validation
+
+        token_counts = [chunk['token_count'] for chunk in graph_chunks]
+        validation['metrics'] = {
+            'count': len(graph_chunks),
+            'avg_tokens': sum(token_counts) / len(token_counts),
+            'min_tokens': min(token_counts),
+            'max_tokens': max(token_counts),
+            'avg_deduplication_ratio': sum(c['deduplication_stats']['deduplication_ratio'] for c in graph_chunks) / len(graph_chunks)
+        }
+
+        # Check reasonable size for graph analysis
+        if validation['metrics']['avg_tokens'] < 1000:
+            validation['warnings'].append(f"Graph chunks may be too small for effective analysis: avg {validation['metrics']['avg_tokens']:.1f} tokens")
+
+        return validation
+
+    def _validate_deduplication(self, vector_chunks: List[Dict[str, Any]], graph_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate deduplication effectiveness."""
+        validation = {'errors': [], 'warnings': [], 'metrics': {}}
+
+        if not vector_chunks or not graph_chunks:
+            return validation
+
+        # Calculate deduplication metrics
+        total_vector_sentences = sum(chunk['sentence_count'] for chunk in vector_chunks)
+        total_graph_sentences = sum(chunk['sentence_count'] for chunk in graph_chunks)
+
+        validation['metrics'] = {
+            'total_vector_sentences': total_vector_sentences,
+            'total_graph_sentences': total_graph_sentences,
+            'sentence_reduction_ratio': total_graph_sentences / total_vector_sentences if total_vector_sentences > 0 else 0
+        }
+
+        # Check if deduplication is working
+        if validation['metrics']['sentence_reduction_ratio'] > 0.9:
+            validation['warnings'].append("Low deduplication effectiveness - graph chunks may have excessive overlap")
+
+        return validation
+
+    def _validate_token_accuracy(self, sentence_objects: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate dual tokenizer accuracy."""
+        validation = {'errors': [], 'warnings': [], 'metrics': {}}
+
+        if not sentence_objects or not self.bge_tokenizer:
+            return validation
+
+        # Sample validation on first 10 sentences
+        sample_sentences = sentence_objects[:10]
+        divergences = []
+
+        for sentence in sample_sentences:
+            text = sentence['text']
+            openai_count = self._count_tokens_openai(text)
+            bge_count = self._count_tokens_bge(text)
+
+            if openai_count > 0:
+                divergence = abs(bge_count - openai_count) / openai_count
+                divergences.append(divergence)
+
+        if divergences:
+            validation['metrics'] = {
+                'sample_size': len(divergences),
+                'avg_divergence': sum(divergences) / len(divergences),
+                'max_divergence': max(divergences)
+            }
+
+            if validation['metrics']['max_divergence'] > 0.5:
+                validation['warnings'].append(f"High tokenizer divergence detected: max {validation['metrics']['max_divergence']:.2f}")
+
+        return validation
+
+    def chunk_text_adaptive(self, text: str, page_mappings: List[Dict[str, Any]] = None):
+        """Adaptive chunking that uses two-tier when enabled, traditional otherwise."""
+        if self.enable_two_tier:
+            return self.process_two_tier_chunking(text, page_mappings)
+        else:
+            # Traditional chunking for backward compatibility
+            traditional_chunks = self.chunk_text(text)
+            return {
+                'chunks': traditional_chunks,
+                'chunk_type': 'traditional',
+                'statistics': {
+                    'chunk_count': len(traditional_chunks),
+                    'avg_tokens': sum(self._count_tokens(c) for c in traditional_chunks) / len(traditional_chunks) if traditional_chunks else 0
+                }
+            }
+
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens using the most conservative approach between tokenizers."""
+        openai_tokens = self._count_tokens_openai(text)
+
+        if self.bge_tokenizer:
+            bge_tokens = self._count_tokens_bge(text)
+            # Use the higher count for safety (conservative approach)
+            return max(openai_tokens, bge_tokens)
+
+        return openai_tokens
+
+    def _count_tokens_openai(self, text: str) -> int:
+        """Count tokens using OpenAI tokenizer."""
+        try:
+            return len(self.openai_tokenizer.encode(text))
         except (UnicodeDecodeError, UnicodeEncodeError, ValueError) as e:
-            # Fallback to rough character-based estimation for encoding errors
-            logger.warning(
-                f"Token counting failed due to encoding error, using character estimation: {e}"
-            )
+            logger.warning(f"OpenAI token counting failed: {e}, using character estimation")
             return len(text) // CHARS_PER_TOKEN_ESTIMATE
+
+    def _count_tokens_bge(self, text: str) -> int:
+        """Count tokens using BGE tokenizer."""
+        try:
+            tokens = self.bge_tokenizer(text, return_tensors=None, add_special_tokens=True)
+            return len(tokens['input_ids'])
+        except Exception as e:
+            logger.warning(f"BGE token counting failed: {e}, falling back to OpenAI count")
+            return self._count_tokens_openai(text)
 
     def _check_token_safety(self, text: str, max_tokens: int, context: str) -> bool:
         """Check if text exceeds token limit and log warnings."""

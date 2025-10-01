@@ -252,7 +252,12 @@ def generate_collection_embeddings_simple(
             self.update_progress(0, 3, "Starting simplified embedding generation")
 
             # Get chunks that need embeddings (chunks are created during document processing)
-            chunks = storage.get_all_chunks_for_collection(collection_id)
+            # For two-tier chunking, only vector chunks need embeddings
+            if getattr(config.rag, 'enable_two_tier_chunking', False):
+                chunks = storage.get_chunks_by_type_for_collection(collection_id, 'vector')
+                logger.info(f"Two-tier chunking enabled: processing only vector chunks for embeddings")
+            else:
+                chunks = storage.get_all_chunks_for_collection(collection_id)
             if not chunks:
                 # No embeddings to generate, call completion directly (don't wait for result)
                 self.update_progress(

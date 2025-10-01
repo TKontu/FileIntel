@@ -151,6 +151,10 @@ class PostgreSQLStorage(StorageInterface):
         """Get all chunks for a collection."""
         return self.document_storage.get_all_chunks_for_collection(collection_id)
 
+    def get_chunks_by_type_for_collection(self, collection_id: str, chunk_type: str = None):
+        """Get chunks for a collection filtered by chunk type."""
+        return self.document_storage.get_chunks_by_type_for_collection(collection_id, chunk_type)
+
     def update_chunk_embedding(self, chunk_id: str, embedding: List[float]):
         """Update chunk with embedding vector."""
         return self.document_storage.update_chunk_embedding(chunk_id, embedding)

@@ -78,6 +78,10 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    def get_chunks_by_type_for_collection(self, collection_id: str, chunk_type: str = None):
+        pass
+
+    @abstractmethod
     def update_chunk_embedding(self, chunk_id: str, embedding: List[float]):
         pass
 

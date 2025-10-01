@@ -227,10 +227,32 @@ class PDFProcessor:
         )
 
         # Check minimum character threshold and text quality ratio
-        return (
+        basic_quality = (
             total_chars >= MIN_TEXT_THRESHOLD
             and non_whitespace_chars / max(total_chars, 1) >= MIN_TEXT_RATIO
         )
+
+        if not basic_quality:
+            return False
+
+        # Additional quality checks for coherent text
+        words = total_text.split()
+        if len(words) < 10:  # Too few words
+            return False
+
+        # Check for excessive single characters (OCR artifacts)
+        single_chars = sum(1 for word in words if len(word) == 1)
+        single_char_ratio = single_chars / max(len(words), 1)
+
+        if single_char_ratio > 0.3:  # More than 30% single characters suggests OCR issues
+            return False
+
+        # Check for reasonable word length distribution
+        avg_word_length = sum(len(word) for word in words) / max(len(words), 1)
+        if avg_word_length < 2.0:  # Average word length too short suggests garbled text
+            return False
+
+        return True
 
 
 # Backward compatibility alias

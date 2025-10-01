@@ -7,7 +7,7 @@ Tasks are designed as pure functions with clear inputs/outputs and proper error 
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, Union
 from celery import group
 
 from fileintel.celery_config import app
@@ -17,7 +17,7 @@ from fileintel.core.config import get_config
 logger = logging.getLogger(__name__)
 
 
-def read_document_content(file_path: str) -> str:
+def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Pure function to read document content based on file type.
 
@@ -25,7 +25,8 @@ def read_document_content(file_path: str) -> str:
         file_path: Path to the document file
 
     Returns:
-        Raw text content from the document
+        Tuple of (raw_text_content, page_mappings)
+        where page_mappings contains position and page info for each element
 
     Raises:
         FileNotFoundError: If file doesn't exist
@@ -67,15 +68,39 @@ def read_document_content(file_path: str) -> str:
             f"Unsupported file type: {extension}. Supported types: {supported_types}"
         )
 
-    # Process document and extract text
+    # Process document and extract text with page mapping
     processor = processor_class()
     elements, metadata = processor.read(path)
-    return " ".join([elem.text for elem in elements if hasattr(elem, "text")])
+
+    # Build text and page mapping
+    text_parts = []
+    page_mappings = []
+    current_position = 0
+
+    for elem in elements:
+        if hasattr(elem, "text") and elem.text:
+            text_content = elem.text
+            text_parts.append(text_content)
+
+            # Extract page information from element metadata
+            elem_metadata = getattr(elem, "metadata", {})
+            page_info = {
+                "start_pos": current_position,
+                "end_pos": current_position + len(text_content),
+                "page_number": elem_metadata.get("page_number"),
+                "chapter": elem_metadata.get("chapter"),
+                "extraction_method": elem_metadata.get("extraction_method")
+            }
+            page_mappings.append(page_info)
+            current_position += len(text_content) + 1  # +1 for space separator
+
+    combined_text = " ".join(text_parts)
+    return combined_text, page_mappings
 
 
 def clean_and_chunk_text(
-    text: str, chunk_size: int = None, overlap: int = None
-) -> List[str]:
+    text: str, chunk_size: int = None, overlap: int = None, page_mappings: List[Dict[str, Any]] = None, return_full_result: bool = False
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
     """
     Clean and chunk text using sentence-aware chunking for better semantic coherence.
 
@@ -83,20 +108,187 @@ def clean_and_chunk_text(
         text: Raw text content
         chunk_size: Size of each chunk (ignored - uses sentence-based chunking)
         overlap: Overlap between chunks (ignored - uses sentence-based overlap)
+        page_mappings: List of page mapping information for text positions
+        return_full_result: If True, returns tuple of (chunks, full_chunking_result)
 
     Returns:
-        List of text chunks with preserved sentence boundaries
+        List of chunk dictionaries with text and metadata, or tuple with full result if return_full_result=True
     """
     from fileintel.document_processing.chunking import TextChunker
 
     # Clean text first
     text = text.encode("utf-8", "ignore").decode("utf-8")
 
-    # Use sentence-aware chunker instead of primitive character splitting
+    # Use adaptive chunker that supports both traditional and two-tier modes
     chunker = TextChunker()
-    chunks = chunker.chunk_text(text)
+    chunking_result = chunker.chunk_text_adaptive(text, page_mappings)
 
-    return chunks
+    # Handle two-tier chunking result
+    if chunker.enable_two_tier and 'vector_chunks' in chunking_result:
+        # Two-tier mode: use vector chunks for embedding generation
+        vector_chunks = chunking_result['vector_chunks']
+
+        # Convert vector chunks to expected format for backward compatibility
+        if page_mappings is None:
+            return [{"text": chunk['text'], "metadata": {"position": i, "chunk_type": "vector"}}
+                   for i, chunk in enumerate(vector_chunks)]
+
+        # Page mappings already integrated in two-tier mode
+        return [{"text": chunk['text'],
+                "metadata": {
+                    "position": i,
+                    "chunk_type": "vector",
+                    "pages": chunk['page_info']['pages'],
+                    "page_range": chunk['page_info']['page_range'],
+                    "token_count": chunk['token_count'],
+                    "sentence_count": chunk['sentence_count']
+                }} for i, chunk in enumerate(vector_chunks)]
+
+    # Traditional mode: extract chunks from result
+    text_chunks = chunking_result.get('chunks', [])
+
+    # If no page mappings provided, return simple chunks for backward compatibility
+    if page_mappings is None:
+        return [{"text": chunk, "metadata": {"position": i}} for i, chunk in enumerate(text_chunks)]
+
+    # Map chunks to their page ranges using accumulative position tracking
+    chunk_results = []
+    current_text_pos = 0
+
+    for i, chunk_text in enumerate(text_chunks):
+        # Find the actual position of this chunk in the cleaned text
+        # Start searching from current position to avoid finding duplicate text
+        chunk_start = text.find(chunk_text, current_text_pos)
+        if chunk_start == -1:
+            # Fallback: estimate position based on previous chunks
+            chunk_start = current_text_pos
+
+        chunk_end = chunk_start + len(chunk_text)
+
+        # Update current position for next chunk search
+        current_text_pos = chunk_end
+
+        # Find overlapping page mappings
+        pages_involved = set()
+        chapters_involved = set()
+        extraction_methods = set()
+
+        for page_info in page_mappings:
+            # Check if this page_info overlaps with the chunk
+            # Use more generous overlap detection
+            page_start = page_info["start_pos"]
+            page_end = page_info["end_pos"]
+
+            # Check for any overlap between chunk and page ranges
+            if not (chunk_end <= page_start or chunk_start >= page_end):
+                if page_info["page_number"]:
+                    pages_involved.add(page_info["page_number"])
+                if page_info["chapter"]:
+                    chapters_involved.add(page_info["chapter"])
+                if page_info["extraction_method"]:
+                    extraction_methods.add(page_info["extraction_method"])
+
+        # Build chunk metadata
+        chunk_metadata = {
+            "position": i,
+            "char_start": chunk_start,
+            "char_end": chunk_end
+        }
+
+        if pages_involved:
+            chunk_metadata["pages"] = sorted(list(pages_involved))
+            chunk_metadata["page_range"] = f"{min(pages_involved)}-{max(pages_involved)}" if len(pages_involved) > 1 else str(list(pages_involved)[0])
+
+        if chapters_involved:
+            chunk_metadata["chapters"] = list(chapters_involved)
+
+        if extraction_methods:
+            chunk_metadata["extraction_methods"] = list(extraction_methods)
+
+        chunk_results.append({
+            "text": chunk_text,
+            "metadata": chunk_metadata
+        })
+
+    # Return full result if requested (includes graph chunks for two-tier processing)
+    if return_full_result:
+        return chunk_results, chunking_result
+
+    return chunk_results
+
+
+def get_graph_chunks_for_collection(collection_id: str) -> List[Dict[str, Any]]:
+    """Retrieve graph chunks for GraphRAG processing when two-tier chunking is enabled."""
+    from fileintel.celery_config import get_shared_storage
+
+    storage = get_shared_storage()
+    try:
+        # Get graph chunks directly using the new filtering method
+        graph_chunks_raw = storage.get_chunks_by_type_for_collection(collection_id, 'graph')
+
+        # Convert to expected format
+        graph_chunks = []
+        for chunk in graph_chunks_raw:
+            graph_chunks.append({
+                'id': chunk.id,
+                'text': chunk.chunk_text,
+                'metadata': chunk.chunk_metadata or {}
+            })
+
+        return graph_chunks
+    finally:
+        storage.close()
+
+
+@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+def validate_chunking_system(self, sample_text: str = None) -> Dict[str, Any]:
+    """Validate the two-tier chunking system with comprehensive tests."""
+    from fileintel.document_processing.chunking import TextChunker
+
+    # Use sample text if none provided
+    if not sample_text:
+        sample_text = """
+        Machine learning is a subset of artificial intelligence that focuses on algorithms
+        that can learn and improve through experience. Deep learning is a specialized
+        form of machine learning that uses neural networks with multiple layers.
+        Natural language processing combines machine learning with linguistics to help
+        computers understand human language. These technologies are transforming industries
+        from healthcare to finance, enabling new applications and insights.
+        """
+
+    try:
+        chunker = TextChunker()
+
+        # Validate traditional chunking
+        traditional_chunks = chunker.chunk_text(sample_text)
+        traditional_metrics = {
+            'count': len(traditional_chunks),
+            'avg_tokens': sum(chunker._count_tokens(c) for c in traditional_chunks) / len(traditional_chunks) if traditional_chunks else 0
+        }
+
+        # Validate two-tier chunking if enabled
+        two_tier_validation = None
+        if chunker.enable_two_tier:
+            two_tier_validation = chunker.validate_two_tier_chunking(sample_text)
+
+        return {
+            'success': True,
+            'traditional_metrics': traditional_metrics,
+            'two_tier_validation': two_tier_validation,
+            'system_info': {
+                'enable_two_tier': chunker.enable_two_tier,
+                'vector_max_tokens': chunker.vector_max_tokens,
+                'graphrag_max_tokens': chunker.graphrag_max_tokens,
+                'has_bge_tokenizer': chunker.bge_tokenizer is not None
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Chunking validation failed: {e}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 
 @app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
@@ -121,15 +313,22 @@ def process_document(
         # Update progress
         self.update_progress(0, 3, "Reading document content")
 
-        # Read document content
-        content = read_document_content(file_path)
-        logger.info(f"Extracted {len(content)} characters from {file_path}")
+        # Read document content with page mappings
+        content, page_mappings = read_document_content(file_path)
+        logger.info(f"Extracted {len(content)} characters from {file_path} with {len(page_mappings)} page mappings")
 
         # Update progress
         self.update_progress(1, 3, "Cleaning and chunking text")
 
-        # Clean and chunk text
-        chunks = clean_and_chunk_text(content)
+        # Clean and chunk text with page tracking - get both chunks and full result to avoid double processing
+        chunker = TextChunker()
+        if chunker.enable_two_tier:
+            # Two-tier mode: get both chunks and full result in one call
+            chunks, full_chunking_result = clean_and_chunk_text(content, page_mappings=page_mappings, return_full_result=True)
+        else:
+            # Traditional mode: only need chunks
+            chunks = clean_and_chunk_text(content, page_mappings=page_mappings)
+            full_chunking_result = None
         logger.info(f"Created {len(chunks)} chunks from document")
 
         # Update progress
@@ -209,14 +408,49 @@ def process_document(
                         actual_document_id = document_id
 
                 # Format chunks for storage
-                chunk_data = [
-                    {"text": chunk, "metadata": {"position": i}}
-                    for i, chunk in enumerate(chunks)
-                ]
+                # Chunks now come as dictionaries with text and metadata
+                chunk_data = []
+                for chunk_dict in chunks:
+                    if isinstance(chunk_dict, dict) and "text" in chunk_dict:
+                        # Use the metadata from the chunk processing and ensure chunk_type is set
+                        metadata = chunk_dict.get("metadata", {})
+                        if "chunk_type" not in metadata:
+                            metadata["chunk_type"] = "vector"  # Default to vector chunks
+                        chunk_data.append({
+                            "text": chunk_dict["text"],
+                            "metadata": metadata
+                        })
+                    else:
+                        # Backward compatibility for plain text chunks
+                        chunk_data.append({
+                            "text": str(chunk_dict),
+                            "metadata": {"position": len(chunk_data), "chunk_type": "vector"}
+                        })
 
                 storage.add_document_chunks(
                     actual_document_id, collection_id, chunk_data
                 )
+
+                # Store graph chunks separately if two-tier mode is enabled
+                if full_chunking_result and 'graph_chunks' in full_chunking_result:
+                    graph_chunk_data = []
+                    for graph_chunk in full_chunking_result['graph_chunks']:
+                        graph_chunk_data.append({
+                            "text": graph_chunk['text'],
+                            "metadata": {
+                                **graph_chunk.get('page_info', {}),
+                                'chunk_type': 'graph',
+                                'token_count': graph_chunk['token_count'],
+                                'sentence_count': graph_chunk['sentence_count'],
+                                'vector_chunk_ids': graph_chunk['vector_chunk_ids'],
+                                'deduplication_stats': graph_chunk['deduplication_stats']
+                            }
+                        })
+
+                    # Store graph chunks with a different method or flag
+                    storage.add_document_chunks(
+                        actual_document_id, collection_id, graph_chunk_data
+                    )
                 logger.info(
                     f"Stored {len(chunks)} chunks in database for document {actual_document_id}"
                 )
@@ -344,8 +578,10 @@ def extract_document_metadata(
 
         # Get chunks if not provided
         if content_chunks is None:
-            content = read_document_content(file_path)
-            content_chunks = clean_and_chunk_text(content)
+            content, page_mappings = read_document_content(file_path)
+            chunk_dicts = clean_and_chunk_text(content, page_mappings=page_mappings)
+            # Extract just the text for metadata extraction (preserving backward compatibility)
+            content_chunks = [chunk_dict["text"] for chunk_dict in chunk_dicts]
 
         self.update_progress(1, 3, "Preparing metadata extraction")
 
@@ -425,12 +661,16 @@ def chunk_existing_document(
     try:
         self.update_progress(0, 1, "Re-chunking document")
 
-        chunks = clean_and_chunk_text(document_text, chunk_size, overlap)
+        chunk_dicts = clean_and_chunk_text(document_text, chunk_size, overlap)
+
+        # Extract text and metadata for backward compatibility
+        chunks = [chunk_dict["text"] for chunk_dict in chunk_dicts]
 
         result = {
             "original_length": len(document_text),
             "chunks_count": len(chunks),
             "chunks": chunks,
+            "chunk_metadata": [chunk_dict.get("metadata", {}) for chunk_dict in chunk_dicts],
             "chunk_size": chunk_size or get_config().rag.chunking.chunk_size,
             "overlap": overlap or get_config().rag.chunking.chunk_overlap,
             "status": "completed",

@@ -58,9 +58,9 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         # Set token limit from configuration (with fallback)
         self.max_tokens = getattr(settings.rag, "embedding_max_tokens", 480)
 
-        # Use conservative limit accounting for tokenizer differences
-        # If we have BERT tokenizer, use even more conservative limit
-        safety_margin = 300 if self.bert_tokenizer else 400
+        # Apply optimized safety margin for better token utilization
+        # Preserve 90% of configured limit while accounting for tokenizer differences
+        safety_margin = 440 if self.bert_tokenizer else 460
         self.max_tokens = min(self.max_tokens, safety_margin)
 
         logger = logging.getLogger(__name__)

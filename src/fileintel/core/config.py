@@ -69,12 +69,12 @@ class ChunkingSettings(BaseModel):
     """Unified chunking configuration for all RAG operations."""
 
     chunk_size: int = Field(
-        default=500, description="Default chunk size for text processing (optimized for 512-token embedding models)"
+        default=800, description="Default chunk size for text processing (optimized for 512-token embedding models)"
     )
-    chunk_overlap: int = Field(default=50, description="Overlap between chunks (adjusted for smaller chunk size)")
-    target_sentences: int = Field(default=18, description="Target sentences per chunk")
+    chunk_overlap: int = Field(default=80, description="Overlap between chunks (adjusted for smaller chunk size)")
+    target_sentences: int = Field(default=3, description="Target sentences per chunk")
     overlap_sentences: int = Field(
-        default=2, description="Sentence overlap between chunks"
+        default=1, description="Sentence overlap between chunks"
     )
 
 
@@ -84,6 +84,8 @@ class RAGSettings(BaseModel):
     strategy: str = Field(default="merge")
     embedding_provider: str = Field(default="openai")
     embedding_model: str = Field(default="bge-large-en")
+    embedding_max_tokens: int = Field(default=450, description="Maximum tokens for individual embedding requests")
+    enable_two_tier_chunking: bool = Field(default=False, description="Enable two-tier vector/graph chunking system")
 
     # Unified chunking configuration
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
@@ -121,8 +123,8 @@ class RAGSettings(BaseModel):
 
 
 class DocumentProcessingSettings(BaseModel):
-    chunk_size: int = Field(default=4000)
-    overlap: int = Field(default=200)
+    chunk_size: int = Field(default=800)
+    overlap: int = Field(default=80)
     max_file_size: str = Field(default="100MB")
     supported_formats: List[str] = Field(
         default_factory=lambda: ["pdf", "epub", "mobi"]

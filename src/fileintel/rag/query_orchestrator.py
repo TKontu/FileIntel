@@ -62,15 +62,41 @@ class QueryOrchestrator:
     def classify_query_type(self, query: str) -> QueryType:
         classification = self.query_classifier.classify(query)
         query_type = QueryType(classification["type"].lower())
-        self._routing_explanation = (
+
+        # Enhanced routing explanation with two-tier awareness
+        explanation_parts = [
             f"Query classified as {classification['type']} "
             f"(confidence: {classification['confidence']:.2f}). "
             f"Reasoning: {classification['reasoning']}"
-        )
+        ]
+
+        # Add two-tier chunking context if enabled
+        if getattr(self.config, 'enable_two_tier_chunking', False):
+            if query_type == QueryType.VECTOR:
+                explanation_parts.append("Using optimized 300-token vector chunks for semantic retrieval.")
+            elif query_type == QueryType.GRAPH:
+                explanation_parts.append("Using deduplicated 1500-token graph chunks for relationship extraction.")
+            elif query_type == QueryType.HYBRID:
+                explanation_parts.append("Using both vector chunks (retrieval) and graph chunks (analysis) for comprehensive results.")
+
+        self._routing_explanation = " ".join(explanation_parts)
         return query_type
 
     def get_routing_explanation(self) -> str:
         return self._routing_explanation
+
+    def get_chunk_type_for_query(self, query_type: QueryType) -> str:
+        """Determine which chunk type to use based on query type and two-tier settings."""
+        if not getattr(self.config, 'enable_two_tier_chunking', False):
+            return 'traditional'
+
+        chunk_type_mapping = {
+            QueryType.VECTOR: 'vector',
+            QueryType.GRAPH: 'graph',
+            QueryType.HYBRID: 'both'
+        }
+
+        return chunk_type_mapping.get(query_type, 'vector')
 
     async def _execute_hybrid_query(
         self, query: str, collection_id: str

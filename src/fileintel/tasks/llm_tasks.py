@@ -86,13 +86,35 @@ def prepare_text_for_embedding(text: str, max_tokens: int = 400) -> str:
 
     cleaned_text = ' '.join(clean_lines).strip()
 
+    # Additional OCR artifact cleaning
+    # Remove excessive single character sequences (OCR artifacts)
+    cleaned_text = re.sub(r'\b[a-zA-Z0-9]\s+[a-zA-Z0-9]\s+[a-zA-Z0-9]\s+', ' ', cleaned_text)
+
+    # Clean up number/letter mixtures that look like OCR errors (e.g., "9 F5 a7")
+    cleaned_text = re.sub(r'\b\d+\s+[A-Za-z]+\d+\s+[a-zA-Z]+\d+\b', ' ', cleaned_text)
+
+    # Remove standalone single characters followed by punctuation
+    cleaned_text = re.sub(r'\s+[a-zA-Z]\s*[,\.]\s*', ' ', cleaned_text)
+
     # If text is too short or empty after cleaning, return original
     if len(cleaned_text) < 10:
         cleaned_text = text.strip()
 
-    # If still too short, skip embedding
+    # Final quality check - if still too short or looks garbled, skip embedding
     if len(cleaned_text) < 5:
         return ""
+
+    # Check if text still looks like OCR artifacts after cleaning
+    words = cleaned_text.split()
+    if len(words) > 5:
+        single_chars = sum(1 for word in words if len(word) == 1)
+        single_char_ratio = single_chars / len(words)
+        avg_word_length = sum(len(word) for word in words) / len(words)
+
+        # Skip embedding if text quality is still poor
+        if single_char_ratio > 0.4 or avg_word_length < 1.5:
+            logger.warning(f"Skipping low-quality text (likely OCR artifacts): '{cleaned_text[:100]}...'")
+            return ""
 
     try:
         tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -224,18 +246,18 @@ def generate_and_store_chunk_embedding(
 
         config = get_config()
 
-        # Generate embedding
-        embedding_provider = OpenAIEmbeddingProvider(settings=config)
-        embeddings = embedding_provider.get_embeddings([text])
-
-        if not embeddings or len(embeddings) == 0:
-            raise ValueError("No embedding generated")
-
-        embedding = embeddings[0]  # Get the first (and only) embedding
-
         # Store embedding using shared storage
         storage = get_shared_storage()
         try:
+            # Generate embedding with shared storage to avoid duplicate connections
+            embedding_provider = OpenAIEmbeddingProvider(storage=storage, settings=config)
+            embeddings = embedding_provider.get_embeddings([text])
+
+            if not embeddings or len(embeddings) == 0:
+                raise ValueError("No embedding generated")
+
+            embedding = embeddings[0]  # Get the first (and only) embedding
+
             success = storage.update_chunk_embedding(chunk_id, embedding)
 
             if success:

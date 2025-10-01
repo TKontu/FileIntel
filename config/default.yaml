@@ -19,24 +19,23 @@ llm:
 
 rag:
   strategy: "separate" # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
-  chunk_size: 1200  # ~300 tokens (safe conservative limit for 512 token model)
-  chunk_overlap: 100
-  target_sentences: 4  # Target sentences per Vector RAG chunk (conservative)
-  overlap_sentences: 1  # Sentences to overlap between Vector RAG chunks (forward overlap)
   embedding_provider: "openai"
   embedding_model: "bge-large-en"
-  embedding_max_tokens: 400  # Maximum tokens for embedding input (conservative safety margin below 512 token model limit)
+  embedding_max_tokens: 450  # Maximum tokens for embedding input (optimal for 512 token model limit)
+  enable_two_tier_chunking: false  # Enable two-tier vector/graph chunking system
+  chunking:
+    chunk_size: 800  #characters, ~200 tokens (safe conservative limit for 512 token model)
+    chunk_overlap: 80
+    target_sentences: 3  # Target sentences per Vector RAG chunk (conservative)
+    overlap_sentences: 1  # Sentences to overlap between Vector RAG chunks (forward overlap)
 
 graphrag:
-  # Microsoft GraphRAG settings
+  # Microsoft GraphRAG settings - uses same chunks as Vector RAG
   llm_model: "gemma3-4B"  # Match main LLM model
   embedding_model: "bge-large-en"  # Match embedding model
-  chunk_size: 1400  # ~350 tokens (conservative limit for 512 token model)
-  chunk_overlap: 100
-  target_sentences: 12  # Target sentences per GraphRAG chunk (conservative)
-  overlap_sentences: 2  # Sentences to overlap between GraphRAG chunks (forward overlap)
+  # NOTE: GraphRAG uses existing Vector RAG chunks, no separate chunking needed
   community_levels: 3  # Good for hierarchical community detection
-  max_tokens: 12000  # Sufficient for complex analysis
+  max_tokens: 12000  #characters, Sufficient for complex analysis
   # Index storage
   index_base_path: "./graphrag_indices"
   cache:
@@ -75,11 +74,11 @@ graphrag:
     batch_timeout: 30               # Timeout per batch (seconds)
     fallback_to_sequential: true    # Fallback if batching fails
   # Embedding configuration
-  embedding_batch_max_tokens: 350   # Max tokens per embedding request (safe for 512 token model limit)
+  embedding_batch_max_tokens: 450   # Max tokens per embedding request (optimal for 512 token model limit)
 
 document_processing:
-  chunk_size: 1800  # ~450 tokens (safe for 500 token embedding limit)
-  overlap: 200
+  chunk_size: 800  # ~200 tokens (matches RAG chunk size for consistency)
+  overlap: 80
   max_file_size: "300MB"
   supported_formats: ["pdf", "epub", "mobi"]
 

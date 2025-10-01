@@ -656,8 +656,14 @@ def build_graphrag_index_task(
                     "status": "failed",
                 }
 
-            # Get all chunks for the collection (more efficient than iterating documents)
-            all_chunks = storage.get_all_chunks_for_collection(collection_id)
+            # Get chunks for GraphRAG processing
+            # For two-tier chunking, use graph chunks; otherwise use all chunks
+            config = get_config()
+            if getattr(config.rag, 'enable_two_tier_chunking', False):
+                all_chunks = storage.get_chunks_by_type_for_collection(collection_id, 'graph')
+                logger.info(f"Two-tier chunking enabled: using graph chunks for GraphRAG indexing")
+            else:
+                all_chunks = storage.get_all_chunks_for_collection(collection_id)
 
             if not all_chunks:
                 return {

@@ -302,6 +302,23 @@ class DocumentStorage:
         )
         return chunks
 
+    def get_chunks_by_type_for_collection(self, collection_id: str, chunk_type: str = None):
+        """Get chunks for a collection filtered by chunk type."""
+        query = (
+            self.db.query(DocumentChunk)
+            .join(Document)
+            .filter(Document.collection_id == collection_id)
+        )
+
+        if chunk_type:
+            # Filter by chunk_type in metadata using JSON operations
+            query = query.filter(
+                DocumentChunk.chunk_metadata.op('->')('chunk_type').astext == chunk_type
+            )
+
+        chunks = query.order_by(DocumentChunk.document_id, DocumentChunk.position).all()
+        return chunks
+
     def update_chunk_embedding(self, chunk_id: str, embedding: List[float]):
         """Update chunk with embedding vector."""
         chunk = (
