@@ -258,6 +258,13 @@ class DocumentStorage:
 
             # Store additional chunk data in metadata
             metadata = chunk_metadata or {}
+
+            # Preserve ALL metadata from chunking process (pages, extraction_methods, etc.)
+            chunk_meta = chunk_data.get("metadata", {})
+            if chunk_meta:
+                metadata.update(chunk_meta)
+
+            # Add token and position info (may override chunk_meta if present)
             metadata.update(
                 {
                     "token_count": chunk_data.get("token_count", 0),

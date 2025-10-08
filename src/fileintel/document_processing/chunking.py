@@ -145,7 +145,7 @@ class TextChunker:
 
     def _find_sentence_pages(self, sentence_obj: Dict[str, Any], full_text: str,
                             page_mappings: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Find which pages a sentence spans across."""
+        """Find which pages a sentence spans across and collect associated metadata."""
         sentence_text = sentence_obj['text']
 
         # Find sentence position in full text
@@ -155,8 +155,13 @@ class TextChunker:
 
         sentence_end = sentence_start + len(sentence_text)
 
-        # Find overlapping pages
+        # Find overlapping pages and collect metadata
         pages_involved = set()
+        extraction_methods = []
+        section_titles = []
+        section_paths = []
+        all_headers = []
+
         for page_info in page_mappings:
             page_start = page_info.get('start_pos', 0)
             page_end = page_info.get('end_pos', 0)
@@ -166,13 +171,49 @@ class TextChunker:
             if page_number and sentence_start < page_end and sentence_end > page_start:
                 pages_involved.add(page_number)
 
+                # Collect metadata from this page
+                if page_info.get('extraction_method'):
+                    extraction_methods.append(page_info['extraction_method'])
+
+                if page_info.get('section_title'):
+                    section_titles.append(page_info['section_title'])
+
+                if page_info.get('section_path'):
+                    section_paths.append(page_info['section_path'])
+
+                if page_info.get('markdown_headers'):
+                    all_headers.extend(page_info['markdown_headers'])
+
         pages_list = sorted(list(pages_involved))
         page_range = f"{min(pages_list)}-{max(pages_list)}" if len(pages_list) > 1 else str(pages_list[0]) if pages_list else None
 
-        return {
+        # Build result with enhanced metadata
+        result = {
             'pages': pages_list,
             'page_range': page_range
         }
+
+        # Add section metadata if available (use first/primary values to avoid duplication)
+        if extraction_methods:
+            result['extraction_methods'] = list(set(extraction_methods))  # Unique values
+
+        if section_titles:
+            result['section_title'] = section_titles[0]  # Use first (primary) section title
+
+        if section_paths:
+            result['section_path'] = section_paths[0]  # Use first (primary) path
+
+        if all_headers:
+            # Deduplicate headers by text while preserving order
+            seen_texts = set()
+            unique_headers = []
+            for header in all_headers:
+                if header['text'] not in seen_texts:
+                    seen_texts.add(header['text'])
+                    unique_headers.append(header)
+            result['markdown_headers'] = unique_headers
+
+        return result
 
     def create_vector_chunks_from_sentences(self, sentence_objects: List[Dict[str, Any]],
                                            target_tokens: int = 300, max_tokens: int = 400,
@@ -207,15 +248,60 @@ class TextChunker:
                 chunk_text = ' '.join(s['text'] for s in current_chunk_sentences)
                 sentence_ids = [s['id'] for s in current_chunk_sentences]
 
-                # Aggregate page information
+                # Aggregate page information and metadata
                 all_pages = set()
+                all_extraction_methods = []
+                section_titles = []
+                section_paths = []
+                all_headers = []
+
                 for sentence in current_chunk_sentences:
-                    if 'page_info' in sentence and sentence['page_info']['pages']:
-                        all_pages.update(sentence['page_info']['pages'])
+                    if 'page_info' in sentence:
+                        page_info = sentence['page_info']
+
+                        if page_info.get('pages'):
+                            all_pages.update(page_info['pages'])
+
+                        if page_info.get('extraction_methods'):
+                            all_extraction_methods.extend(page_info['extraction_methods'])
+
+                        if page_info.get('section_title'):
+                            section_titles.append(page_info['section_title'])
+
+                        if page_info.get('section_path'):
+                            section_paths.append(page_info['section_path'])
+
+                        if page_info.get('markdown_headers'):
+                            all_headers.extend(page_info['markdown_headers'])
 
                 pages_list = sorted(list(all_pages))
                 page_range = (f"{min(pages_list)}-{max(pages_list)}" if len(pages_list) > 1
                              else str(pages_list[0]) if pages_list else None)
+
+                # Build page_info with enhanced metadata
+                page_info_dict = {
+                    'pages': pages_list,
+                    'page_range': page_range
+                }
+
+                if all_extraction_methods:
+                    page_info_dict['extraction_methods'] = list(set(all_extraction_methods))
+
+                if section_titles:
+                    page_info_dict['section_title'] = section_titles[0]  # Use first/primary
+
+                if section_paths:
+                    page_info_dict['section_path'] = section_paths[0]  # Use first/primary
+
+                if all_headers:
+                    # Deduplicate headers by text
+                    seen_texts = set()
+                    unique_headers = []
+                    for header in all_headers:
+                        if header['text'] not in seen_texts:
+                            seen_texts.add(header['text'])
+                            unique_headers.append(header)
+                    page_info_dict['markdown_headers'] = unique_headers
 
                 chunk = {
                     'id': f'vec_{len(chunks)}',
@@ -225,10 +311,7 @@ class TextChunker:
                     'token_count': total_tokens,
                     'sentence_count': len(current_chunk_sentences),
                     'sentences': current_chunk_sentences,
-                    'page_info': {
-                        'pages': pages_list,
-                        'page_range': page_range
-                    }
+                    'page_info': page_info_dict
                 }
                 chunks.append(chunk)
 
@@ -279,15 +362,60 @@ class TextChunker:
 
             deduplicated_text = ' '.join(s['text'] for s in deduplicated_sentences)
 
-            # Aggregate page information from all unique sentences
+            # Aggregate page information and metadata from all unique sentences
             all_pages = set()
+            all_extraction_methods = []
+            section_titles = []
+            section_paths = []
+            all_headers = []
+
             for sentence in deduplicated_sentences:
-                if 'page_info' in sentence and sentence['page_info']['pages']:
-                    all_pages.update(sentence['page_info']['pages'])
+                if 'page_info' in sentence:
+                    page_info = sentence['page_info']
+
+                    if page_info.get('pages'):
+                        all_pages.update(page_info['pages'])
+
+                    if page_info.get('extraction_methods'):
+                        all_extraction_methods.extend(page_info['extraction_methods'])
+
+                    if page_info.get('section_title'):
+                        section_titles.append(page_info['section_title'])
+
+                    if page_info.get('section_path'):
+                        section_paths.append(page_info['section_path'])
+
+                    if page_info.get('markdown_headers'):
+                        all_headers.extend(page_info['markdown_headers'])
 
             pages_list = sorted(list(all_pages))
             page_range = (f"{min(pages_list)}-{max(pages_list)}" if len(pages_list) > 1
                          else str(pages_list[0]) if pages_list else None)
+
+            # Build page_info with enhanced metadata
+            page_info_dict = {
+                'pages': pages_list,
+                'page_range': page_range
+            }
+
+            if all_extraction_methods:
+                page_info_dict['extraction_methods'] = list(set(all_extraction_methods))
+
+            if section_titles:
+                page_info_dict['section_title'] = section_titles[0]  # Use first/primary
+
+            if section_paths:
+                page_info_dict['section_path'] = section_paths[0]  # Use first/primary
+
+            if all_headers:
+                # Deduplicate headers by text
+                seen_texts = set()
+                unique_headers = []
+                for header in all_headers:
+                    if header['text'] not in seen_texts:
+                        seen_texts.add(header['text'])
+                        unique_headers.append(header)
+                page_info_dict['markdown_headers'] = unique_headers
 
             graph_chunk = {
                 'id': f'graph_{len(graph_chunks)}',
@@ -299,10 +427,7 @@ class TextChunker:
                 'token_count': total_tokens,
                 'original_chunks_count': len(chunk_group),
                 'sentences': deduplicated_sentences,
-                'page_info': {
-                    'pages': pages_list,
-                    'page_range': page_range
-                },
+                'page_info': page_info_dict,
                 'deduplication_stats': {
                     'original_sentence_count': sum(len(c.get('sentences', [])) for c in chunk_group),
                     'deduplicated_sentence_count': len(unique_sentence_ids),

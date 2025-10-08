@@ -64,6 +64,7 @@ class TaskService:
             return {
                 "task_id": task_id,
                 "state": TaskState.FAILURE.value,
+                "status": "FAILURE",  # Add missing status field for consistency
                 "error": f"Failed to get task status: {str(e)}",
             }
 

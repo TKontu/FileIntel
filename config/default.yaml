@@ -82,6 +82,29 @@ document_processing:
   max_file_size: "300MB"
   supported_formats: ["pdf", "epub", "mobi"]
 
+  # PDF processor selection: "mineru" or "traditional" (auto-fallback on failure)
+  primary_pdf_processor: "mineru"
+
+  # MinerU OCR settings
+  mineru:
+    # API type: "selfhosted" for FastAPI or "commercial" for async task API
+    api_type: "selfhosted"
+
+    # Common settings for both API types
+    base_url: "http://192.168.0.136:8000"
+    timeout: 600
+    enable_formula: false
+    enable_table: true
+    language: "en"
+
+    # Commercial API specific settings (used when api_type="commercial")
+    api_token: ${MINERU_API_TOKEN:-}
+    poll_interval: 10
+    max_retries: 3
+    model_version: "vlm"
+    shared_folder_path: "/shared/uploads"
+    shared_folder_url_prefix: "file:///shared/uploads"
+
 ocr:
   primary_engine: "pdf_extract_kit"
   fallback_engines: ["tesseract", "google_vision"]

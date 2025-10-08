@@ -54,3 +54,4 @@ src/graphrag/*
 CLAUDE.md
 graphrag_indices/*
 *.tar
+/examples/

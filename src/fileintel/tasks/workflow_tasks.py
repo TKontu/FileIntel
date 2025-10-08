@@ -79,6 +79,15 @@ def complete_collection_analysis(
                 for i, file_path in enumerate(file_paths)
             ]
 
+            # Validate we have documents to process
+            if not document_signatures:
+                storage.update_collection_status(collection_id, "failed")
+                return {
+                    "collection_id": collection_id,
+                    "error": "No valid documents to process",
+                    "status": "failed"
+                }
+
             # Create completion callback for collection status update
             # Note: workflow_results will be passed automatically as first arg by chord
             completion_callback = mark_collection_completed.s(collection_id)

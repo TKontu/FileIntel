@@ -13,6 +13,7 @@ from celery import group
 from fileintel.celery_config import app
 from .base import BaseFileIntelTask
 from fileintel.core.config import get_config
+from fileintel.document_processing.chunking import TextChunker
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
         PDFProcessor as TraditionalPDFProcessor,
         validate_file_for_processing,
     )
+    from fileintel.document_processing.processors.mineru_selfhosted import MinerUSelfHostedProcessor
+    from fileintel.document_processing.processors.mineru_commercial import MinerUEnhancedProcessor
     from fileintel.document_processing.processors.epub_processor import (
         EPUBReader as EPUBProcessor,
     )
@@ -54,9 +57,42 @@ def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
     # Validate file before processing
     validate_file_for_processing(path, extension)
 
+    # Get configuration for processor selection
+    config = get_config()
+
+    # Select PDF processor based on configuration
+    def get_pdf_processor():
+        if config.document_processing.primary_pdf_processor == "mineru":
+            # Select MinerU processor based on API type - fail fast on invalid config
+            mineru_api_type = config.document_processing.mineru.api_type
+            if mineru_api_type == "selfhosted":
+                return MinerUSelfHostedProcessor
+            elif mineru_api_type == "commercial":
+                return MinerUEnhancedProcessor
+            else:
+                # Fail fast on invalid configuration instead of defaulting
+                valid_types = ["selfhosted", "commercial"]
+                raise ValueError(
+                    f"Invalid MinerU API type: '{mineru_api_type}'. "
+                    f"Must be one of: {valid_types}. "
+                    f"Check document_processing.mineru.api_type in configuration."
+                )
+        elif config.document_processing.primary_pdf_processor == "traditional":
+            return TraditionalPDFProcessor
+        else:
+            # Also fail fast on invalid primary processor
+            valid_processors = ["mineru", "traditional"]
+            raise ValueError(
+                f"Invalid primary PDF processor: '{config.document_processing.primary_pdf_processor}'. "
+                f"Must be one of: {valid_processors}. "
+                f"Check document_processing.primary_pdf_processor in configuration."
+            )
+
+    pdf_processor = get_pdf_processor()
+
     # Direct processor mapping - eliminates complex selection logic
     processors = {
-        ".pdf": TraditionalPDFProcessor,
+        ".pdf": pdf_processor,
         ".epub": EPUBProcessor,
         ".mobi": MOBIProcessor,
     }
@@ -89,7 +125,10 @@ def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
                 "end_pos": current_position + len(text_content),
                 "page_number": elem_metadata.get("page_number"),
                 "chapter": elem_metadata.get("chapter"),
-                "extraction_method": elem_metadata.get("extraction_method")
+                "extraction_method": elem_metadata.get("extraction_method"),
+                "section_title": elem_metadata.get("section_title"),
+                "section_path": elem_metadata.get("section_path"),
+                "markdown_headers": elem_metadata.get("markdown_headers")
             }
             page_mappings.append(page_info)
             current_position += len(text_content) + 1  # +1 for space separator
@@ -114,8 +153,6 @@ def clean_and_chunk_text(
     Returns:
         List of chunk dictionaries with text and metadata, or tuple with full result if return_full_result=True
     """
-    from fileintel.document_processing.chunking import TextChunker
-
     # Clean text first
     text = text.encode("utf-8", "ignore").decode("utf-8")
 
@@ -134,15 +171,34 @@ def clean_and_chunk_text(
                    for i, chunk in enumerate(vector_chunks)]
 
         # Page mappings already integrated in two-tier mode
-        return [{"text": chunk['text'],
-                "metadata": {
-                    "position": i,
-                    "chunk_type": "vector",
-                    "pages": chunk['page_info']['pages'],
-                    "page_range": chunk['page_info']['page_range'],
-                    "token_count": chunk['token_count'],
-                    "sentence_count": chunk['sentence_count']
-                }} for i, chunk in enumerate(vector_chunks)]
+        chunk_list = []
+        for i, chunk in enumerate(vector_chunks):
+            page_info = chunk.get('page_info', {})
+            metadata = {
+                "position": i,
+                "chunk_type": "vector",
+                "pages": page_info.get('pages', []),
+                "page_range": page_info.get('page_range'),
+                "token_count": chunk.get('token_count', 0),
+                "sentence_count": chunk.get('sentence_count', 0)
+            }
+
+            # Add enhanced metadata from page_info
+            if page_info.get('extraction_methods'):
+                metadata['extraction_methods'] = page_info['extraction_methods']
+
+            if page_info.get('section_title'):
+                metadata['section_title'] = page_info['section_title']
+
+            if page_info.get('section_path'):
+                metadata['section_path'] = page_info['section_path']
+
+            if page_info.get('markdown_headers'):
+                metadata['markdown_headers'] = page_info['markdown_headers']
+
+            chunk_list.append({"text": chunk['text'], "metadata": metadata})
+
+        return chunk_list
 
     # Traditional mode: extract chunks from result
     text_chunks = chunking_result.get('chunks', [])
@@ -168,25 +224,41 @@ def clean_and_chunk_text(
         # Update current position for next chunk search
         current_text_pos = chunk_end
 
-        # Find overlapping page mappings
+        # Find overlapping page mappings and collect metadata
         pages_involved = set()
         chapters_involved = set()
         extraction_methods = set()
+        section_titles = []
+        section_paths = []
+        all_headers = []
 
         for page_info in page_mappings:
             # Check if this page_info overlaps with the chunk
             # Use more generous overlap detection
-            page_start = page_info["start_pos"]
-            page_end = page_info["end_pos"]
+            page_start = page_info.get("start_pos", 0)
+            page_end = page_info.get("end_pos", 0)
 
             # Check for any overlap between chunk and page ranges
             if not (chunk_end <= page_start or chunk_start >= page_end):
-                if page_info["page_number"]:
+                # Collect basic metadata
+                if page_info.get("page_number"):
                     pages_involved.add(page_info["page_number"])
-                if page_info["chapter"]:
+
+                if page_info.get("chapter"):
                     chapters_involved.add(page_info["chapter"])
-                if page_info["extraction_method"]:
+
+                if page_info.get("extraction_method"):
                     extraction_methods.add(page_info["extraction_method"])
+
+                # Collect enhanced metadata
+                if page_info.get("section_title"):
+                    section_titles.append(page_info["section_title"])
+
+                if page_info.get("section_path"):
+                    section_paths.append(page_info["section_path"])
+
+                if page_info.get("markdown_headers"):
+                    all_headers.extend(page_info["markdown_headers"])
 
         # Build chunk metadata
         chunk_metadata = {
@@ -204,6 +276,23 @@ def clean_and_chunk_text(
 
         if extraction_methods:
             chunk_metadata["extraction_methods"] = list(extraction_methods)
+
+        # Add enhanced metadata
+        if section_titles:
+            chunk_metadata["section_title"] = section_titles[0]  # Use first/primary
+
+        if section_paths:
+            chunk_metadata["section_path"] = section_paths[0]  # Use first/primary
+
+        if all_headers:
+            # Deduplicate headers by text
+            seen_texts = set()
+            unique_headers = []
+            for header in all_headers:
+                if header['text'] not in seen_texts:
+                    seen_texts.add(header['text'])
+                    unique_headers.append(header)
+            chunk_metadata["markdown_headers"] = unique_headers
 
         chunk_results.append({
             "text": chunk_text,
@@ -243,8 +332,6 @@ def get_graph_chunks_for_collection(collection_id: str) -> List[Dict[str, Any]]:
 @app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
 def validate_chunking_system(self, sample_text: str = None) -> Dict[str, Any]:
     """Validate the two-tier chunking system with comprehensive tests."""
-    from fileintel.document_processing.chunking import TextChunker
-
     # Use sample text if none provided
     if not sample_text:
         sample_text = """

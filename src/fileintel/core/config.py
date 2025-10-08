@@ -122,6 +122,27 @@ class RAGSettings(BaseModel):
     )
 
 
+class MinerUSettings(BaseModel):
+    # API type selection: "selfhosted" for FastAPI or "commercial" for async task API
+    api_type: str = Field(default="selfhosted")
+
+    # Common settings for both API types
+    base_url: str = Field(default="http://192.168.0.136:8000")
+    timeout: int = Field(default=600)
+    enable_formula: bool = Field(default=False)
+    enable_table: bool = Field(default=True)
+    language: str = Field(default="en")
+
+    # Commercial API specific settings (used when api_type="commercial")
+    # Optional fields that can be None (for self-hosted API which doesn't need them)
+    api_token: Optional[str] = Field(default="")
+    poll_interval: int = Field(default=10)
+    max_retries: int = Field(default=3)
+    model_version: str = Field(default="vlm")
+    shared_folder_path: str = Field(default="/shared/uploads")
+    shared_folder_url_prefix: str = Field(default="file:///shared/uploads")
+
+
 class DocumentProcessingSettings(BaseModel):
     chunk_size: int = Field(default=800)
     overlap: int = Field(default=80)
@@ -129,11 +150,15 @@ class DocumentProcessingSettings(BaseModel):
     supported_formats: List[str] = Field(
         default_factory=lambda: ["pdf", "epub", "mobi"]
     )
+    # PDF processor selection (always falls back to traditional on MinerU failure)
+    primary_pdf_processor: str = Field(default="mineru")
     # OCR settings consolidated from separate OCRSettings class
     ocr_primary_engine: str = Field(default="pdf_extract_kit")
     ocr_fallback_engines: List[str] = Field(
         default_factory=lambda: ["tesseract", "google_vision"]
     )
+    # MinerU configuration
+    mineru: MinerUSettings = Field(default_factory=MinerUSettings)
 
 
 class LoggingSettings(BaseModel):
