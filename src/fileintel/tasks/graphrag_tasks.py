@@ -97,14 +97,24 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
             "api_key": config.get("llm.openai.api_key"),
             "type": "openai_chat",
             "model": config.rag.llm_model,
+            "api_base": config.get("llm.openai.base_url"),  # Custom API endpoint
             "max_tokens": config.rag.max_tokens,
             "temperature": config.get("llm.temperature", 0.1),
+            # Resilience settings matching Vector RAG configuration
+            "max_retries": 3,  # Match Vector RAG retry count
+            "request_timeout": 300,  # 5 minutes per LLM request (community summarization can be slow)
+            "concurrent_requests": config.rag.async_processing.max_concurrent_requests,  # Match Vector RAG concurrency (8)
         },
         "embeddings": {
             "api_key": config.get("llm.openai.api_key"),
             "type": "openai_embedding",
             "model": config.rag.embedding_model,
+            "api_base": config.get("llm.openai.embedding_base_url") or config.get("llm.openai.base_url"),  # Custom API endpoint
             "batch_size": config.rag.embedding_batch_max_tokens,
+            # Resilience settings matching Vector RAG configuration
+            "max_retries": 3,  # Match Vector RAG retry count
+            "request_timeout": config.rag.async_processing.batch_timeout,  # Match Vector RAG timeout (30s)
+            "concurrent_requests": config.rag.async_processing.max_concurrent_requests,  # Match Vector RAG concurrency (8)
         },
         "chunks": {
             "size": config.rag.chunking.chunk_size,
@@ -121,9 +131,9 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
     base=BaseFileIntelTask,
     bind=True,
     queue="graphrag_indexing",
-    soft_time_limit=1800,
-    time_limit=3600,
-)  # 30 min soft, 1 hour hard limit
+    soft_time_limit=86400,  # 24 hours - GraphRAG indexing can be very slow for large collections
+    time_limit=90000,       # 25 hours hard limit
+)
 def build_graph_index(
     self, documents: List[Dict[str, Any]], collection_id: str, **kwargs
 ) -> Dict[str, Any]:
@@ -604,14 +614,20 @@ def get_graphrag_index_status(self, collection_id: str) -> Dict[str, Any]:
     base=BaseFileIntelTask,
     bind=True,
     queue="graphrag_indexing",
-    soft_time_limit=1800,
-    time_limit=3600,
+    soft_time_limit=86400,  # 24 hours - GraphRAG indexing can be very slow for large collections
+    time_limit=90000,       # 25 hours hard limit
 )
 def build_graphrag_index_task(
     self, collection_id: str, force_rebuild: bool = False
 ) -> Dict[str, Any]:
     """
     Build GraphRAG index for a collection from existing document chunks.
+
+    Note: GraphRAG indexing can take hours for large collections due to:
+    - Entity extraction for each chunk (~1-3s per chunk)
+    - Community detection algorithms (scales with relationship count)
+    - Community summarization (recursive, multi-level)
+    - LLM API latency and rate limits
 
     Args:
         collection_id: Collection identifier
