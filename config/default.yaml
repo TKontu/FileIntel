@@ -1,6 +1,6 @@
 llm:
   provider: "openai"
-  model: "gemma3-4B"
+  model: "gemma3-12b-awq"
   context_length: 128000
   temperature: 0.1
   rate_limit: 999
@@ -10,7 +10,7 @@ llm:
     open_duration: 30
   openai:
     base_url: "http://192.168.0.247:9003/v1"
-    embedding_base_url: "http://192.168.0.247:9003/v1"  # Separate embedding server (optional - defaults to base_url if not set)
+    embedding_base_url: "http://192.168.0.136:9003/v1"  # Separate embedding server (optional - defaults to base_url if not set)
     api_key: ${OPENAI_API_KEY:-ollama}  # Use environment variable or default to "ollama" for local setups
     rate_limit: 999
   anthropic:
@@ -31,7 +31,7 @@ rag:
 
 graphrag:
   # Microsoft GraphRAG settings - uses same chunks as Vector RAG
-  llm_model: "gemma3-4B"  # Match main LLM model
+  llm_model: "gemma3-12b-awq"  # Match main LLM model
   embedding_model: "bge-large-en"  # Match embedding model
   # NOTE: GraphRAG uses existing Vector RAG chunks, no separate chunking needed
   community_levels: 3  # Good for hierarchical community detection
@@ -49,7 +49,7 @@ graphrag:
   auto_index_after_upload: true  # NEW: Enable background GraphRAG indexing
   auto_index_delay_seconds: 30   # NEW: Wait time after vector indexing completes
   # Query routing
-  query_classification_model: "gemma3-4B"
+  query_classification_model: "gemma3-12b-awq"
   hybrid_query_threshold: 0.7
   # Fallback keyword classification
   graph_keywords:

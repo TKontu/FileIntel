@@ -388,6 +388,16 @@ def incremental_collection_update(
         try:
             storage.update_collection_status(collection_id, "processing")
 
+            # Validate we have new documents to process
+            if not new_file_paths:
+                storage.update_collection_status(collection_id, "completed")
+                return {
+                    "collection_id": collection_id,
+                    "error": "No new documents to process",
+                    "status": "completed",
+                    "message": "No new file paths provided for incremental update"
+                }
+
             # Process new documents in parallel (GROUP)
             new_doc_jobs = group(
                 process_document.s(

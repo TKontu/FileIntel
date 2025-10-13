@@ -100,9 +100,10 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
             "api_base": config.get("llm.openai.base_url"),  # Custom API endpoint
             "max_tokens": config.rag.max_tokens,
             "temperature": config.get("llm.temperature", 0.1),
-            # Resilience settings matching Vector RAG configuration
-            "max_retries": 3,  # Match Vector RAG retry count
-            "request_timeout": 300,  # 5 minutes per LLM request (community summarization can be slow)
+            # Resilience settings - MORE aggressive than Vector RAG due to high failure cost
+            # GraphRAG indexing can take 24 hours; failure means losing ALL progress
+            "max_retries": 10,  # 10 retries (vs Vector RAG's 3) - GraphRAG failure is catastrophic
+            "request_timeout": 600,  # 10 minutes per LLM request (community summarization can be very slow)
             "concurrent_requests": config.rag.async_processing.max_concurrent_requests,  # Match Vector RAG concurrency (8)
         },
         "embeddings": {
@@ -111,9 +112,12 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
             "model": config.rag.embedding_model,
             "api_base": config.get("llm.openai.embedding_base_url") or config.get("llm.openai.base_url"),  # Custom API endpoint
             "batch_size": config.rag.embedding_batch_max_tokens,
-            # Resilience settings matching Vector RAG configuration
-            "max_retries": 3,  # Match Vector RAG retry count
-            "request_timeout": config.rag.async_processing.batch_timeout,  # Match Vector RAG timeout (30s)
+            # Resilience settings - MORE aggressive than Vector RAG due to high failure cost
+            # GraphRAG indexing can take 24 hours; failure means losing ALL progress
+            "max_retries": 10,  # 10 retries (vs Vector RAG's 3) - GraphRAG failure is catastrophic
+            "request_timeout": 60,  # 60s timeout (vs Vector RAG's 30s) - give more time for transient issues
+            # Connection pool race condition fixed in models.py with custom httpx client
+            # See: docs/graphrag_embedding_todo.md for root cause analysis
             "concurrent_requests": config.rag.async_processing.max_concurrent_requests,  # Match Vector RAG concurrency (8)
         },
         "chunks": {

@@ -54,7 +54,7 @@ python3 -m py_compile src/fileintel/tasks/document_tasks.py
 
 ---
 
-## Issue 2: AsyncResult Chord Error ✅ FIXED
+## Issue 2: AsyncResult Chord Error ✅ FIXED (TWO LOCATIONS)
 
 ### Error Message
 ```
@@ -62,11 +62,17 @@ python3 -m py_compile src/fileintel/tasks/document_tasks.py
 'AsyncResult' object has no attribute 'apply_async'
 ```
 
+**UPDATE 2025-10-09**: Error reappeared! Found a SECOND location with the same bug.
+
 ### Root Cause
 
-**File**: `src/fileintel/tasks/workflow_tasks.py:89-93`
+**File 1**: `src/fileintel/tasks/workflow_tasks.py:89-93` ✅ **FIXED**
 
 Celery chords fail when constructed with an empty signatures list. The workflow code didn't validate that `document_signatures` was non-empty before constructing the chord:
+
+**File 2**: `src/fileintel/tasks/workflow_tasks.py:408` ✅ **FIXED**
+
+The `incremental_collection_update` function had the SAME bug - creating a chord without validating `new_file_paths` was non-empty:
 
 ```python
 # Lines 72-80 - Creates signatures list
@@ -102,16 +108,30 @@ When `file_paths` is empty or all files fail validation:
 
 ### Fix Applied
 
-**Added validation before chord construction**:
+**Fix 1: Added validation in `complete_collection_analysis`** (lines 82-89):
 
 ```python
-# Lines 82-89 - NEW: Validate non-empty before chord
+# Validate we have documents to process
 if not document_signatures:
     storage.update_collection_status(collection_id, "failed")
     return {
         "collection_id": collection_id,
         "error": "No valid documents to process",
         "status": "failed"
+    }
+```
+
+**Fix 2: Added validation in `incremental_collection_update`** (lines 391-399):
+
+```python
+# Validate we have new documents to process
+if not new_file_paths:
+    storage.update_collection_status(collection_id, "completed")
+    return {
+        "collection_id": collection_id,
+        "error": "No new documents to process",
+        "status": "completed",
+        "message": "No new file paths provided for incremental update"
     }
 ```
 
@@ -138,12 +158,14 @@ python3 -m py_compile src/fileintel/tasks/workflow_tasks.py
 ### 2. `src/fileintel/tasks/workflow_tasks.py`
 
 **Changes**:
-- Lines 82-89: Added validation for empty `document_signatures`
+- Lines 82-89: Added validation for empty `document_signatures` in `complete_collection_analysis`
+- Lines 391-399: Added validation for empty `new_file_paths` in `incremental_collection_update` (**NEW FIX**)
 
 **Impact**:
 - Graceful failure when no documents to process
 - Clear error message instead of cryptic AsyncResult error
-- Collection status properly set to "failed"
+- Collection status properly set to "failed" or "completed"
+- **Fixed second location** where same bug could occur
 
 ---
 
@@ -192,7 +214,8 @@ curl -X POST http://localhost:8000/api/v2/collections/empty/process \
 - ✓ Run `python3 -m py_compile` before commit
 
 **For Celery workflows**:
-- ✓ Validate empty lists before creating groups/chords
+- ✓ Validate empty lists before creating groups/chords **in ALL functions**
+- ✓ Search codebase for `chord(` pattern and verify each has validation
 - ✓ Add meaningful error messages for invalid inputs
 - ✓ Set appropriate collection status on failure
 - ✓ Test with edge cases (empty collections, no files, all failures)
