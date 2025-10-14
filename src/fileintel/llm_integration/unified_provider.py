@@ -174,7 +174,7 @@ class UnifiedLLMProvider:
 
         # Initialize HTTP client with appropriate timeout
         self.http_client = httpx.Client(
-            timeout=httpx.Timeout(300.0),  # Increased from 60s to 5 minutes for gemma3-4B
+            timeout=httpx.Timeout(300.0),  # Increased from 60s to 5 minutes
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
 
@@ -204,7 +204,7 @@ class UnifiedLLMProvider:
                 or self.config.llm.base_url
                 or "https://api.openai.com/v1"
             )
-            self.default_model = self.config.llm.model or "gemma3-4B"
+            self.default_model = self.config.llm.model or "gemma3-12b-awq"
 
         elif self.provider_type == LLMProviderType.ANTHROPIC:
             self.api_key = self.config.llm.anthropic.api_key

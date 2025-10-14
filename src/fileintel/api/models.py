@@ -103,6 +103,7 @@ class TaskStatusResponse(BaseModel):
     """Response model for task status queries."""
 
     task_id: str = Field(..., description="Task identifier")
+    task_name: str = Field(..., description="Name of the task")
     status: TaskState = Field(..., description="Current task status")
     result: Optional[Dict[str, Any]] = Field(
         None, description="Task result if completed"
@@ -173,6 +174,8 @@ class BatchTaskSubmissionResponse(BaseModel):
     batch_id: str = Field(..., description="Batch identifier")
     task_ids: List[str] = Field(..., description="Individual task identifiers")
     submitted_count: int = Field(..., description="Number of tasks submitted")
+    failed_count: int = Field(default=0, description="Number of tasks that failed to submit")
+    failures: List[dict] = Field(default_factory=list, description="Details of failed submissions")
     workflow_type: str = Field(..., description="Workflow execution type")
     estimated_duration: Optional[int] = Field(
         None, description="Estimated total duration"

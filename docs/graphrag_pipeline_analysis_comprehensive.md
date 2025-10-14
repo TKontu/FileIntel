@@ -151,7 +151,7 @@ entity = GraphRAGEntity(
 
 **Root Cause**: Inconsistent field naming convention across layers without validation
 
-#### ISSUE 2: Community Field Missing (CRITICAL)
+#### ✅ FIXED (Phase 4): ISSUE 2: Community Field Missing
 **Location**: `graphrag.py:96-99`
 
 **CLI Code Expects**:
@@ -377,7 +377,7 @@ if status.get("status") != "indexed":  # ⚠️ No validation of status value
 
 ### File: `/home/tuomo/code/fileintel/src/fileintel/tasks/graphrag_tasks.py`
 
-#### ISSUE 7: Async Function Called Synchronously (CRITICAL)
+#### ✅ FIXED (Phase 4): ISSUE 7: Async Function Called Synchronously
 **Location**: `graphrag_tasks.py:756`
 
 ```python

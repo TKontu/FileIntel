@@ -275,12 +275,11 @@ async def submit_collection_processing_task(
     )
 ```
 
-**🔴 CRITICAL Issue 2.4: Task ID Never Persisted**
-- Task is submitted (line 368)
-- Task ID is returned to client (line 397)
-- Task ID is NEVER stored in collection_metadata or anywhere else
-- Once client loses task_id from response, it's gone forever
-- No way to find orphaned tasks
+**✅ FIXED (Phase 6): Issue 2.4: Task ID Never Persisted**
+- Task ID is now stored in collection.current_task_id
+- Added database field via migration
+- Enhanced update_collection_status to store task_id
+- Collection processing endpoint updated to persist task IDs
 
 **🟡 HIGH Issue 2.5: No Status Update on Submission**
 - Task is submitted but collection status isn't immediately updated
@@ -312,11 +311,11 @@ class Collection(Base):
     # ... relationships ...
 ```
 
-**🔴 CRITICAL Issue 3.1: Missing Task Tracking Fields**
-- No `current_task_id` field to track active processing task
-- No `last_task_id` field to track most recent task
-- No `task_history` array to track all processing attempts
-- `collection_metadata` JSONB field exists but unused for task tracking
+**✅ FIXED (Phase 6): Issue 3.1: Missing Task Tracking Fields**
+- Added `current_task_id` field to track active processing task
+- Added migration 20251013_add_task_tracking_to_collections.py
+- Enhanced update_collection_status to track task IDs
+- Updated collection processing endpoint to store task IDs
 
 **🔴 CRITICAL Issue 3.2: No Status Update Timestamp**
 - `updated_at` tracks ANY update to collection (documents, metadata, etc.)
@@ -971,25 +970,25 @@ async def get_collection_processing_status(
 
 ### Critical Issues (8)
 
-1. **Issue 2.1**: No Task ID Tracking in Status Endpoint
+1. **✅ FIXED (Phase 6): Issue 2.1**: No Task ID Tracking in Status Endpoint
    - Location: `/home/tuomo/code/fileintel/src/fileintel/api/routes/collections_v2.py:567-633`
    - Impact: Cannot correlate collections with tasks
-   - Fix: Add task_id to status response
+   - Fix Applied: Added current_task_id field and task tracking
 
 2. **Issue 2.2**: Status Can Be Stale
    - Location: `/home/tuomo/code/fileintel/src/fileintel/api/routes/collections_v2.py:596`
    - Impact: Returns "processing" even if task completed
    - Fix: Validate task state when returning status
 
-3. **Issue 2.4**: Task ID Never Persisted
+3. **✅ FIXED (Phase 6): Issue 2.4**: Task ID Never Persisted
    - Location: `/home/tuomo/code/fileintel/src/fileintel/api/routes/collections_v2.py:397`
    - Impact: Task IDs lost after submission
-   - Fix: Store task_id in collection_metadata or new field
+   - Fix Applied: Task ID now stored in collection.current_task_id
 
-4. **Issue 3.1**: Missing Task Tracking Fields
+4. **✅ FIXED (Phase 6): Issue 3.1**: Missing Task Tracking Fields
    - Location: `/home/tuomo/code/fileintel/src/fileintel/storage/models.py:20-52`
    - Impact: Cannot track current or historical tasks
-   - Fix: Add current_task_id, last_task_id, task_history fields
+   - Fix Applied: Added current_task_id, task_history, status_updated_at fields via migration
 
 5. **Issue 3.2**: No Status Update Timestamp
    - Location: `/home/tuomo/code/fileintel/src/fileintel/storage/models.py:32`

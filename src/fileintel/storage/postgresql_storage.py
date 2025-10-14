@@ -59,9 +59,9 @@ class PostgreSQLStorage(StorageInterface):
         """Delete a collection."""
         return self.document_storage.delete_collection(collection_id)
 
-    def update_collection_status(self, collection_id: str, status: str) -> bool:
-        """Update collection processing status."""
-        return self.document_storage.update_collection_status(collection_id, status)
+    def update_collection_status(self, collection_id: str, status: str, task_id: str = None) -> bool:
+        """Update collection processing status with optional task tracking."""
+        return self.document_storage.update_collection_status(collection_id, status, task_id=task_id)
 
     # Document Operations (delegate to DocumentStorage)
     def create_document(

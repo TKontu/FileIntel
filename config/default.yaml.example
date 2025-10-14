@@ -1,6 +1,6 @@
 llm:
   provider: "openai"
-  model: "gemma3-4B"
+  model: "gemma3-12b-awq"
   max_tokens: 4000
   temperature: 0.1
   rate_limit: 60

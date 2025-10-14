@@ -116,13 +116,31 @@ class TaskAPIClient:
         process_immediately: bool = True,
     ) -> Dict[str, Any]:
         """Upload multiple documents using v2 upload-and-process endpoint."""
-        files = []
-        for file_path in file_paths:
-            files.append(
-                ("files", (os.path.basename(file_path), open(file_path, "rb")))
-            )
+        # Validate batch size doesn't exceed configured limit
+        from fileintel.core.config import get_config
+        from fileintel.core.validation import validate_batch_size
+        from pathlib import Path
 
+        config = get_config()
+        validate_batch_size(
+            file_paths,
+            config.batch_processing.max_upload_batch_size,
+            "files"
+        )
+
+        # Validate all files exist before opening any
+        for file_path in file_paths:
+            if not Path(file_path).exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+
+        file_handles = []
         try:
+            files = []
+            for file_path in file_paths:
+                fh = open(file_path, "rb")
+                file_handles.append(fh)  # Track for cleanup
+                files.append(("files", (os.path.basename(file_path), fh)))
+
             data = {
                 "process_immediately": str(process_immediately).lower(),
                 "build_graph": "true",
@@ -137,9 +155,12 @@ class TaskAPIClient:
                 data=data,
             )
         finally:
-            # Close file handles
-            for _, (_, file_handle) in files:
-                file_handle.close()
+            # Close file handles - guaranteed cleanup even if exception during opening
+            for fh in file_handles:
+                try:
+                    fh.close()
+                except Exception:
+                    pass  # Best effort cleanup
 
     # Task Operations (v2)
     def submit_collection_processing_task(
@@ -380,6 +401,12 @@ class TaskAPIClient:
         response = self._request(
             "POST", f"collections/{collection_identifier}/process", json=payload
         )
+
+        # Check for API error responses
+        if isinstance(response, dict) and not response.get("success", True):
+            error_msg = response.get("error", "Unknown error")
+            raise Exception(f"API error: {error_msg}")
+
         return response.get("data", response)
 
     def upload_and_process_document(

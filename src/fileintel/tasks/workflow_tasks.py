@@ -57,12 +57,11 @@ def complete_collection_analysis(
         self.update_progress(0, 6, "Orchestrating complete collection analysis")
 
         # Update collection status to processing
-        from fileintel.celery_config import get_shared_storage
+        from fileintel.celery_config import get_storage_context
         from fileintel.core.config import get_config
 
         config = get_config()
-        storage = get_shared_storage()
-        try:
+        with get_storage_context() as storage:
             storage.update_collection_status(collection_id, "processing")
 
             # Phase 1: Parallel document processing (GROUP)
@@ -163,51 +162,107 @@ def complete_collection_analysis(
                     "status": "processing_documents",
                     "message": f"Started processing {len(file_paths)} documents",
                 }
-        finally:
-            storage.close()
 
     except Exception as e:
         logger.error(f"Error in complete collection analysis: {e}")
 
-        # Update collection status to failed
+        # Update collection status to failed using context manager
         try:
-            storage = get_shared_storage()
-            storage.update_collection_status(collection_id, "failed")
-        except:
-            pass  # Don't fail the task if status update fails
+            from fileintel.celery_config import get_storage_context
+
+            with get_storage_context() as storage:
+                storage.update_collection_status(collection_id, "failed")
+        except Exception as status_error:
+            logger.error(f"Failed to update collection status after error: {status_error}")
 
         return {"collection_id": collection_id, "error": str(e), "status": "failed"}
 
 
 @app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
 def mark_collection_completed(
-    self, workflow_results, collection_id: str
+    self,
+    workflow_results: List[Dict[str, Any]],
+    collection_id: str
 ) -> Dict[str, Any]:
-    """
-    Mark collection as completed after all processing is done.
-    Called as callback after document processing and embedding generation.
+    """Mark collection as completed after all processing tasks finish.
+
+    This function is called automatically by Celery as a chord callback when
+    all parallel document processing tasks complete. It analyzes the results,
+    determines the final collection status, and updates the database.
+
+    Args:
+        self: Celery task instance (bound via bind=True)
+        workflow_results: List of results from document processing tasks.
+                         Automatically passed by Celery chord primitive.
+                         Each result is a dict with keys:
+                         - status: "success" or "failed"
+                         - document_id: ID of processed document
+                         - message: Processing message
+                         - (other task-specific fields)
+        collection_id: Collection identifier
+
+    Returns:
+        Dict containing:
+        - collection_id: The collection ID
+        - status: "completed" or "failed"
+        - workflow_results: Original results from all tasks
+
+    Note:
+        This function is called automatically by Celery when the chord
+        (parallel task group) completes. Do not call manually.
+
+    Example workflow_results:
+        [
+            {"status": "success", "document_id": "doc1", "message": "Processed"},
+            {"status": "failed", "document_id": "doc2", "message": "Parse error"},
+        ]
     """
     try:
-        from fileintel.celery_config import get_shared_storage
+        from fileintel.celery_config import get_storage_context
 
-        storage = get_shared_storage()
-        # Check if any document processing failed
-        has_failures = False
-        if isinstance(workflow_results, list):
-            has_failures = any(
-                result.get("status") == "failed"
-                for result in workflow_results
-                if isinstance(result, dict)
-            )
+        with get_storage_context() as storage:
+            # Enhanced failure detection: count successes and failures explicitly
+            success_count = 0
+            failure_count = 0
+            unknown_count = 0
 
-        final_status = "failed" if has_failures else "completed"
-        storage.update_collection_status(collection_id, final_status)
+            if isinstance(workflow_results, list):
+                for result in workflow_results:
+                    if isinstance(result, dict):
+                        status = result.get("status", "unknown")
+                        # Accept both "success" and "completed" as success indicators
+                        if status in ("success", "completed"):
+                            success_count += 1
+                        elif status == "failed":
+                            failure_count += 1
+                        else:
+                            # Unknown status treated as failure (fail-safe)
+                            unknown_count += 1
+                            failure_count += 1
+                            logger.warning(
+                                f"Document task returned unknown status '{status}' for collection {collection_id}"
+                            )
 
-        logger.info(f"Collection {collection_id} marked as {final_status}")
+            # Determine final status and message
+            if failure_count > 0:
+                final_status = "failed"
+                message = f"{failure_count} documents failed, {success_count} succeeded"
+                if unknown_count > 0:
+                    message += f" ({unknown_count} with unknown status)"
+            else:
+                final_status = "completed"
+                message = f"All {success_count} documents processed successfully"
+
+            storage.update_collection_status(collection_id, final_status)
+
+            logger.info(f"Collection {collection_id} marked as {final_status}: {message}")
 
         return {
             "collection_id": collection_id,
             "status": final_status,
+            "message": message,
+            "success_count": success_count,
+            "failure_count": failure_count,
             "workflow_results": workflow_results,
         }
 
@@ -216,13 +271,13 @@ def mark_collection_completed(
 
         # Attempt to update collection status to failed even if callback processing fails
         try:
-            from fileintel.celery_config import get_shared_storage
+            from fileintel.celery_config import get_storage_context
 
-            storage = get_shared_storage()
-            storage.update_collection_status(collection_id, "failed")
-            logger.info(
-                f"Updated collection {collection_id} status to failed due to callback error"
-            )
+            with get_storage_context() as storage:
+                storage.update_collection_status(collection_id, "failed")
+                logger.info(
+                    f"Updated collection {collection_id} status to failed due to callback error"
+                )
         except Exception as status_error:
             logger.error(
                 f"Failed to update collection status after callback error: {status_error}"
@@ -294,34 +349,35 @@ def generate_collection_embeddings_simple(
                 1, 3, f"Generating embeddings for {len(chunks)} chunks"
             )
 
-            # Create embedding jobs for all chunks - direct approach
+            # Create embedding jobs for all chunks
             embedding_jobs = group(
                 generate_and_store_chunk_embedding.s(chunk.id, chunk.chunk_text)
                 for chunk in chunks
             )
 
-            # Execute embeddings asynchronously (don't block with .get())
-            embedding_result = embedding_jobs.apply_async()
-
+            # Use chord to ensure completion callback runs AFTER all embeddings finish
+            # Fixed: Previously scheduled completion immediately, causing it to never run
             self.update_progress(
-                2, 3, "Embeddings started, calling completion callback"
-            )
-            completion_task = mark_collection_completed.apply_async(
-                args=[document_results, collection_id]
+                2, 3, "Starting embeddings with completion callback"
             )
 
-            self.update_progress(3, 3, "Collection processing tasks initiated")
+            completion_callback = mark_collection_completed.s(collection_id)
+            # embedding_jobs is already a group, use it directly
+            workflow = chord(embedding_jobs)(completion_callback)
+            workflow_result = workflow.apply_async()
 
-            # Return task IDs instead of blocking results
-            successful_embeddings = len(chunks)  # Assume all will succeed for now
+            self.update_progress(3, 3, "Collection processing workflow initiated")
+
+            logger.info(
+                f"Started chord workflow: {len(chunks)} embeddings → completion callback for collection {collection_id}"
+            )
 
             return {
                 "collection_id": collection_id,
                 "total_chunks": len(chunks),
-                "embeddings_task_id": embedding_result.id,
-                "completion_task_id": completion_task.id,
+                "workflow_task_id": workflow_result.id,
                 "status": "processing",
-                "message": f"Started embedding generation for {len(chunks)} chunks",
+                "message": f"Started embedding generation for {len(chunks)} chunks with completion callback",
             }
         finally:
             storage.close()
@@ -484,34 +540,21 @@ def update_collection_index(
         for doc in successful_docs:
             all_new_chunks.extend(doc.get("chunks", []))
 
-        if all_new_chunks:
-            # Generate embeddings for individual chunks using the existing pattern
-            from celery import group
+        # Build list of all async jobs that need to complete
+        from celery import group, chord
+        all_jobs = []
 
-            embedding_jobs = group(
+        if all_new_chunks:
+            # Generate embeddings for individual chunks
+            embedding_jobs = [
                 generate_and_store_chunk_embedding.s(f"temp_chunk_{i}", chunk_text)
                 for i, chunk_text in enumerate(all_new_chunks)
-            )
-            embedding_task = embedding_jobs.apply_async()
-
-            # Don't block - assume all embeddings will succeed for collection status
-            # The actual embeddings are stored in DB by individual tasks
-            new_embeddings = [
-                f"embedding_{i}" for i in range(len(all_new_chunks))
-            ]  # Placeholder list for counting
-
-            logger.info(f"Started embedding generation for {len(all_new_chunks)} chunks (task: {embedding_task.id})")
-        else:
-            new_embeddings = []
-
-        # Merge with existing embeddings if provided
-        if existing_embeddings:
-            total_embeddings = existing_embeddings + new_embeddings
-        else:
-            total_embeddings = new_embeddings
+            ]
+            all_jobs.extend(embedding_jobs)
+            logger.info(f"Added {len(all_new_chunks)} embedding jobs to workflow")
 
         # Update GraphRAG index if requested
-        self.update_progress(2, 3, "Updating GraphRAG index")
+        self.update_progress(2, 3, "Building update workflow")
 
         graph_docs = [
             {
@@ -521,36 +564,31 @@ def update_collection_index(
             for doc in successful_docs
         ]
 
-        # For incremental updates, we might want to rebuild the entire index
-        # In production, this could be optimized for true incremental updates
-        graph_task = build_graph_index.apply_async(
-            args=[graph_docs, collection_id]
+        # Add GraphRAG indexing job to the workflow
+        graph_job = build_graph_index.s(graph_docs, collection_id)
+        all_jobs.append(graph_job)
+
+        # Use chord to ensure all jobs complete before marking as done
+        completion_callback = finalize_incremental_update.s(
+            collection_id, len(successful_docs), len(all_new_chunks)
         )
-        logger.info(f"Started GraphRAG index update (task: {graph_task.id})")
 
-        # Update collection status to completed
-        from fileintel.celery_config import get_shared_storage
+        task_group = group(all_jobs)  # Pass list directly
+        workflow = chord(task_group)(completion_callback)
+        workflow_result = workflow.apply_async()
 
-        storage = get_shared_storage()
-        try:
-            storage.update_collection_status(collection_id, "completed")
+        logger.info(f"Started incremental update workflow with {len(all_jobs)} jobs for collection {collection_id}")
 
-            result = {
-                "collection_id": collection_id,
-                "new_documents_added": len(successful_docs),
-                "total_embeddings": len(total_embeddings),
-                "new_embeddings_generated": len(new_embeddings),
-                "graphrag_task_id": graph_task.id,
-                "status": "completed",
-            }
+        self.update_progress(3, 3, "Incremental update workflow initiated")
 
-            self.update_progress(3, 3, "Collection index update completed")
-            logger.info(
-                f"Collection {collection_id} incremental update completed and marked as completed"
-            )
-            return result
-        finally:
-            storage.close()
+        return {
+            "collection_id": collection_id,
+            "new_documents_added": len(successful_docs),
+            "workflow_task_id": workflow_result.id,
+            "embedding_jobs": len(all_new_chunks),
+            "status": "processing",
+            "message": f"Started incremental update with {len(all_jobs)} background jobs"
+        }
 
     except Exception as e:
         logger.error(f"Error updating collection index: {e}")
@@ -570,6 +608,59 @@ def update_collection_index(
         return {"collection_id": collection_id, "error": str(e), "status": "failed"}
 
 
+@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+def finalize_incremental_update(
+    self, job_results, collection_id: str, documents_added: int, embeddings_count: int
+) -> Dict[str, Any]:
+    """
+    Finalize incremental collection update after all background jobs complete.
+
+    This is called as a chord callback after embeddings and GraphRAG indexing finish.
+
+    Args:
+        job_results: Results from all background jobs (embeddings + graphrag)
+        collection_id: Collection being updated
+        documents_added: Number of documents added
+        embeddings_count: Number of embeddings generated
+
+    Returns:
+        Dict with finalization status
+    """
+    try:
+        from fileintel.celery_config import get_storage_context
+
+        with get_storage_context() as storage:
+            storage.update_collection_status(collection_id, "completed")
+            logger.info(
+                f"Collection {collection_id} incremental update finalized: {documents_added} docs, {embeddings_count} embeddings"
+            )
+
+        return {
+            "collection_id": collection_id,
+            "documents_added": documents_added,
+            "embeddings_count": embeddings_count,
+            "status": "completed",
+            "message": "Incremental update completed successfully"
+        }
+
+    except Exception as e:
+        logger.error(f"Error finalizing incremental update for collection {collection_id}: {e}")
+
+        # Try to mark as failed
+        try:
+            from fileintel.celery_config import get_storage_context
+            with get_storage_context() as storage:
+                storage.update_collection_status(collection_id, "failed")
+        except Exception:
+            pass
+
+        return {
+            "collection_id": collection_id,
+            "error": str(e),
+            "status": "failed"
+        }
+
+
 @app.task(base=BaseFileIntelTask, bind=True, queue="llm_processing")
 def generate_collection_metadata(
     self, document_results, collection_id: str
@@ -587,7 +678,7 @@ def generate_collection_metadata(
     try:
         from fileintel.celery_config import get_shared_storage
         from .llm_tasks import extract_document_metadata
-        from celery import group
+        from celery import group, chord
 
         storage = get_shared_storage()
         try:
@@ -643,22 +734,26 @@ def generate_collection_metadata(
                             )
 
             if metadata_jobs:
-                # Execute metadata extraction asynchronously
-                metadata_result = group(metadata_jobs).apply_async()
+                # Use chord to ensure completion callback runs AFTER all metadata jobs finish
+                # Fixed: Previously scheduled completion immediately, causing race condition
+                self.update_progress(2, 3, "Starting metadata extraction with completion callback")
 
-                self.update_progress(2, 3, "Metadata extraction started, calling completion")
-                completion_task = mark_collection_completed.apply_async(
-                    args=[document_results, collection_id]
+                completion_callback = mark_collection_completed.s(collection_id)
+                task_group = group(metadata_jobs)  # Pass list directly
+                workflow = chord(task_group)(completion_callback)
+                workflow_result = workflow.apply_async()
+
+                logger.info(
+                    f"Started chord workflow: {len(metadata_jobs)} metadata jobs → completion callback for collection {collection_id}"
                 )
 
-                self.update_progress(3, 3, "Collection metadata extraction tasks initiated")
+                self.update_progress(3, 3, "Collection metadata extraction workflow initiated")
 
                 return {
                     "collection_id": collection_id,
                     "total_documents": len(successful_docs),
                     "metadata_jobs_started": len(metadata_jobs),
-                    "metadata_task_id": metadata_result.id,
-                    "completion_task_id": completion_task.id,
+                    "workflow_task_id": workflow_result.id,
                     "status": "processing",
                     "message": f"Started metadata extraction for {len(metadata_jobs)} documents",
                 }
@@ -720,7 +815,7 @@ def generate_collection_metadata_and_embeddings(
     try:
         from fileintel.celery_config import get_shared_storage
         from .llm_tasks import extract_document_metadata
-        from celery import group
+        from celery import group, chord
 
         storage = get_shared_storage()
         try:
@@ -769,54 +864,81 @@ def generate_collection_metadata_and_embeddings(
                                 )
                             )
 
+            # Step 2: Combine metadata and embedding jobs into one chord
+            self.update_progress(2, 4, "Building workflow with metadata and embeddings")
+
+            # Collect all jobs that need to complete
+            all_jobs = []
+
+            # Add metadata extraction jobs
             if metadata_jobs:
-                metadata_result = group(metadata_jobs).apply_async()
-                logger.info(f"Started metadata extraction for {len(metadata_jobs)} documents")
+                all_jobs.extend(metadata_jobs)
+                logger.info(f"Added {len(metadata_jobs)} metadata jobs to workflow")
 
-            # Step 2: Start embeddings generation
-            self.update_progress(2, 4, "Starting embeddings generation")
-
+            # Add embedding generation jobs
             chunks = storage.get_all_chunks_for_collection(collection_id)
             if chunks:
-                embedding_jobs = group(
+                embedding_jobs = [
                     generate_and_store_chunk_embedding.s(chunk.id, chunk.chunk_text)
                     for chunk in chunks
+                ]
+                all_jobs.extend(embedding_jobs)
+                logger.info(f"Added {len(chunks)} embedding jobs to workflow")
+
+            if all_jobs:
+                # Use chord to ensure completion callback runs AFTER ALL jobs finish
+                # Fixed: Now includes both metadata AND embeddings in the chord
+                self.update_progress(3, 4, "Starting workflow with completion callback")
+
+                completion_callback = mark_collection_completed.s(collection_id)
+                # Create group from list of signatures
+                task_group = group(all_jobs)  # Pass list directly, not unpacked
+                workflow = chord(task_group)(completion_callback)
+                workflow_result = workflow.apply_async()
+
+                logger.info(
+                    f"Started chord workflow: {len(all_jobs)} jobs (metadata+embeddings) → completion callback for collection {collection_id}"
                 )
-                embedding_result = embedding_jobs.apply_async()
-                logger.info(f"Started embedding generation for {len(chunks)} chunks")
+
+                self.update_progress(4, 4, "Collection metadata and embeddings workflow initiated")
+
+                result = {
+                    "collection_id": collection_id,
+                    "total_documents": len(successful_docs),
+                    "workflow_task_id": workflow_result.id,
+                    "status": "processing",
+                    "metadata_jobs": len(metadata_jobs) if metadata_jobs else 0,
+                    "embedding_jobs": len(chunks) if chunks else 0,
+                    "total_jobs": len(all_jobs),
+                    "message": f"Started {len(all_jobs)} background jobs for metadata and embeddings"
+                }
+
+                return result
             else:
-                embedding_result = None
+                # No embeddings to generate, call completion directly
+                self.update_progress(3, 4, "No chunks found, calling completion callback")
+                completion_task = mark_collection_completed.apply_async(
+                    args=[document_results, collection_id]
+                )
 
-            # Step 3: Call completion
-            self.update_progress(3, 4, "Starting completion callback")
-            completion_task = mark_collection_completed.apply_async(
-                args=[document_results, collection_id]
-            )
+                self.update_progress(4, 4, "Collection processing completed (no embeddings)")
 
-            self.update_progress(4, 4, "Collection metadata and embeddings processing initiated")
+                result = {
+                    "collection_id": collection_id,
+                    "total_documents": len(successful_docs),
+                    "completion_task_id": completion_task.id,
+                    "status": "processing",
+                }
 
-            result = {
-                "collection_id": collection_id,
-                "total_documents": len(successful_docs),
-                "completion_task_id": completion_task.id,
-                "status": "processing",
-            }
+                if metadata_jobs:
+                    result.update({
+                        "metadata_jobs_started": len(metadata_jobs),
+                        "metadata_task_id": metadata_result.id,
+                    })
 
-            if metadata_jobs:
-                result.update({
-                    "metadata_jobs_started": len(metadata_jobs),
-                    "metadata_task_id": metadata_result.id,
-                })
+                result["message"] = f"Started metadata extraction for collection (no embeddings)"
 
-            if embedding_result:
-                result.update({
-                    "total_chunks": len(chunks),
-                    "embeddings_task_id": embedding_result.id,
-                })
-
-            result["message"] = f"Started metadata extraction and embedding generation for collection"
-
-            return result
+                return result
         finally:
             storage.close()
 

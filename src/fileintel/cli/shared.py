@@ -64,6 +64,9 @@ class CLIHandler:
 
     def display_task_info(self, task_data: Dict[str, Any]):
         """Display task information in standardized format."""
+        if task_data is None:
+            self.display_error("No task information returned from API")
+            return
         task_id = task_data.get("task_id", "Unknown")
         self.console.print(f"Task ID: [bold]{task_id}[/bold]")
         if "status" in task_data or "processing_status" in task_data:

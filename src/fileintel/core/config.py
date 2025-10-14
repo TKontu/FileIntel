@@ -21,13 +21,20 @@ class AnthropicSettings(BaseModel):
 
 class LLMSettings(BaseModel):
     provider: str = Field(default="openai")
-    model: str = Field(default="gemma3-4B")
+    model: str = Field(default="gemma3-12b-awq")
     max_tokens: int = Field(default=4000)
     context_length: int = Field(default=4096)
     temperature: float = Field(default=0.1)
     rate_limit: int = Field(default=60)
     base_url: Optional[str] = Field(default=None)
     api_key: Optional[str] = Field(default="ollama")  # Default for Ollama
+    # Task timeout limits (prevents worker exhaustion on long-running tasks)
+    task_timeout_seconds: int = Field(
+        default=300, ge=60, le=3600, description="Soft timeout for LLM tasks (seconds)"
+    )
+    task_hard_limit_seconds: int = Field(
+        default=360, ge=60, le=3600, description="Hard kill timeout for LLM tasks (seconds)"
+    )
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
 
@@ -105,7 +112,7 @@ class RAGSettings(BaseModel):
     )
 
     # GraphRAG-specific settings (moved here to eliminate duplication)
-    llm_model: str = Field(default="gemma3-4B")
+    llm_model: str = Field(default="gemma3-12b-awq")
     community_levels: int = Field(default=3)
     max_tokens: int = Field(default=12000)
     root_dir: str = Field(default="/data/graphrag_indices")
@@ -198,6 +205,16 @@ class StorageSettings(BaseModel):
     type: str = Field(default="redis")
     connection_string: str = Field(default="sqlite:///./database.db")
     cache_ttl: int = Field(default=3600)
+    # Connection pool settings (prevents exhaustion)
+    pool_size: int = Field(
+        default=20, ge=5, le=100, description="Base database connection pool size"
+    )
+    max_overflow: int = Field(
+        default=30, ge=0, le=100, description="Additional connections allowed beyond pool_size"
+    )
+    pool_timeout: int = Field(
+        default=30, ge=5, le=300, description="Seconds to wait for connection"
+    )
     # Redis settings consolidated into GraphRAGCacheSettings to avoid duplication
 
 
@@ -232,6 +249,23 @@ class CelerySettings(BaseModel):
     )
 
 
+class BatchProcessingSettings(BaseModel):
+    """Batch processing limits to prevent resource exhaustion and DoS attacks."""
+
+    directory_input: str = Field(default="/home/appuser/app/input")
+    directory_output: str = Field(default="/home/appuser/app/output")
+    default_format: str = Field(default="json")
+    max_upload_batch_size: int = Field(
+        default=50, ge=1, le=200, description="Maximum files per batch upload"
+    )
+    max_file_size_mb: int = Field(
+        default=100, ge=1, le=1000, description="Maximum individual file size in MB"
+    )
+    max_processing_batch_size: int = Field(
+        default=20, ge=1, le=100, description="Maximum collections per batch process"
+    )
+
+
 class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
@@ -246,6 +280,7 @@ class Settings(BaseModel):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     # retry field removed - Celery handles retry configuration
     celery: CelerySettings = Field(default_factory=CelerySettings)
+    batch_processing: BatchProcessingSettings = Field(default_factory=BatchProcessingSettings)
 
     @model_validator(mode="after")
     def validate_critical_settings(self):

@@ -79,11 +79,12 @@ async def extract_document_metadata_endpoint(
         # Get existing file metadata
         file_metadata = document.document_metadata if document.document_metadata else None
 
-        # Start background metadata extraction task
-        task_result = extract_document_metadata.delay(
-            document_id=request.document_id,
-            text_chunks=text_chunks,
-            file_metadata=file_metadata
+        # Start background metadata extraction task with timeout
+        config = get_config()
+        task_result = extract_document_metadata.apply_async(
+            args=[request.document_id, text_chunks, file_metadata],
+            soft_time_limit=config.llm.task_timeout_seconds,
+            time_limit=config.llm.task_hard_limit_seconds,
         )
 
         response_data = MetadataExtractionResponse(
@@ -211,11 +212,12 @@ async def extract_collection_metadata(
             # Get existing file metadata
             file_metadata = document.document_metadata if document.document_metadata else None
 
-            # Start background task
-            task_result = extract_document_metadata.delay(
-                document_id=document.id,
-                text_chunks=text_chunks,
-                file_metadata=file_metadata
+            # Start background task with timeout
+            config = get_config()
+            task_result = extract_document_metadata.apply_async(
+                args=[document.id, text_chunks, file_metadata],
+                soft_time_limit=config.llm.task_timeout_seconds,
+                time_limit=config.llm.task_hard_limit_seconds,
             )
 
             tasks_started.append({
@@ -223,6 +225,11 @@ async def extract_collection_metadata(
                 "filename": document.original_filename,
                 "task_id": str(task_result.id),
             })
+
+            # Rate limiting: add small delay every 10 tasks to prevent overwhelming LLM
+            if len(tasks_started) % 10 == 0:
+                from time import sleep
+                sleep(1)  # 1 second pause every 10 tasks
             processed_count += 1
 
         return ApiResponseV2(

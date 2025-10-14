@@ -174,7 +174,7 @@ def list_documents(
             f"[bold blue]Documents in '{collection_identifier}' ({len(documents)}):[/bold blue]"
         )
         for doc in documents:
-            doc_id = doc.get("id", "Unknown")[:12]  # Truncate for display
+            doc_id = doc.get("id", "Unknown")  # Show full ID
             filename = doc.get("original_filename") or doc.get("filename", "Unknown")
             file_size = doc.get("file_size", 0)
             mime_type = doc.get("mime_type", "Unknown")
@@ -236,6 +236,80 @@ def delete_document(
 
     result = cli_handler.handle_api_call(_delete, "delete document")
     cli_handler.display_success(f"Document '{document_id}' deleted successfully")
+
+
+@app.command("chunks")
+def view_chunks(
+    document_id: str = typer.Argument(..., help="The ID of the document (full or prefix)."),
+    limit: int = typer.Option(10, "--limit", "-n", help="Number of chunks to display."),
+    offset: int = typer.Option(0, "--offset", "-o", help="Number of chunks to skip."),
+    show_text: bool = typer.Option(True, "--text/--no-text", help="Show chunk text content."),
+    text_preview: int = typer.Option(100, "--preview", "-p", help="Max characters of text to show (0 for full)."),
+):
+    """View chunks and their metadata for a document."""
+
+    def _get_chunks(api):
+        return api._request("GET", f"documents/{document_id}/chunks", params={"limit": limit, "offset": offset})
+
+    result = cli_handler.handle_api_call(_get_chunks, "get document chunks")
+
+    if not result or "data" not in result:
+        cli_handler.display_error("No chunk data returned")
+        return
+
+    data = result["data"]
+    chunks = data.get("chunks", [])
+
+    if not chunks:
+        cli_handler.console.print(f"[yellow]No chunks found for document '{document_id}'[/yellow]")
+        return
+
+    cli_handler.console.print(
+        f"[bold blue]Document {data.get('document_id', 'Unknown')} - "
+        f"Chunks {offset + 1}-{offset + len(chunks)} of {data.get('total_chunks', 0)}[/bold blue]\n"
+    )
+
+    for i, chunk in enumerate(chunks):
+        chunk_idx = chunk.get("chunk_index", offset + i)
+        chunk_id = chunk.get("chunk_id", "Unknown")
+        has_embedding = chunk.get("has_embedding", False)
+        embedding_dims = chunk.get("embedding_dimensions")
+        metadata = chunk.get("chunk_metadata", {})
+        text = chunk.get("text", "")
+
+        # Display chunk header
+        cli_handler.console.print(f"[bold cyan]Chunk #{chunk_idx}[/bold cyan] [dim]({chunk_id[:12]}...)[/dim]")
+
+        # Display embedding info
+        embedding_status = f"✓ {embedding_dims}D" if has_embedding else "✗ No embedding"
+        cli_handler.console.print(f"  Embedding: {embedding_status}")
+
+        # Display metadata
+        if metadata:
+            cli_handler.console.print(f"  [bold]Metadata:[/bold]")
+            for key, value in metadata.items():
+                # Format the value nicely
+                if isinstance(value, (dict, list)):
+                    import json
+                    value_str = json.dumps(value, indent=2)
+                    cli_handler.console.print(f"    {key}:")
+                    for line in value_str.split('\n'):
+                        cli_handler.console.print(f"      {line}")
+                else:
+                    cli_handler.console.print(f"    {key}: {value}")
+        else:
+            cli_handler.console.print(f"  [dim]No metadata[/dim]")
+
+        # Display text content
+        if show_text:
+            if text_preview > 0 and len(text) > text_preview:
+                preview_text = text[:text_preview] + "..."
+                cli_handler.console.print(f"  [bold]Text:[/bold] {preview_text}")
+                cli_handler.console.print(f"  [dim](showing {text_preview} of {len(text)} characters)[/dim]")
+            else:
+                cli_handler.console.print(f"  [bold]Text:[/bold] {text}")
+
+        cli_handler.console.print()  # Empty line between chunks
 
 
 @app.command("system-status")

@@ -56,8 +56,8 @@ CLI (tasks.py:17-71)
 
 ### Issues Identified
 
-#### 🔴 Issue 2.1: Field Name Mismatch - status vs state
-**Status:** CRITICAL
+#### ✅ FIXED (Phase 1): Issue 2.1: Field Name Mismatch - status vs state
+**Status:** RESOLVED
 **Location:** `src/fileintel/cli/tasks.py:53`
 
 **Problem:**
@@ -82,8 +82,8 @@ state = task.get("status", "UNKNOWN")
 state: TaskState = Field(..., description="Current task state")
 ```
 
-#### 🔴 Issue 2.2: Missing Task Name Field
-**Status:** CRITICAL
+#### ✅ FIXED (Phase 1): Issue 2.2: Missing Task Name Field
+**Status:** RESOLVED
 **Location:** `src/fileintel/cli/tasks.py:54` & `src/fileintel/api/models.py:102-119`
 
 **Problem:**
@@ -122,8 +122,8 @@ task_response = TaskStatusResponse(
 )
 ```
 
-#### 🟡 Issue 2.3: Response Pagination Mismatch
-**Status:** HIGH
+#### ✅ FIXED (Phase 2): Issue 2.3: Response Pagination Mismatch
+**Status:** RESOLVED
 **Location:** `src/fileintel/cli/tasks.py:43`
 
 **Problem:**
@@ -160,8 +160,8 @@ CLI (tasks.py:94-118)
 
 ### Issues Identified
 
-#### 🔴 Issue 3.1: Missing Status Field in Response
-**Status:** CRITICAL
+#### ✅ FIXED (Phase 2): Issue 3.1: Missing Status Field in Response
+**Status:** RESOLVED
 **Location:** `src/fileintel/cli/tasks.py:108` & `src/fileintel/api/routes/tasks_v2.py:230-237`
 
 **Problem:**
@@ -231,8 +231,8 @@ CLI (collections.py:92-137)
 
 ### Issues Identified
 
-#### 🔴 Issue 4.1: Pydantic Validation Error - Wrong Field Name
-**Status:** CRITICAL
+#### ✅ FIXED (Phase 1): Issue 4.1: Pydantic Validation Error - Wrong Field Name
+**Status:** RESOLVED
 **Location:** `src/fileintel/api/routes/collections_v2.py:401`
 
 **Problem:**
@@ -332,8 +332,8 @@ CLI (documents.py:23-65 & 67-152)
 
 ### Issues Identified
 
-#### 🟡 Issue 5.1: File Handle Leak in Batch Upload
-**Status:** HIGH
+#### ✅ FIXED (Phase 5): Issue 5.1: File Handle Leak in Batch Upload
+**Status:** RESOLVED
 **Location:** `src/fileintel/cli/task_client.py:112-142`
 
 **Problem:**
@@ -423,8 +423,8 @@ except Exception as e:
 
 ### Issues Identified
 
-#### 🟡 Issue 6.1: Storage Session Not Closed in Error Paths
-**Status:** HIGH
+#### ✅ FIXED (Phase 7): Issue 6.1: Storage Session Not Closed in Error Paths
+**Status:** RESOLVED
 **Location:** Multiple workflow tasks
 
 **Problem:**
@@ -462,8 +462,8 @@ except Exception as e:
     raise
 ```
 
-#### 🟠 Issue 6.2: Chord Callback Arguments Not Documented
-**Status:** MEDIUM
+#### ✅ FIXED (Phase 8): Issue 6.2: Chord Callback Arguments Not Documented
+**Status:** RESOLVED
 **Location:** `src/fileintel/tasks/workflow_tasks.py:183-236`
 
 **Problem:**
@@ -566,10 +566,10 @@ Standardize on always wrapping in "data" field and document in API spec.
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| 🔴 Critical | 5 | 1 Fixed, 4 Open |
-| 🟡 High | 6 | 0 Fixed, 6 Open |
-| 🟠 Medium | 4 | 0 Fixed, 4 Open |
-| **Total** | **15** | **1 Fixed, 14 Open** |
+| 🔴 Critical | 5 | ✅ 5 Fixed, 0 Open |
+| 🟡 High | 6 | ✅ 6 Fixed, 0 Open |
+| 🟠 Medium | 4 | ✅ 2 Fixed, 2 Open |
+| **Total** | **15** | **✅ 13 Fixed, 2 Open** |
 
 ### Critical Issues Requiring Immediate Attention
 

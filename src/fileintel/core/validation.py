@@ -236,6 +236,46 @@ def validate_task_batch(tasks: List[Any]) -> None:
         raise TaskValidationError("No tasks provided in batch")
 
 
+def validate_batch_size(items: List[Any], max_size: int, item_name: str) -> None:
+    """
+    Validate that batch size doesn't exceed maximum limit.
+
+    Args:
+        items: List of items in the batch
+        max_size: Maximum allowed batch size
+        item_name: Name of items for error message (e.g., "files", "collections")
+
+    Raises:
+        ValidationError: If batch size exceeds maximum
+    """
+    if len(items) > max_size:
+        raise ValidationError(
+            f"Batch size {len(items)} exceeds maximum {max_size} {item_name}"
+        )
+
+
+def validate_file_size(file: UploadFile, max_size_mb: int) -> None:
+    """
+    Validate that file size doesn't exceed maximum limit.
+
+    Args:
+        file: The uploaded file to validate
+        max_size_mb: Maximum file size in megabytes
+
+    Raises:
+        FileValidationError: If file size exceeds limit
+    """
+    # Note: file.size might not be available for all upload types
+    # This is a best-effort check
+    if hasattr(file, 'size') and file.size:
+        max_size_bytes = max_size_mb * 1024 * 1024
+        if file.size > max_size_bytes:
+            size_mb = file.size / (1024 * 1024)
+            raise FileValidationError(
+                f"File size {size_mb:.2f}MB exceeds maximum {max_size_mb}MB"
+            )
+
+
 def validate_uploaded_files(files: List[UploadFile]) -> None:
     """
     Validate that files were uploaded.

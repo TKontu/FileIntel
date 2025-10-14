@@ -40,7 +40,7 @@ def list_tasks(
 
     if isinstance(tasks_data, dict) and "tasks" in tasks_data:
         tasks = tasks_data["tasks"]
-        total = tasks_data.get("total_count", len(tasks))
+        total = tasks_data.get("total", len(tasks))
 
         cli_handler.console.print(
             f"[bold blue]Tasks ({len(tasks)} of {total}):[/bold blue]"
@@ -50,10 +50,10 @@ def list_tasks(
             for task in tasks:
                 # Display condensed task info
                 task_id = task.get("task_id", "Unknown")[:TASK_ID_DISPLAY_LENGTH]
-                state = task.get("state", "UNKNOWN")
-                name = task.get("name", "Unknown Task")
+                status_val = task.get("status", "UNKNOWN")
+                name = task.get("task_name", "Unknown Task")
 
-                cli_handler.console.print(f"  {task_id} | {state:12} | {name}")
+                cli_handler.console.print(f"  {task_id} | {status_val:12} | {name}")
 
             # Show pagination info
             has_more = tasks_data.get("has_more", False)
@@ -105,16 +105,14 @@ def cancel_task(
         return api.cancel_task(task_id, terminate=terminate)
 
     result = cli_handler.handle_api_call(_cancel_task, "cancel task")
-    status = result.get("data", result).get("status", "unknown")
+    result_data = result.get("data", result)
+    success = result_data.get("success", False)
 
-    if status == "cancelled":
+    if success:
         cli_handler.display_success(f"Task {task_id} cancelled successfully")
-    elif status == "already_completed":
-        cli_handler.console.print(
-            f"[yellow]Task {task_id} has already completed[/yellow]"
-        )
     else:
-        cli_handler.display_error(f"Failed to cancel task: {status}")
+        message = result_data.get("message", "Unknown error")
+        cli_handler.display_error(f"Failed to cancel task: {message}")
 
 
 @app.command("result")

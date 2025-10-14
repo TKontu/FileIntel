@@ -120,6 +120,7 @@ async def get_collection(
                 "filename": d.filename,
                 "original_filename": d.original_filename,
                 "mime_type": d.mime_type,
+                "file_size": d.file_size,
             }
             for d in collection.documents
         ],
@@ -245,8 +246,28 @@ async def upload_document_to_collection(
 async def get_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
-    """Get a specific document by ID."""
+    """Get a specific document by ID or ID prefix."""
+    # Try exact match first
     document = storage.get_document(document_id)
+
+    # If not found and looks like a prefix (< 36 chars), try prefix search
+    if not document and len(document_id) < 36:
+        from sqlalchemy import or_
+        from fileintel.storage.models import Document
+
+        # Search for documents starting with this prefix
+        matching_docs = storage.base.db.query(Document).filter(
+            Document.id.like(f"{document_id}%")
+        ).all()
+
+        if len(matching_docs) == 1:
+            document = matching_docs[0]
+        elif len(matching_docs) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ambiguous ID prefix '{document_id}' matches {len(matching_docs)} documents. Please provide more characters."
+            )
+
     if not document:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
@@ -269,8 +290,27 @@ async def get_document(
 async def delete_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
-    """Delete a specific document by ID."""
+    """Delete a specific document by ID or ID prefix."""
+    # Try exact match first
     document = storage.get_document(document_id)
+
+    # If not found and looks like a prefix (< 36 chars), try prefix search
+    if not document and len(document_id) < 36:
+        from fileintel.storage.models import Document
+
+        matching_docs = storage.base.db.query(Document).filter(
+            Document.id.like(f"{document_id}%")
+        ).all()
+
+        if len(matching_docs) == 1:
+            document = matching_docs[0]
+            document_id = document.id  # Use full ID for deletion
+        elif len(matching_docs) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ambiguous ID prefix '{document_id}' matches {len(matching_docs)} documents. Please provide more characters."
+            )
+
     if not document:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
@@ -289,8 +329,27 @@ async def get_document_chunks(
     offset: Optional[int] = 0,
     storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
-    """Get chunks for a specific document."""
+    """Get chunks for a specific document by ID or ID prefix."""
+    # Try exact match first
     document = storage.get_document(document_id)
+
+    # If not found and looks like a prefix (< 36 chars), try prefix search
+    if not document and len(document_id) < 36:
+        from fileintel.storage.models import Document
+
+        matching_docs = storage.base.db.query(Document).filter(
+            Document.id.like(f"{document_id}%")
+        ).all()
+
+        if len(matching_docs) == 1:
+            document = matching_docs[0]
+            document_id = document.id  # Use full ID for chunk lookup
+        elif len(matching_docs) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ambiguous ID prefix '{document_id}' matches {len(matching_docs)} documents. Please provide more characters."
+            )
+
     if not document:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
@@ -304,12 +363,13 @@ async def get_document_chunks(
     # Format chunks for API response
     chunk_data = []
     for i, chunk in enumerate(paginated_chunks):
+        has_embedding = chunk.embedding is not None
         chunk_info = {
             "chunk_id": chunk.id,
             "chunk_index": chunk.chunk_index if hasattr(chunk, 'chunk_index') else offset + i,
             "text": chunk.chunk_text,
-            "has_embedding": chunk.embedding is not None,
-            "embedding_dimensions": len(chunk.embedding) if chunk.embedding else None,
+            "has_embedding": has_embedding,
+            "embedding_dimensions": len(chunk.embedding) if has_embedding else None,
             "chunk_metadata": chunk.chunk_metadata or {},
         }
         chunk_data.append(chunk_info)
@@ -362,6 +422,18 @@ async def submit_collection_processing_task(
         except CollectionValidationError as e:
             raise to_http_exception(e)
 
+        # Validate operation type first
+        from fileintel.core.validation import (
+            validate_operation_type,
+            to_http_exception,
+            ValidationError,
+        )
+
+        try:
+            validate_operation_type(request.operation_type)
+        except ValidationError as e:
+            raise to_http_exception(e)
+
         # Submit the appropriate task based on operation type
         if request.operation_type == "complete_analysis":
             # Use the complete workflow task
@@ -381,16 +453,16 @@ async def submit_collection_processing_task(
                 **request.parameters,
             )
         else:
-            from fileintel.core.validation import (
-                validate_operation_type,
-                to_http_exception,
-                ValidationError,
+            # Should never reach here after validation, but handle defensively
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported operation type: {request.operation_type}"
             )
 
-            try:
-                validate_operation_type(request.operation_type)
-            except ValidationError as e:
-                raise to_http_exception(e)
+        # Store task ID in collection for tracking
+        storage.update_collection_status(
+            collection.id, "processing", task_id=task.id
+        )
 
         # Create response
         response_data = TaskSubmissionResponse(
@@ -398,7 +470,7 @@ async def submit_collection_processing_task(
             task_type=request.operation_type,
             status=TaskState.PENDING,
             submitted_at=datetime.utcnow(),
-            collection_identifier=collection.id,
+            collection_id=collection.id,
             estimated_duration=len(file_paths)
             * DEFAULT_TASK_ESTIMATION_SECONDS_PER_DOCUMENT,
         )
@@ -457,7 +529,7 @@ async def add_documents_to_collection(
             task_type="incremental_update",
             status=TaskState.PENDING,
             submitted_at=datetime.utcnow(),
-            collection_identifier=collection.id,
+            collection_id=collection.id,
             estimated_duration=len(request.file_paths)
             * INCREMENTAL_TASK_ESTIMATION_SECONDS_PER_DOCUMENT,
         )
@@ -484,69 +556,123 @@ async def submit_batch_processing_tasks(
     Supports parallel or sequential execution workflows.
     """
     try:
+        from fileintel.core.config import get_config
+        from fileintel.core.validation import validate_batch_size
+
         if not request.tasks:
             raise HTTPException(status_code=400, detail="No tasks provided in batch")
 
+        # Validate batch size doesn't exceed configured limit
+        config = get_config()
+        validate_batch_size(
+            request.tasks,
+            config.batch_processing.max_processing_batch_size,
+            "collections"
+        )
+
         submitted_tasks = []
+        failed_submissions = []  # Track failures instead of silently skipping
         batch_id = str(uuid.uuid4())
 
         for task_request in request.tasks:
-            # Validate collection exists
-            collection = get_collection_by_id_or_name(
-                task_request.collection_identifier, storage
+            try:
+                # Validate collection exists
+                collection = get_collection_by_id_or_name(
+                    task_request.collection_identifier, storage
+                )
+                if not collection:
+                    failed_submissions.append({
+                        "collection_identifier": task_request.collection_identifier,
+                        "error": "Collection not found"
+                    })
+                    logger.warning(
+                        f"Collection {task_request.collection_identifier} not found"
+                    )
+                    continue
+
+                # Get documents for this collection
+                documents = storage.get_documents_by_collection(collection.id)
+                # Extract file paths from document metadata
+                file_paths = []
+                for doc in documents:
+                    # Try both metadata and document_metadata fields
+                    file_path = (
+                        doc.metadata.get("file_path") if doc.metadata
+                        else doc.document_metadata.get("file_path") if doc.document_metadata
+                        else None
+                    )
+                    if file_path:
+                        file_paths.append(file_path)
+
+                if not file_paths:
+                    failed_submissions.append({
+                        "collection_identifier": task_request.collection_identifier,
+                        "error": "No documents found in collection"
+                    })
+                    logger.warning(
+                        f"No documents found for collection {collection.id}"
+                    )
+                    continue
+
+                # Submit task based on workflow type
+                if request.workflow_type == "parallel":
+                    # Submit all tasks immediately for parallel execution
+                    task = complete_collection_analysis.delay(
+                        collection_id=str(collection.id),
+                        file_paths=file_paths,
+                        build_graph=task_request.build_graph,
+                        extract_metadata=task_request.extract_metadata,
+                        generate_embeddings=task_request.generate_embeddings,
+                        batch_id=batch_id,
+                        **task_request.parameters,
+                    )
+                    submitted_tasks.append(task.id)
+                else:
+                    # Sequential workflow: use Celery chain for ordered execution
+                    from celery import chain
+
+                    # Create chain of tasks (executed one after another)
+                    task_chain = chain(
+                        complete_collection_analysis.s(
+                            collection_id=str(collection.id),
+                            file_paths=file_paths,
+                            build_graph=task_request.build_graph,
+                            extract_metadata=task_request.extract_metadata,
+                            generate_embeddings=task_request.generate_embeddings,
+                            batch_id=batch_id,
+                            **task_request.parameters,
+                        )
+                    )
+
+                    # Apply chain and get the task ID
+                    task = task_chain.apply_async()
+                    submitted_tasks.append(task.id)
+
+            except Exception as e:
+                # Track any exceptions during task submission
+                failed_submissions.append({
+                    "collection_identifier": task_request.collection_identifier,
+                    "error": str(e)
+                })
+                logger.error(f"Failed to submit task for collection {task_request.collection_identifier}: {e}")
+
+        if not submitted_tasks and not failed_submissions:
+            raise HTTPException(
+                status_code=400, detail="No tasks provided"
             )
-            if not collection:
-                logger.warning(
-                    f"Collection {task_request.collection_identifier} not found, skipping"
-                )
-                continue
-
-            # Get documents for this collection
-            documents = storage.get_documents_by_collection(collection.id)
-            file_paths = [doc.file_path for doc in documents if doc.file_path]
-
-            if not file_paths:
-                logger.warning(
-                    f"No documents found for collection {collection.id}, skipping"
-                )
-                continue
-
-            # Submit task
-            if request.workflow_type == "parallel":
-                # Submit all tasks immediately for parallel execution
-                task = complete_collection_analysis.delay(
-                    collection_id=str(collection.id),
-                    file_paths=file_paths,
-                    build_graph=task_request.build_graph,
-                    extract_metadata=task_request.extract_metadata,
-                    generate_embeddings=task_request.generate_embeddings,
-                    batch_id=batch_id,
-                    **task_request.parameters,
-                )
-            else:
-                # For sequential, we'd need to implement a chain workflow
-                # For now, treat as parallel
-                task = complete_collection_analysis.delay(
-                    collection_id=str(collection.id),
-                    file_paths=file_paths,
-                    build_graph=task_request.build_graph,
-                    extract_metadata=task_request.extract_metadata,
-                    generate_embeddings=task_request.generate_embeddings,
-                    batch_id=batch_id,
-                    **task_request.parameters,
-                )
-
-            submitted_tasks.append(task.id)
 
         if not submitted_tasks:
             raise HTTPException(
-                status_code=400, detail="No valid tasks could be submitted"
+                status_code=400,
+                detail=f"No valid tasks could be submitted. {len(failed_submissions)} tasks failed."
             )
 
         response_data = BatchTaskSubmissionResponse(
             batch_id=batch_id,
             task_ids=submitted_tasks,
             submitted_count=len(submitted_tasks),
+            failed_count=len(failed_submissions),
+            failures=failed_submissions,
             workflow_type=request.workflow_type,
             estimated_duration=len(submitted_tasks)
             * BATCH_TASK_ESTIMATION_SECONDS_PER_COLLECTION,
@@ -595,6 +721,21 @@ async def get_collection_processing_status(
         # Get actual processing status from collection
         processing_status = getattr(collection, "processing_status", "created")
 
+        # Validate task state if collection is processing
+        warning_message = None
+        if collection.current_task_id and processing_status == "processing":
+            from celery.result import AsyncResult
+
+            task = AsyncResult(collection.current_task_id)
+
+            # Check if task state contradicts collection status
+            if task.state in ["SUCCESS", "FAILURE", "REVOKED"]:
+                warning_message = (
+                    f"Collection status is 'processing' but task {task.state}. "
+                    "This may indicate a callback failure. Task ID: {collection.current_task_id}"
+                )
+                logger.warning(f"Stale status detected for collection {collection.id}: {warning_message}")
+
         # Determine available operations based on current status
         available_operations = []
         if processing_status in ["created", "completed", "failed"]:
@@ -620,7 +761,15 @@ async def get_collection_processing_status(
             "processing_status": processing_status,
             "status_description": _get_status_description(processing_status),
             "available_operations": available_operations,
+            "current_task_id": collection.current_task_id,
+            "status_updated_at": collection.status_updated_at.isoformat()
+            if collection.status_updated_at
+            else None,
         }
+
+        # Add warning if status appears stale
+        if warning_message:
+            status_info["warning"] = warning_message
 
         return ApiResponseV2(
             success=True, data=status_info, timestamp=datetime.utcnow()
@@ -653,6 +802,7 @@ async def upload_and_process_documents(
     """
     try:
         from fileintel.core.config import get_config
+        from fileintel.core.validation import validate_batch_size, validate_file_size
         import os
         from pathlib import Path
 
@@ -663,6 +813,19 @@ async def upload_and_process_documents(
                 status_code=500,
                 detail="aiofiles package not available for async file operations",
             )
+
+        config = get_config()
+
+        # Validate batch size
+        validate_batch_size(
+            files,
+            config.batch_processing.max_upload_batch_size,
+            "files"
+        )
+
+        # Validate individual file sizes
+        for file in files:
+            validate_file_size(file, config.batch_processing.max_file_size_mb)
 
         # Validate collection exists
         collection = await get_collection_by_identifier(storage, collection_identifier)

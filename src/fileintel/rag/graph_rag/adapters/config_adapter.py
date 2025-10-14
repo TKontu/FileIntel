@@ -13,7 +13,7 @@ from .._graphrag_imports import (
 )
 
 # Configuration constants
-DEFAULT_REQUEST_TIMEOUT = 300.0  # Increased from 30s to 5 minutes for gemma3-4B entity extraction
+DEFAULT_REQUEST_TIMEOUT = 300.0  # Increased from 30s to 5 minutes for entity extraction
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_MAX_RETRY_WAIT = 1.0
 # Ultra-high rate limits for local LLM server (effectively disables rate limiting)

@@ -128,6 +128,7 @@ async def get_task_status_endpoint(task_id: str) -> ApiResponseV2:
     # Format the response
     status_response = TaskStatusResponse(
         task_id=task_id,
+        task_name=task_info.get("name", "unknown"),
         status=_map_celery_state_to_task_state(task_info["state"]),
         result=_format_task_result(task_info.get("result"))
         if task_info["state"] == "SUCCESS"
@@ -174,6 +175,7 @@ async def list_tasks(
             task_id = task_info.get("id", "unknown")
             task_response = TaskStatusResponse(
                 task_id=task_id,
+                task_name=task_info.get("name", "unknown"),
                 status=TaskState.STARTED,  # Active tasks are running
                 result=None,
                 error=None,
@@ -245,28 +247,39 @@ async def get_task_result(task_id: str) -> ApiResponseV2:
     """
     Get the result of a completed task.
 
-    Returns the full result data for successful tasks.
+    Returns the actual task result data directly (not wrapped).
     """
-    task_info = get_task_status(task_id)
+    import json
+    from celery.result import AsyncResult
 
-    if not task_info:
-        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    async_result = AsyncResult(task_id)
 
-    if task_info["state"] != "SUCCESS":
+    if not async_result.ready():
         raise HTTPException(
             status_code=400,
-            detail=f"Task {task_id} is not completed successfully (current state: {task_info['state']})",
+            detail=f"Task not completed (state: {async_result.state})"
         )
 
-    result = _format_task_result(task_info.get("result"))
+    if async_result.failed():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Task failed: {str(async_result.result)}"
+        )
 
-    return create_success_response(
-        {
-            "task_id": task_id,
-            "result": result,
-            "completed_at": datetime.utcnow().isoformat(),  # In real implementation, store actual completion time
-        }
-    )
+    result = async_result.result
+
+    # Validate result is serializable
+    try:
+        json.dumps(result)
+    except (TypeError, ValueError):
+        logger.error(f"Task {task_id} result not serializable: {result}")
+        raise HTTPException(
+            status_code=500,
+            detail="Task result cannot be serialized"
+        )
+
+    # Return actual task result directly (not wrapped)
+    return create_success_response(result)
 
 
 @router.get("/tasks/metrics", response_model=ApiResponseV2)

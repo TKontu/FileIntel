@@ -152,7 +152,17 @@ async def get_graphrag_entities(
     storage=Depends(get_storage),
     config=Depends(get_config),
 ):
-    """Get GraphRAG entities for a collection."""
+    """
+    Get GraphRAG entities for a collection.
+
+    Field Mapping (GraphRAG parquet -> API response):
+    - 'title' -> 'name' (entity name from GraphRAG)
+    - 'degree' -> 'importance_score' (centrality measure)
+    - 'type' -> 'type' (entity type classification)
+
+    Note: This endpoint reads from parquet files (faster) not database.
+    The storage layer uses 'entity_name' field when persisting to database.
+    """
     try:
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
@@ -187,9 +197,22 @@ async def get_graphrag_entities(
             )
 
         # Read entities and limit results
-        entities_df = pd.read_parquet(entities_file)
+        try:
+            entities_df = pd.read_parquet(entities_file)
+        except Exception as e:
+            logger.error(f"Failed to read entities parquet file: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load entities from index: {str(e)}"
+            )
+
         if limit:
-            entities_df = entities_df.head(limit)
+            if limit < 0:
+                # Negative limit means "last N rows"
+                entities_df = entities_df.tail(abs(limit))
+            else:
+                # Positive limit means "first N rows"
+                entities_df = entities_df.head(limit)
 
         # Convert to list of dicts
         entities = []
@@ -227,7 +250,12 @@ async def get_graphrag_communities(
     storage=Depends(get_storage),
     config=Depends(get_config),
 ):
-    """Get GraphRAG communities for a collection."""
+    """
+    Get GraphRAG communities for a collection.
+
+    Returns hierarchical community structure with level information.
+    Communities are read directly from GraphRAG parquet files for performance.
+    """
     try:
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
@@ -262,17 +290,43 @@ async def get_graphrag_communities(
             )
 
         # Read communities and limit results
-        communities_df = pd.read_parquet(communities_file)
+        try:
+            communities_df = pd.read_parquet(communities_file)
+        except Exception as e:
+            logger.error(f"Failed to read communities parquet file: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load communities from index: {str(e)}"
+            )
+
         if limit:
-            communities_df = communities_df.head(limit)
+            if limit < 0:
+                # Negative limit means "last N rows"
+                communities_df = communities_df.tail(abs(limit))
+            else:
+                # Positive limit means "first N rows"
+                communities_df = communities_df.head(limit)
 
         # Convert to list of dicts
         communities = []
         for _, row in communities_df.iterrows():
+            # Use summary as title if available and more descriptive than generic "Community N"
+            title = row.get("title", "Unknown")
+            summary = row.get("summary", "")
+
+            # If title is just "Community N" and we have a summary, extract first sentence as title
+            if title.startswith("Community ") and summary:
+                # Take first sentence/line of summary as a better title
+                first_sentence = summary.split('.')[0] if '.' in summary else summary.split('\n')[0]
+                if len(first_sentence) > 10 and len(first_sentence) < 100:
+                    title = first_sentence.strip()
+
             community = {
-                "title": row.get("title", "Unknown"),
+                "title": title,
+                "community_id": row.get("human_readable_id", row.get("id", "N/A")),  # Use human_readable_id or fall back to UUID
+                "level": int(row.get("level", 0)),
                 "rank": float(row.get("rank", 0.0)),
-                "summary": row.get("summary", ""),
+                "summary": summary,
                 "size": int(row.get("size", 0)),
             }
             communities.append(community)

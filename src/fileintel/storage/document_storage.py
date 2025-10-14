@@ -67,19 +67,94 @@ class DocumentStorage:
             self.db.delete(collection)
             self.base._safe_commit()
 
-    def update_collection_status(self, collection_id: str, status: str) -> bool:
-        """Update collection processing status."""
+    def update_collection_status(
+        self, collection_id: str, status: str, task_id: str = None
+    ) -> bool:
+        """Update collection processing status with optional task tracking.
+
+        Args:
+            collection_id: ID of the collection to update
+            status: New status value (must be valid CollectionStatus)
+            task_id: Optional task ID to associate with this status update
+
+        Returns:
+            True if update successful, False otherwise
+        """
         try:
-            collection = self.get_collection(collection_id)
+            from datetime import datetime
+            from fileintel.storage.models import CollectionStatus
+
+            # Define valid state transitions
+            VALID_TRANSITIONS = {
+                CollectionStatus.CREATED.value: [
+                    CollectionStatus.PROCESSING.value,
+                    CollectionStatus.FAILED.value
+                ],
+                CollectionStatus.PROCESSING.value: [
+                    CollectionStatus.COMPLETED.value,
+                    CollectionStatus.FAILED.value
+                ],
+                CollectionStatus.COMPLETED.value: [
+                    CollectionStatus.PROCESSING.value  # Allow reprocessing
+                ],
+                CollectionStatus.FAILED.value: [
+                    CollectionStatus.PROCESSING.value  # Allow retry
+                ],
+            }
+
+            # Use row-level locking to prevent race conditions
+            from fileintel.storage.models import Collection
+
+            collection = (
+                self.base.db.query(Collection)
+                .filter(Collection.id == collection_id)
+                .with_for_update()  # Lock row for update
+                .first()
+            )
             if not collection:
                 logger.warning(
                     f"Collection {collection_id} not found for status update"
                 )
                 return False
 
+            # Validate status is a valid enum value
+            valid_statuses = [s.value for s in CollectionStatus]
+            if status not in valid_statuses:
+                logger.error(
+                    f"Invalid status '{status}'. Must be one of: {valid_statuses}"
+                )
+                return False
+
+            # Validate state transition is allowed
+            current_status = collection.processing_status
+            allowed_transitions = VALID_TRANSITIONS.get(current_status, [])
+            if status not in allowed_transitions and status != current_status:
+                logger.warning(
+                    f"Invalid status transition: {current_status} -> {status}. "
+                    f"Allowed transitions: {allowed_transitions}"
+                )
+                return False
+
             collection.processing_status = status
+            collection.status_updated_at = datetime.utcnow()
+
+            if task_id:
+                collection.current_task_id = task_id
+
+                # Append to task history
+                history = collection.task_history or []
+                history.append({
+                    "task_id": task_id,
+                    "status": status,
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+                collection.task_history = history
+
             self.base._safe_commit()
-            logger.info(f"Updated collection {collection_id} status to {status}")
+            logger.info(
+                f"Updated collection {collection_id} status to {status}"
+                + (f" with task {task_id}" if task_id else "")
+            )
             return True
 
         except Exception as e:
@@ -215,10 +290,18 @@ class DocumentStorage:
             self.base._safe_commit()
 
     def update_document_metadata(self, document_id: str, metadata: Dict[str, Any]):
-        """Update document metadata."""
+        """Update document metadata by merging with existing metadata.
+
+        This method merges new metadata with existing metadata, preserving
+        any existing fields that are not being updated. This prevents data
+        loss when updating metadata from different sources (e.g., file metadata
+        and LLM-extracted metadata).
+        """
         document = self.get_document(document_id)
         if document:
-            document.document_metadata = metadata
+            # Merge new metadata with existing, preserving existing fields
+            existing = document.document_metadata or {}
+            document.document_metadata = {**existing, **metadata}
             self.base._safe_commit()
 
     # Chunk Operations

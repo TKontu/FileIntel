@@ -51,14 +51,14 @@ def get_shared_storage():
                 config = get_config()
                 database_url = config.storage.connection_string
 
-                # Create shared engine with optimized pool settings for Celery
+                # Create shared engine with pool settings from config
                 _shared_engine = create_engine(
                     database_url,
-                    pool_pre_ping=True,
-                    pool_size=15,  # Increased for concurrent Celery tasks
-                    max_overflow=25,  # Allow burst connections during heavy processing
+                    pool_pre_ping=True,  # Test connections before use
+                    pool_size=config.storage.pool_size,
+                    max_overflow=config.storage.max_overflow,
                     pool_recycle=3600,  # Recycle connections every hour
-                    pool_timeout=30,  # 30 second timeout for getting connection
+                    pool_timeout=config.storage.pool_timeout,
                     echo=False,  # Disable SQL logging in production
                 )
 

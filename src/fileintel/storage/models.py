@@ -12,9 +12,19 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
+from enum import Enum
 import os
 
 Base = declarative_base()
+
+
+class CollectionStatus(str, Enum):
+    """Valid collection processing status values."""
+
+    CREATED = "created"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class Collection(Base):
@@ -23,13 +33,18 @@ class Collection(Base):
     name = Column(String, nullable=False, unique=True)
     description = Column(String, nullable=True)
     processing_status = Column(
-        String, nullable=False, default="created"
-    )  # created, processing, completed, failed
+        String, nullable=False, default=CollectionStatus.CREATED.value
+    )  # See CollectionStatus enum for valid values
     collection_metadata = Column(
         JSONB, nullable=True
     )  # For GraphRAG index info and other metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Task tracking fields for preventing stuck collections
+    current_task_id = Column(String, nullable=True, index=True)  # Currently running task
+    task_history = Column(JSONB, nullable=True)  # History of all tasks for this collection
+    status_updated_at = Column(DateTime(timezone=True), nullable=True)  # When status last changed
 
     documents = relationship(
         "Document", back_populates="collection", cascade="all, delete-orphan"

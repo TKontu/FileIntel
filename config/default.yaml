@@ -4,6 +4,9 @@ llm:
   context_length: 128000
   temperature: 0.1
   rate_limit: 999
+  # Task timeout limits (prevents worker exhaustion)
+  task_timeout_seconds: 300  # 5 minute soft timeout for LLM tasks
+  task_hard_limit_seconds: 360  # 6 minute hard kill timeout
   circuit_breaker:
     failure_threshold: 5
     failure_window: 60
@@ -143,8 +146,16 @@ storage:
   connection_string: "postgresql://${DB_USER:-user}:${DB_PASSWORD:-password}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-fileintel}"
   cache_ttl: 3600
   redis_host: "localhost"
+  # Connection pool settings (prevents exhaustion)
+  pool_size: 20  # Base pool size
+  max_overflow: 30  # Additional connections allowed
+  pool_timeout: 30  # Seconds to wait for connection
 
 batch_processing:
   directory_input: ${INPUT_DIR:-/home/appuser/app/input}
   directory_output: ${OUTPUT_DIR:-/home/appuser/app/output}
   default_format: "json"
+  # Batch size limits (security - prevent DoS)
+  max_upload_batch_size: 50  # Maximum files per batch upload
+  max_file_size_mb: 100       # Maximum individual file size in MB
+  max_processing_batch_size: 20  # Maximum collections per batch process

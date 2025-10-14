@@ -5,6 +5,7 @@ Converts GraphRAG operations to distributed Celery tasks for parallel processing
 of entity extraction, community detection, and graph-based querying.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -752,8 +753,8 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
         try:
             graphrag_service = GraphRAGService(storage=storage, settings=config)
             # Remove index using GraphRAG service
-            # Note: remove_index should be sync since this is a Celery task
-            result = graphrag_service.remove_index(collection_id)
+            # Note: remove_index is async, so we use asyncio.run() to execute it
+            result = asyncio.run(graphrag_service.remove_index(collection_id))
 
             # Clean up database index info
             if hasattr(storage, "remove_graphrag_index_info"):
