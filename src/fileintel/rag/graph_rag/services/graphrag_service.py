@@ -219,8 +219,8 @@ class GraphRAGService:
             workspace_path, collection_id
         )
 
-        # Handle optional covariates
-        covariates_path = os.path.join(workspace_path, "output", "covariates.parquet")
+        # Handle optional covariates (workspace_path is already the output directory)
+        covariates_path = os.path.join(workspace_path, "covariates.parquet")
         covariates = None
         if os.path.exists(covariates_path):
             covariates = pd.read_parquet(covariates_path)

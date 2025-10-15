@@ -18,11 +18,16 @@ class ParquetLoader:
     async def load_parquet_files(
         self, workspace_path: str, collection_id: str
     ) -> Dict[str, pd.DataFrame]:
-        """Load all necessary parquet files for a collection."""
+        """Load all necessary parquet files for a collection.
+
+        Note: workspace_path is expected to be the output directory already
+        (e.g., /data/graphrag_indices/<collection_id>/output), so files are
+        referenced directly without additional 'output/' prefix.
+        """
         files_to_load = {
-            "entities": "output/entities.parquet",
-            "communities": "output/communities.parquet",
-            "community_reports": "output/community_reports.parquet",
+            "entities": "entities.parquet",
+            "communities": "communities.parquet",
+            "community_reports": "community_reports.parquet",
         }
 
         dataframes = {}

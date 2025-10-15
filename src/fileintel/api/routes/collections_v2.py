@@ -256,7 +256,7 @@ async def get_document(
         from fileintel.storage.models import Document
 
         # Search for documents starting with this prefix
-        matching_docs = storage.base.db.query(Document).filter(
+        matching_docs = storage.db.query(Document).filter(
             Document.id.like(f"{document_id}%")
         ).all()
 
@@ -298,7 +298,7 @@ async def delete_document(
     if not document and len(document_id) < 36:
         from fileintel.storage.models import Document
 
-        matching_docs = storage.base.db.query(Document).filter(
+        matching_docs = storage.db.query(Document).filter(
             Document.id.like(f"{document_id}%")
         ).all()
 
@@ -337,7 +337,7 @@ async def get_document_chunks(
     if not document and len(document_id) < 36:
         from fileintel.storage.models import Document
 
-        matching_docs = storage.base.db.query(Document).filter(
+        matching_docs = storage.db.query(Document).filter(
             Document.id.like(f"{document_id}%")
         ).all()
 

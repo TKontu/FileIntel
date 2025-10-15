@@ -146,6 +146,44 @@ async def clear_cache_namespace(namespace: str):
 @app.on_event("startup")
 async def on_startup():
     import os
+    import asyncio
+
+    # ============================================================================
+    # CRITICAL FIX: fnllm v0.4.1 Concurrency Bottleneck
+    # ============================================================================
+    # Issue: fnllm has a class-level Semaphore(1) in LimitContext.acquire_semaphore
+    #        that serializes ALL limiter acquisitions across ALL requests globally.
+    #        This defeats parallelism entirely despite our concurrent_requests=25 config.
+    #
+    # Root Cause: /fnllm/limiting/base.py:20
+    #   class LimitContext:
+    #       acquire_semaphore: ClassVar[Semaphore] = Semaphore()  # Defaults to 1!
+    #
+    # Impact: GraphRAG queries that should take 30-60 seconds timeout after 5 minutes
+    #         because only 1 LLM request processes at a time instead of 8-25 in parallel.
+    #
+    # Safety: This fix is safe because:
+    #   1. All requests share the same CompositeLimiter instance
+    #   2. All acquire limiters in the same order (no circular dependencies)
+    #   3. Individual limiters have their own synchronization primitives
+    #
+    # See: /docs/graphrag_concurrency_bottleneck_analysis.md for full analysis
+    # ============================================================================
+    try:
+        from fnllm.limiting.base import LimitContext
+
+        # Replace class-level semaphore to match our concurrent_requests configuration
+        LimitContext.acquire_semaphore = asyncio.Semaphore(25)
+
+        logger = logging.getLogger(__name__)
+        logger.info("✓ Applied fnllm concurrency fix: LimitContext.acquire_semaphore = Semaphore(25)")
+    except ImportError:
+        # fnllm not installed - GraphRAG not available, skip fix
+        pass
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to apply fnllm concurrency fix: {e}")
+    # ============================================================================
 
     config = get_config()
     setup_logging(config)
