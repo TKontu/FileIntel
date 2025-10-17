@@ -73,7 +73,7 @@ graphrag:
   async_processing:
     enabled: true                    # ON/OFF switch (set to false to disable)
     batch_size: 4                   # Concurrent requests per batch
-    max_concurrent_requests: 8      # Must match vLLM --max-num-seqs
+    max_concurrent_requests: 25     # Must match vLLM VLLM_MAX_NUM_SEQS (currently 16)
     batch_timeout: 30               # Timeout per batch (seconds)
     fallback_to_sequential: true    # Fallback if batching fails
   # Embedding configuration

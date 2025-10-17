@@ -66,7 +66,7 @@ class GlobalSearch(BaseSearch[GlobalContextBuilder]):
         map_max_length: int = 1000,
         reduce_max_length: int = 2000,
         context_builder_params: dict[str, Any] | None = None,
-        concurrent_coroutines: int = 32,
+        concurrent_coroutines: int = 25,  # Match vLLM capacity and system config
     ):
         super().__init__(
             model=model,

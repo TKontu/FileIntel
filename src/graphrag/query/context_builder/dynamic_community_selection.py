@@ -39,7 +39,7 @@ class DynamicCommunitySelection:
         keep_parent: bool = False,
         num_repeats: int = 1,
         max_level: int = 2,
-        concurrent_coroutines: int = 8,
+        concurrent_coroutines: int = 25,  # Match vLLM capacity and system config
         model_params: dict[str, Any] | None = None,
     ):
         self.model = model

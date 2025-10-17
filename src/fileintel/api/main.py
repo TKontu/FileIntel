@@ -172,7 +172,8 @@ async def on_startup():
     try:
         from fnllm.limiting.base import LimitContext
 
-        # Replace class-level semaphore to match our concurrent_requests configuration
+        # Replace class-level semaphore to match vLLM capacity and config
+        # Standard: 16 concurrent requests (matches VLLM_MAX_NUM_SEQS and max_concurrent_requests)
         LimitContext.acquire_semaphore = asyncio.Semaphore(25)
 
         logger = logging.getLogger(__name__)
