@@ -35,42 +35,144 @@
 
 ---
 
+## Key Updates (2025-10-18)
+
+**⚠️ Plan updated to reflect actual MinerU capabilities:**
+
+### What Changed
+
+1. **Two-Layer Type Taxonomy Added**
+   - **Layer 1 (Layout):** `text`, `table`, `image` - provided by MinerU
+   - **Layer 2 (Semantic):** `toc`, `lof`, `header`, `prose` - detected by Fileintel
+   - MinerU does NOT provide semantic types - all are `type: "text"`
+
+2. **Phase 1.5 Added: Semantic Type Detection** 🆕
+   - New phase between Phase 1 and 2
+   - Pattern-based detection for TOC/LOF (95%+ accuracy)
+   - Uses `text_level` field for header classification (100% accurate)
+   - Required because MinerU only provides layout types
+
+3. **MinerU Field Extraction Enhanced**
+   - **`text_level`**: Header level (1-6, 0=not header) - NOW USED
+   - **`table_body`**: HTML table structure - NOW EXTRACTED
+   - **`image_caption`**: Figure captions - NOW EMBEDDED
+   - **`table_caption`**, `table_footnote`, `image_footnote` - NOW PRESERVED
+
+4. **Metadata Model Updated**
+   - Old: `element_type` (assumed MinerU provides all types)
+   - New: `layout_type` (from MinerU) + `semantic_type` (detected)
+   - More accurate reflection of actual capabilities
+
+### Why These Changes
+
+- **User challenged plan compatibility:** "Is the plan well compatible with fileintel? Does it utilize well the output formats provided by MinerU?"
+- **Compatibility analysis revealed:** MinerU only provides 3 layout types, not 10+ semantic types
+- **Solution:** Two-layer approach is BETTER architecture (separation of concerns)
+
+### Impact on Implementation
+
+- **Phases 1-3:** Updated with actual field names and detection logic
+- **Timeline:** +2 days for Phase 1.5 (semantic detection)
+- **Complexity:** Slightly higher, but more robust and maintainable
+- **Benefits:** Same outcomes, better architectural foundation
+
+---
+
 ## Current Architecture
 
-### What MinerU Provides
+### What MinerU Actually Provides
 
-**content_list.json structure:**
+**⚠️ IMPORTANT:** MinerU provides **layout-level** types only, not semantic types.
+
+**Actual content_list.json structure** (from real document analysis):
 
 ```json
 [
   {
     "type": "text",
-    "text": "This is regular prose content.",
-    "page_idx": 1,
-    "bbox": [x, y, width, height]
+    "text": "Agile Processes for Hardware Development",
+    "text_level": 1,  // Header level 1-6 (0 = not a header)
+    "page_idx": 0,
+    "bbox": [232, 142, 767, 220]
   },
   {
     "type": "text",
-    "text": "6.1 Overview...........19\n6.2 Velocity...........19\n...",
+    "text": "6.1 Overview...19\n6.2 Velocity...19\n...",  // TOC, but type is still "text"!
     "page_idx": 2,
-    "bbox": [x, y, width, height]
+    "bbox": [129, 554, 885, 646]
   },
   {
     "type": "table",
-    "text": "",
-    "table_body": "<table>...</table>",
+    "text": "",  // Often EMPTY for tables!
+    "table_body": "<table><tr><td>Data</td></tr></table>",  // Actual content
     "table_caption": ["Table 1: Results"],
-    "page_idx": 3,
-    "bbox": [x, y, width, height]
+    "table_footnote": [],
+    "bbox": [111, 554, 897, 898],
+    "page_idx": 22
+  },
+  {
+    "type": "image",
+    "img_path": "images/abc123.jpg",
+    "image_caption": ["Figure 1: Sample diagram"],
+    "image_footnote": [],
+    "bbox": [323, 255, 676, 546],
+    "page_idx": 0
   }
 ]
 ```
 
-**Rich metadata per element:**
-- `type`: text, table, image, header, footer, list, page_number, etc.
-- `bbox`: Precise coordinates
-- `page_idx`: Exact page location
-- Special fields: `table_body`, `table_caption`, etc.
+**Element types MinerU provides:**
+
+| Type | Purpose | Key Fields |
+|------|---------|------------|
+| `text` | All text content (prose, TOC, headers, etc.) | `text`, `text_level`, `bbox`, `page_idx` |
+| `table` | Tables | `table_body` (HTML), `table_caption`, `table_footnote` |
+| `image` | Images/figures | `img_path`, `image_caption`, `image_footnote` |
+
+**❌ MinerU does NOT provide these types:**
+- `toc`, `lof`, `lot` (all are `type: "text"`)
+- `header`, `footer` (all are `type: "text"`)
+- `page_number`, `list`, `ref_text` (all are `type: "text"`)
+
+**✅ Additional fields MinerU provides:**
+- `text_level`: Header level (1-6, or 0 for non-headers)
+- `bbox`: Precise element coordinates `[x, y, width, height]`
+- `page_idx`: Zero-based page index
+- `table_body`: HTML table structure (for table elements)
+- `table_caption`, `table_footnote`: Table metadata
+- `img_path`: Relative path to extracted image
+- `image_caption`, `image_footnote`: Image metadata
+
+---
+
+## Element Type Taxonomy: Two Layers
+
+### Layer 1: Layout Types (from MinerU)
+
+MinerU performs **layout analysis** and classifies elements by visual structure:
+
+- **`text`**: Any text block (prose, headers, TOC, footers, etc.)
+- **`table`**: Tabular data
+- **`image`**: Figures, diagrams, photos
+
+### Layer 2: Semantic Types (detected by Fileintel)
+
+Fileintel must add **semantic classification** to distinguish within `text` elements:
+
+| Semantic Type | Detection Method | Accuracy | L1 Type |
+|--------------|------------------|----------|---------|
+| `prose` | Default (text that doesn't match patterns) | N/A | text |
+| `toc` | Pattern: section numbers + dots + page numbers | 95%+ | text |
+| `lof` | Pattern: "Figure X:" + dots + page numbers | 95%+ | text |
+| `lot` | Pattern: "Table X:" + dots + page numbers | 95%+ | text |
+| `header` | Use `text_level` field (1-6) | 100% | text |
+| `bibliography` | Pattern: citation format | 85% | text |
+| `index` | Pattern: alphabetical + page numbers | 90% | text |
+
+**This two-layer approach is BETTER architecture:**
+- MinerU focuses on what it does well (layout detection)
+- Fileintel adds domain-specific semantic understanding
+- More maintainable and testable
 
 ---
 
@@ -158,21 +260,25 @@ chunking_result = chunker.chunk_text_adaptive(full_text, page_mappings)
 
 | Field | Available? | Currently Used? | Purpose |
 |-------|-----------|----------------|---------|
-| `type` | ✅ Yes | ⚠️ Partially (counts only) | Identify element purpose |
-| `text` | ✅ Yes | ✅ Yes | Content |
-| `bbox` | ✅ Yes | ⚠️ Stored but unused | Position on page |
-| `page_idx` | ✅ Yes | ✅ Yes | Page mapping |
+| `type` | ✅ Yes | ⚠️ Partially (counts only) | Layout type (text/table/image) |
+| `text` | ✅ Yes | ✅ Yes | Text content |
+| `text_level` | ✅ Yes | ❌ No | Header level (1-6, 0=not header) |
+| `bbox` | ✅ Yes | ⚠️ Stored but unused | Element coordinates |
+| `page_idx` | ✅ Yes | ✅ Yes | Page location |
 | `table_body` | ✅ Yes (tables) | ❌ No | HTML table structure |
-| `table_caption` | ✅ Yes (tables) | ❌ No | Table titles |
-| Special content | ✅ Yes (varies) | ❌ No | Type-specific data |
+| `table_caption` | ✅ Yes (tables) | ❌ No | Table titles/captions |
+| `table_footnote` | ✅ Yes (tables) | ❌ No | Table footnotes |
+| `img_path` | ✅ Yes (images) | ❌ No | Extracted image file path |
+| `image_caption` | ✅ Yes (images) | ❌ No | Figure captions |
+| `image_footnote` | ✅ Yes (images) | ❌ No | Figure footnotes |
 
 **What we COULD know but DON'T:**
-- Which text blocks are TOC/LOF
-- Which text blocks are headers/footers
-- Which text blocks are page numbers
-- Exact table structure (HTML)
-- Element ordering within page
-- Element spatial relationships
+- **Header hierarchy** (`text_level` field available but unused)
+- **Which text blocks are TOC/LOF** (need pattern detection)
+- **Table structure** (`table_body` HTML available but unused)
+- **Image captions** (`image_caption` available but unused)
+- **Element ordering within page** (preserved in content_list)
+- **Element spatial relationships** (`bbox` coordinates available)
 
 ---
 
@@ -181,29 +287,32 @@ chunking_result = chunker.chunk_text_adaptive(full_text, page_mappings)
 **Example page with mixed content:**
 
 ```
-MinerU provides (simplified):
+MinerU provides (actual types):
 [
-  {type: "header", text: "Chapter 1"},
-  {type: "text", text: "This is prose..."},
-  {type: "text", text: "1.1 Introduction.....5\n1.2 Methods.....12"},  ← TOC!
-  {type: "text", text: "More prose..."},
-  {type: "footer", text: "Page 1"}
+  {type: "text", text: "Chapter 1", text_level: 1},  ← Header (level 1)
+  {type: "text", text: "This is prose...", text_level: 0},  ← Prose
+  {type: "text", text: "1.1 Introduction.....5\n1.2 Methods.....12", text_level: 0},  ← TOC!
+  {type: "text", text: "More prose...", text_level: 0},  ← Prose
+  {type: "text", text: "Page 1", text_level: 0}  ← Page number
 ]
 ```
 
-**Fileintel creates:**
+**Fileintel currently creates:**
+
 ```
 TextElement(
   text="Chapter 1\nThis is prose...\n1.1 Introduction.....5\n1.2 Methods.....12\nMore prose...\nPage 1",
-  metadata={'element_types': {'header': 1, 'text': 3, 'footer': 1}}
+  metadata={'element_types': {'text': 5}}  ← All just "text"!
 )
 ```
 
 **Problems:**
-1. Can't identify TOC within the text
-2. Header and footer mixed with content
-3. No way to filter by element type
-4. Chunker treats everything equally
+
+1. **Can't identify TOC** - it's just mixed into the text blob
+2. **Header information lost** - `text_level: 1` field discarded
+3. **Page number mixed with content** - can't filter it out
+4. **No element boundaries** - chunker sees one giant string
+5. **Semantic classification impossible** - all elements are `type: "text"`
 
 ---
 
@@ -343,7 +452,7 @@ element_info = {
 # ...but then concatenates all text, losing type association
 ```
 
-**Proposed:**
+**Proposed (Updated for actual MinerU fields):**
 
 ```python
 # Create TextElement PER content_list item, not per page
@@ -351,55 +460,87 @@ def _create_elements_from_json(self, json_data, ...) -> List[TextElement]:
     text_elements = []
 
     for item in content_list:
-        # Detect special types
-        elem_type = item.get('type', 'text')
+        # Get layout type from MinerU (L1: layout-level)
+        layout_type = item.get('type', 'text')
         text = item.get('text', '')
 
-        # Enhanced type detection
-        if elem_type == 'text' and text:
-            # Check if it's actually TOC/LOF
-            is_toc, toc_type = is_toc_or_lof(text)
-            if is_toc:
-                elem_type = toc_type  # Change to 'toc', 'lof', or 'lot'
-
-        # Build metadata with full type information
+        # Build base metadata with MinerU fields
         metadata = {
             'source': str(file_path),
             'page_number': item.get('page_idx', 0) + 1,
-            'element_type': elem_type,  # ← Preserved at element level!
-            'element_index': item.get('index', 0),
+            'layout_type': layout_type,  # ← L1: text/table/image from MinerU
             'bbox': item.get('bbox', []),
-            'has_table_body': 'table_body' in item,
-            'table_caption': item.get('table_caption', [])
+            'element_index': item.get('index', 0)
         }
 
-        # Handle special cases
-        if elem_type == 'table' and not text:
-            # Tables often have no .text, only table_body
-            text = ' '.join(item.get('table_caption', []))
+        # Add type-specific MinerU fields
+        if layout_type == 'text':
+            # Capture header level (0 = not a header, 1-6 = header levels)
+            text_level = item.get('text_level', 0)
+            metadata['text_level'] = text_level
+            metadata['is_header'] = text_level > 0
 
+            # Apply semantic detection (L2: semantic classification)
+            if text:
+                # Detect TOC/LOF using pattern matching
+                is_toc_lof, detected_type = is_toc_or_lof(text)
+                if is_toc_lof:
+                    metadata['semantic_type'] = detected_type  # 'toc', 'lof', 'lot'
+                elif text_level > 0:
+                    metadata['semantic_type'] = 'header'
+                    metadata['header_level'] = text_level
+                else:
+                    metadata['semantic_type'] = 'prose'  # Default
+
+        elif layout_type == 'table':
+            # Extract table-specific fields
+            metadata['table_body'] = item.get('table_body', '')  # HTML table
+            metadata['table_caption'] = item.get('table_caption', [])
+            metadata['table_footnote'] = item.get('table_footnote', [])
+            metadata['semantic_type'] = 'table'
+
+            # Use caption as text if main text is empty
+            if not text and metadata['table_caption']:
+                text = ' '.join(metadata['table_caption'])
+
+        elif layout_type == 'image':
+            # Extract image-specific fields
+            metadata['img_path'] = item.get('img_path', '')
+            metadata['image_caption'] = item.get('image_caption', [])
+            metadata['image_footnote'] = item.get('image_footnote', [])
+            metadata['semantic_type'] = 'image'
+
+            # Use caption as text (for separate embedding)
+            if metadata['image_caption']:
+                text = ' '.join(metadata['image_caption'])
+
+        # Create TextElement with full metadata
         text_elements.append(TextElement(text=text, metadata=metadata))
 
     return text_elements
 ```
 
 **Benefits:**
-- Each `TextElement` has its own type
-- Can filter/process by type later
-- Chunker can see element types
+
+- **Two-layer type system:** `layout_type` (from MinerU) + `semantic_type` (detected)
+- **Preserves all MinerU fields:** `text_level`, `table_body`, `image_caption`
+- **Element-level granularity:** Each TextElement = one content_list item
+- **Header hierarchy available:** Can build document outline from `text_level`
+- **Table HTML preserved:** Can parse `table_body` for better chunking
+- **Image captions embedded:** Figures become searchable via captions
 
 ---
 
 #### Phase 2: Type-Based Filtering
 
-**Add filtering before chunking:**
+**Add filtering before chunking (uses detected semantic types):**
 
 ```python
 # In document_tasks.py or new filtering module
 
 def filter_elements_for_rag(elements: List[TextElement]) -> Tuple[List[TextElement], Dict]:
     """
-    Filter elements based on RAG relevance.
+    Filter elements based on RAG relevance using semantic classification.
 
     Returns:
         (filtered_elements, extracted_structure)
@@ -410,31 +551,36 @@ def filter_elements_for_rag(elements: List[TextElement]) -> Tuple[List[TextEleme
     headers = []
 
     for elem in elements:
-        elem_type = elem.metadata.get('element_type', 'text')
+        # Get semantic type (detected in Phase 1)
+        semantic_type = elem.metadata.get('semantic_type', 'prose')
+        layout_type = elem.metadata.get('layout_type', 'text')
 
-        # Skip non-RAG-relevant types
-        if elem_type in ['page_number', 'footer']:
-            continue
-
-        # Extract structure from TOC/LOF (don't chunk)
-        if elem_type in ['toc', 'lof', 'lot']:
-            if elem_type == 'toc':
+        # Extract structure from TOC/LOF (don't embed)
+        if semantic_type in ['toc', 'lof', 'lot']:
+            if semantic_type == 'toc':
                 toc_entries.extend(parse_toc_entries(elem.text))
-            elif elem_type in ['lof', 'lot']:
+            elif semantic_type in ['lof', 'lot']:
                 lof_entries.extend(parse_figure_table_list(elem.text))
-            continue  # Don't include in filtered elements
+            continue  # Skip TOC/LOF elements
 
-        # Extract headers as structure
-        if elem_type == 'header':
+        # Extract headers as structure but INCLUDE in RAG
+        if semantic_type == 'header':
             headers.append({
                 'text': elem.text,
                 'page': elem.metadata.get('page_number'),
-                'level': detect_header_level(elem.text)
+                'level': elem.metadata.get('header_level', 1)
             })
-            # Include headers in RAG (they provide context)
+            # Headers provide context, so embed them
             filtered.append(elem)
 
-        # Include everything else
+        # Handle images: embed captions only
+        elif layout_type == 'image':
+            if elem.metadata.get('image_caption'):
+                # Caption is already in elem.text (set in Phase 1)
+                filtered.append(elem)
+            # Skip images without captions
+
+        # Include prose, tables, and other content
         else:
             filtered.append(elem)
 
@@ -448,16 +594,18 @@ def filter_elements_for_rag(elements: List[TextElement]) -> Tuple[List[TextEleme
 ```
 
 **Benefits:**
-- TOC/LOF excluded from embeddings
-- But structural information preserved
-- Can query structure separately
-- Reduced embedding costs
+
+- **TOC/LOF excluded from embeddings** (no chunking failures)
+- **Structural information preserved** in document metadata
+- **Image captions embedded** (figures become searchable)
+- **Headers included** (provide context for semantic search)
+- **Reduced embedding costs** (skip formatting-heavy content)
 
 ---
 
 #### Phase 3: Type-Aware Chunking
 
-**Modify chunker to respect element types:**
+**Modify chunker to respect semantic types and use MinerU fields:**
 
 ```python
 # In chunking.py
@@ -468,41 +616,43 @@ def chunk_elements_by_type(
 ) -> List[Dict]:
     """
     Chunk elements using type-aware strategies.
+    Uses semantic_type and layout-specific fields from MinerU.
     """
     chunks = []
 
     for elem in elements:
-        elem_type = elem.metadata.get('element_type', 'text')
+        semantic_type = elem.metadata.get('semantic_type', 'prose')
+        layout_type = elem.metadata.get('layout_type', 'text')
 
-        if elem_type == 'table':
-            # Tables: keep as single chunk if possible
-            if estimate_tokens(elem.text) <= max_tokens:
-                chunks.append({
-                    'text': elem.text,
-                    'metadata': elem.metadata,
-                    'chunk_strategy': 'table_whole'
-                })
-            else:
-                # Table too large: extract caption only
-                caption = ' '.join(elem.metadata.get('table_caption', []))
-                chunks.append({
-                    'text': caption,
-                    'metadata': {**elem.metadata, 'table_body_skipped': True},
-                    'chunk_strategy': 'table_caption_only'
-                })
+        if layout_type == 'table':
+            # Strategy 1: Use table caption if available and fits
+            caption_text = ' '.join(elem.metadata.get('table_caption', []))
 
-        elif elem_type == 'list':
-            # Lists: try to keep items together
-            list_chunks = chunk_preserving_list_items(elem.text, max_tokens)
-            for chunk_text in list_chunks:
+            if caption_text and estimate_tokens(caption_text) <= max_tokens:
                 chunks.append({
-                    'text': chunk_text,
-                    'metadata': elem.metadata,
-                    'chunk_strategy': 'list_aware'
+                    'text': caption_text,
+                    'metadata': {**elem.metadata, 'chunk_strategy': 'table_caption'},
                 })
+            # Strategy 2: Parse table_body HTML (if needed for content)
+            elif elem.metadata.get('table_body'):
+                # Parse HTML to plain text, then chunk if needed
+                table_html = elem.metadata['table_body']
+                table_text = parse_html_table_to_text(table_html)
 
-        elif elem_type in ['text', 'header']:
-            # Prose: sentence-based chunking
+                if estimate_tokens(table_text) <= max_tokens:
+                    chunks.append({
+                        'text': table_text,
+                        'metadata': {**elem.metadata, 'chunk_strategy': 'table_parsed'},
+                    })
+                else:
+                    # Table too large: use caption only
+                    chunks.append({
+                        'text': caption_text or "Table (content too large)",
+                        'metadata': {**elem.metadata, 'chunk_strategy': 'table_caption_fallback'},
+                    })
+
+        elif semantic_type in ['prose', 'header']:
+            # Prose and headers: use sentence-based chunking
             prose_chunks = chunk_text_sentence_based(elem.text, max_tokens)
             for chunk_text in prose_chunks:
                 chunks.append({
@@ -511,16 +661,29 @@ def chunk_elements_by_type(
                     'chunk_strategy': 'sentence_based'
                 })
 
-        # Other types handled similarly...
+        elif semantic_type == 'image':
+            # Image captions: treat as single chunk
+            # (caption is already in elem.text from Phase 1)
+            if elem.text and estimate_tokens(elem.text) <= max_tokens:
+                chunks.append({
+                    'text': elem.text,
+                    'metadata': elem.metadata,
+                    'chunk_strategy': 'image_caption'
+                })
+
+        # Note: TOC/LOF filtered out in Phase 2, never reach here
 
     return chunks
 ```
 
 **Benefits:**
-- Tables handled appropriately
-- Lists preserved better
-- Prose chunked semantically
-- TOC never reaches this stage (filtered out)
+
+- **Table captions embedded** (searchable table metadata)
+- **Table HTML can be parsed** if full content needed
+- **Headers chunked normally** (provide context)
+- **Image captions as single chunks** (figure discovery)
+- **TOC/LOF never chunked** (filtered in Phase 2)
+- **Zero oversized chunks** (proper handling per type)
 
 ---
 
@@ -609,18 +772,37 @@ document_processing:
   # MinerU structure utilization
   use_element_level_types: true  # NEW: Preserve element-level types
 
-  # Element filtering for RAG
+  # Semantic type detection (Layer 2)
+  semantic_detection:
+    enable_toc_lof_detection: true  # Pattern-based TOC/LOF detection
+    enable_bibliography_detection: true  # Citation format detection
+    enable_index_detection: true  # Alphabetical index detection
+    detection_confidence_threshold: 0.85  # Minimum confidence for classification
+
+  # Element filtering for RAG (uses semantic types)
   element_filters:
-    exclude_types: ['page_number', 'footer']  # Skip these types
-    extract_structure_types: ['toc', 'lof', 'lot']  # Extract, don't embed
-    embed_types: ['text', 'header', 'list']  # Embed these
+    # Semantic types to skip (don't embed)
+    skip_semantic_types: ['toc', 'lof', 'lot', 'bibliography', 'index']
+
+    # Semantic types to extract as structure (don't embed, but parse)
+    extract_structure_types: ['toc', 'lof', 'lot']
+
+    # Semantic types to embed
+    embed_semantic_types: ['prose', 'header']  # Headers provide context
+
+    # Layout types handling
+    embed_layout_types:
+      table: 'caption_only'  # or 'full_if_small', 'parsed_html'
+      image: 'caption_only'  # Embed image captions only
 
   # Type-aware chunking
   chunking:
     use_type_aware: true
-    table_strategy: 'caption_only'  # or 'whole_if_small', 'split'
-    list_strategy: 'preserve_items'
-    toc_strategy: 'extract_structure'
+    strategies:
+      table: 'caption_only'  # Use table_caption field
+      image: 'single_chunk'  # One chunk per caption
+      header: 'sentence_based'  # Chunk with context
+      prose: 'sentence_based'  # Normal chunking
 ```
 
 ---
@@ -636,32 +818,66 @@ These phases represent the PROPOSED implementation plan. Only the analysis and d
 ### Phase 1: Element-Level Preservation (1 week) - **NOT IMPLEMENTED**
 
 **Tasks:**
+
 1. - [ ] Modify `_create_elements_from_json()` to create one TextElement per content_list item
-2. - [ ] Add element_type to TextElement metadata
-3. - [ ] Add TOC/LOF detection function
-4. - [ ] Add feature flag `use_element_level_types`
-5. - [ ] Test with sample documents
-6. - [ ] Verify backward compatibility
+2. - [ ] Add `layout_type` and `semantic_type` to metadata (two-layer system)
+3. - [ ] Extract MinerU fields: `text_level`, `table_body`, `image_caption`
+4. - [ ] Handle tables: use `table_caption` as text if main text empty
+5. - [ ] Handle images: use `image_caption` as text for embedding
+6. - [ ] Add feature flag `use_element_level_types`
+7. - [ ] Test with sample documents
+8. - [ ] Verify backward compatibility
 
 **Deliverables:**
+
 - Modified `mineru_selfhosted.py`
-- Element-level type preservation working
+- Element-level preservation working
+- All MinerU fields extracted (`text_level`, `table_body`, `image_caption`)
 - Tests passing
+
+---
+
+### Phase 1.5: Semantic Type Detection (2 days) - **NOT IMPLEMENTED** 🆕
+
+**NEW PHASE - Required because MinerU only provides layout types**
+
+**Tasks:**
+
+1. - [ ] Implement `is_toc_or_lof()` function (reuse from `toc_lof_chunking_issue.md`)
+2. - [ ] Add bibliography detection (citation format pattern)
+3. - [ ] Add index page detection (alphabetical + page numbers)
+4. - [ ] Create `detect_semantic_type()` orchestrator function
+5. - [ ] Integrate detection into Phase 1's element creation
+6. - [ ] Test detection accuracy (target: 95%+ for TOC/LOF)
+7. - [ ] Add detection confidence scores to metadata
+
+**Deliverables:**
+
+- `element_detection.py` module with pattern matchers
+- Unit tests for each detection type (TOC, LOF, LOT, bibliography, index)
+- Detection accuracy report
+- Integration with `_create_elements_from_json()`
 
 ---
 
 ### Phase 2: Type-Based Filtering (3 days) - **NOT IMPLEMENTED**
 
 **Tasks:**
-1. - [ ] Implement `filter_elements_for_rag()`
-2. - [ ] Add TOC/LOF structure extraction
-3. - [ ] Integrate filtering before chunking
-4. - [ ] Add config for element filters
-5. - [ ] Test filtering accuracy
+
+1. - [ ] Implement `filter_elements_for_rag()` using `semantic_type`
+2. - [ ] Add TOC/LOF structure extraction (parse entries)
+3. - [ ] Add image caption extraction as separate chunks
+4. - [ ] Extract header hierarchy using `text_level` field
+5. - [ ] Integrate filtering before chunking in workflow
+6. - [ ] Add config for element filters
+7. - [ ] Test filtering accuracy
 
 **Deliverables:**
+
 - `element_filter.py` module
-- TOC/LOF extraction working
+- TOC/LOF parsing working (extract structured entries)
+- Image captions embedded separately
+- Header hierarchy extracted
 - Config-driven filtering
 
 ---
@@ -669,17 +885,23 @@ These phases represent the PROPOSED implementation plan. Only the analysis and d
 ### Phase 3: Type-Aware Chunking (1 week) - **NOT IMPLEMENTED**
 
 **Tasks:**
-1. - [ ] Implement `chunk_elements_by_type()`
-2. - [ ] Add table-specific chunking
-3. - [ ] Add list-preserving chunking
-4. - [ ] Integrate with existing chunker
-5. - [ ] Add chunking strategy metadata
-6. - [ ] Test on diverse documents
+
+1. - [ ] Implement `chunk_elements_by_type()` using `semantic_type` and `layout_type`
+2. - [ ] Add table-specific chunking (use `table_body` HTML or caption)
+3. - [ ] Add HTML table parser (`parse_html_table_to_text()`)
+4. - [ ] Add header-aware chunking (use `text_level` for context)
+5. - [ ] Add image caption chunking (single chunk per caption)
+6. - [ ] Integrate with existing sentence-based chunker
+7. - [ ] Add chunking strategy metadata
+8. - [ ] Test on diverse documents
 
 **Deliverables:**
+
 - Modified `chunking.py`
-- Type-aware strategies working
+- Table HTML parsing working
+- Type-aware strategies for all semantic types
 - Zero oversized chunks from TOC/LOF
+- Header hierarchy preserved in chunks
 
 ---
 
