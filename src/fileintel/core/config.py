@@ -149,6 +149,16 @@ class MinerUSettings(BaseModel):
     save_outputs: bool = Field(default=False)
     output_directory: str = Field(default="/home/appuser/app/mineru_outputs")
 
+    # Element-level type preservation (Phase 1 of structure utilization)
+    # When True: creates one TextElement per content_list item (preserves element boundaries)
+    # When False: concatenates all elements per page (backward compatible)
+    use_element_level_types: bool = Field(default=False)
+
+    # Element filtering (Phase 2 - requires use_element_level_types=True)
+    # When True: filters out TOC/LOF elements before chunking (prevents oversized chunks)
+    # When False: all elements pass through to chunking (backward compatible)
+    enable_element_filtering: bool = Field(default=False)
+
     # Commercial API specific settings (used when api_type="commercial")
     # Optional fields that can be None (for self-hosted API which doesn't need them)
     api_token: Optional[str] = Field(default="")
@@ -156,6 +166,30 @@ class MinerUSettings(BaseModel):
     max_retries: int = Field(default=3)
     shared_folder_path: str = Field(default="/shared/uploads")
     shared_folder_url_prefix: str = Field(default="file:///shared/uploads")
+
+    @model_validator(mode='after')
+    def validate_feature_flags(self) -> 'MinerUSettings':
+        """Validate feature flag dependencies."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # CRITICAL: enable_element_filtering requires use_element_level_types
+        if self.enable_element_filtering and not self.use_element_level_types:
+            raise ValueError(
+                "Invalid MinerU configuration: enable_element_filtering=true requires "
+                "use_element_level_types=true. Filtering needs element-level semantic types. "
+                "Fix: Set use_element_level_types=true or disable filtering."
+            )
+
+        # WARNING: element types without filtering may create large chunks
+        if self.use_element_level_types and not self.enable_element_filtering:
+            logger.warning(
+                "MinerU element-level types enabled without filtering. "
+                "TOC/LOF elements will be included in chunks, potentially creating "
+                "oversized chunks (>450 tokens). Consider enabling enable_element_filtering=true."
+            )
+
+        return self
 
 
 class DocumentProcessingSettings(BaseModel):

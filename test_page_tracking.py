@@ -52,7 +52,7 @@ def test_page_tracking():
         print(f"📖 Processing test file: {test_file}")
 
         # Test the new page-aware processing
-        content, page_mappings = read_document_content(test_file)
+        content, page_mappings, _ = read_document_content(test_file)  # Ignore metadata in test
 
         print(f"📄 Extracted content: {len(content)} characters")
         print(f"📋 Page mappings found: {len(page_mappings)}")

@@ -9,6 +9,7 @@ from .base import StorageInterface
 from .document_storage import DocumentStorage
 from .vector_search_storage import VectorSearchStorage
 from .graphrag_storage import GraphRAGStorage
+from .structure_storage import DocumentStructureStorage
 from typing import List, Dict, Optional, Any
 import logging
 
@@ -23,6 +24,7 @@ class PostgreSQLStorage(StorageInterface):
     - DocumentStorage: Collections, documents, chunks
     - VectorSearchStorage: Vector similarity search
     - GraphRAGStorage: GraphRAG entities, communities, relationships
+    - DocumentStructureStorage: Document structure (TOC, LOF, headers)
 
     This approach follows the Single Responsibility Principle while
     maintaining backward compatibility with the existing interface.
@@ -34,6 +36,7 @@ class PostgreSQLStorage(StorageInterface):
         self.document_storage = DocumentStorage(config_or_session)
         self.vector_storage = VectorSearchStorage(config_or_session)
         self.graphrag_storage = GraphRAGStorage(config_or_session)
+        self.structure_storage = DocumentStructureStorage(config_or_session)
 
         # Keep reference to database session for direct access if needed
         self.db = self.document_storage.db
@@ -258,6 +261,60 @@ class PostgreSQLStorage(StorageInterface):
         """Get GraphRAG relationships."""
         return self.graphrag_storage.get_graphrag_relationships(collection_id)
 
+    # Document Structure Operations (delegate to DocumentStructureStorage)
+    def store_document_structure(
+        self,
+        document_id: str,
+        structure_type: str,
+        data: Dict[str, Any]
+    ):
+        """Store extracted structure for a document."""
+        return self.structure_storage.store_document_structure(
+            document_id, structure_type, data
+        )
+
+    def get_document_structure(
+        self,
+        document_id: str,
+        structure_type: Optional[str] = None
+    ):
+        """Get structure(s) for a document."""
+        return self.structure_storage.get_document_structure(
+            document_id, structure_type
+        )
+
+    def get_toc_entries(self, document_id: str) -> List[Dict[str, Any]]:
+        """Get parsed TOC entries for a document."""
+        return self.structure_storage.get_toc_entries(document_id)
+
+    def get_figure_list(self, document_id: str) -> List[Dict[str, Any]]:
+        """Get list of figures (LOF) for a document."""
+        return self.structure_storage.get_figure_list(document_id)
+
+    def get_table_list(self, document_id: str) -> List[Dict[str, Any]]:
+        """Get list of tables (LOT) for a document."""
+        return self.structure_storage.get_table_list(document_id)
+
+    def get_header_hierarchy(self, document_id: str) -> List[Dict[str, Any]]:
+        """Get header hierarchy for a document."""
+        return self.structure_storage.get_header_hierarchy(document_id)
+
+    def search_toc_by_keyword(
+        self,
+        document_id: str,
+        keyword: str
+    ) -> List[Dict[str, Any]]:
+        """Search TOC entries by keyword."""
+        return self.structure_storage.search_toc_by_keyword(document_id, keyword)
+
+    def get_structure_statistics(self, document_id: str) -> Dict[str, Any]:
+        """Get statistics about document structure."""
+        return self.structure_storage.get_structure_statistics(document_id)
+
+    def delete_document_structures(self, document_id: str) -> bool:
+        """Delete all structures for a document."""
+        return self.structure_storage.delete_document_structures(document_id)
+
     # Utility methods for accessing underlying storage components
     def get_document_storage(self) -> DocumentStorage:
         """Access the document storage component."""
@@ -271,11 +328,16 @@ class PostgreSQLStorage(StorageInterface):
         """Access the GraphRAG storage component."""
         return self.graphrag_storage
 
+    def get_structure_storage(self) -> DocumentStructureStorage:
+        """Access the document structure storage component."""
+        return self.structure_storage
+
     def close(self):
         """Close all storage connections."""
         self.document_storage.close()
         self.vector_storage.close()
         self.graphrag_storage.close()
+        self.structure_storage.base.close()
 
     def __enter__(self):
         return self

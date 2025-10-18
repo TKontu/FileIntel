@@ -114,6 +114,18 @@ document_processing:
     save_outputs: true
     output_directory: "/home/appuser/app/mineru_outputs"
 
+    # Element-level type preservation (EXPERIMENTAL - Phase 1 of structure utilization)
+    # When true: preserves MinerU element boundaries (one TextElement per content_list item)
+    # When false: concatenates all elements per page (current behavior, backward compatible)
+    # Default: false (safe, preserves existing behavior)
+    use_element_level_types: false
+
+    # Element filtering (EXPERIMENTAL - Phase 2, requires use_element_level_types=true)
+    # When true: filters out TOC/LOF elements before chunking (prevents oversized chunks)
+    # When false: all elements pass through to chunking (backward compatible)
+    # Default: false (safe, preserves existing behavior)
+    enable_element_filtering: false
+
     # Commercial API specific settings (used when api_type="commercial")
     api_token: ${MINERU_API_TOKEN:-}
     poll_interval: 10

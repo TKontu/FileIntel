@@ -24,6 +24,7 @@ import logging
 
 from ..elements import DocumentElement, TextElement
 from .traditional_pdf import validate_file_for_processing, DocumentProcessingError
+from ..element_detection import detect_semantic_type
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +120,30 @@ class MinerUSelfHostedProcessor:
                 json_data, markdown_content, file_path, log
             )
 
+            # Apply element filtering if enabled (Phase 2)
+            mineru_config = self.config.document_processing.mineru
+            if (hasattr(mineru_config, 'use_element_level_types') and
+                mineru_config.use_element_level_types and
+                hasattr(mineru_config, 'enable_element_filtering') and
+                mineru_config.enable_element_filtering):
+
+                from ..element_filter import filter_elements_for_rag
+
+                log.info(f"Element filtering enabled: filtering {len(elements)} elements")
+                filtered_elements, extracted_structure = filter_elements_for_rag(elements)
+
+                log.info(f"Filtered: {len(filtered_elements)} elements to embed (removed {len(elements) - len(filtered_elements)})")
+                elements = filtered_elements
+            else:
+                # Filtering disabled, no structure extraction
+                extracted_structure = None
+
             # Build comprehensive metadata
             metadata = self._build_metadata(json_data, mineru_results, file_path)
+
+            # Add extracted structure to metadata (Phase 4)
+            if extracted_structure:
+                metadata['document_structure'] = extracted_structure
 
             log.info(f"Self-hosted MinerU processing successful: {len(elements)} elements created")
             return elements, metadata
@@ -532,18 +555,41 @@ class MinerUSelfHostedProcessor:
         log
     ) -> List[TextElement]:
         """
-        Create TextElements using JSON-first approach with perfect page mapping.
+        Create TextElements using JSON-first approach.
 
-        Same logic as commercial API processor for consistency.
+        Dispatches to element-level or page-level processing based on config flag.
+        """
+        mineru_config = self.config.document_processing.mineru
+
+        content_list = json_data.get('content_list')
+        if not content_list:
+            backend = getattr(mineru_config, 'model_version', 'pipeline')
+            log.warning("No content_list found in self-hosted API response, falling back to markdown")
+            return self._create_elements_from_markdown_fallback(markdown_content, file_path, backend)
+
+        # Check feature flag for element-level vs page-level processing
+        if mineru_config.use_element_level_types:
+            log.info("Using element-level type preservation (EXPERIMENTAL)")
+            return self._create_elements_element_level(json_data, markdown_content, file_path, log)
+        else:
+            return self._create_elements_page_level(json_data, markdown_content, file_path, log)
+
+    def _create_elements_page_level(
+        self,
+        json_data: Dict[str, Any],
+        markdown_content: str,
+        file_path: Path,
+        log
+    ) -> List[TextElement]:
+        """
+        Create TextElements by grouping all elements per page (backward compatible).
+
+        This is the original behavior: concatenates all text from a page into one TextElement.
         """
         mineru_config = self.config.document_processing.mineru
         backend = getattr(mineru_config, 'model_version', 'pipeline')
 
         content_list = json_data.get('content_list')
-
-        if not content_list:
-            log.warning("No content_list found in self-hosted API response, falling back to markdown")
-            return self._create_elements_from_markdown_fallback(markdown_content, file_path, backend)
 
         # Extract markdown headers and map to pages for enhanced metadata
         markdown_headers = self._extract_markdown_headers(markdown_content)
@@ -627,6 +673,92 @@ class MinerUSelfHostedProcessor:
             text_elements.append(TextElement(text=page_text, metadata=metadata))
 
         log.info(f"Created {len(text_elements)} elements from self-hosted JSON data across {len(elements_by_page)} pages")
+        return text_elements
+
+    def _create_elements_element_level(
+        self,
+        json_data: Dict[str, Any],
+        markdown_content: str,
+        file_path: Path,
+        log
+    ) -> List[TextElement]:
+        """
+        Create one TextElement per content_list item (preserves element boundaries).
+
+        Extracts MinerU fields: text_level, table_body, image_caption
+        Creates two-layer type system: layout_type (from MinerU) + semantic_type (detected)
+        """
+        mineru_config = self.config.document_processing.mineru
+        backend = getattr(mineru_config, 'model_version', 'pipeline')
+        content_list = json_data.get('content_list', [])
+
+        text_elements = []
+        element_index = 0
+
+        for item in content_list:
+            # Get layout type from MinerU (Layer 1: layout-level)
+            layout_type = item.get('type', 'text')
+            text = item.get('text', '').strip()
+            page_idx = item.get('page_idx', 0)
+
+            # Build base metadata with MinerU fields
+            metadata = {
+                'source': str(file_path),
+                'page_number': page_idx + 1,  # Convert 0-based to 1-based
+                'layout_type': layout_type,  # L1: text/table/image from MinerU
+                'extraction_method': f'mineru_selfhosted_{backend}_element_level',
+                'backend': backend,
+                'format': 'structured_json',
+                'element_index': element_index,
+                'bbox': item.get('bbox', [])
+            }
+
+            # Extract type-specific MinerU fields
+            text_level = 0
+
+            if layout_type == 'text':
+                # Capture header level (0 = not a header, 1-6 = header levels)
+                text_level = item.get('text_level', 0)
+                metadata['text_level'] = text_level
+                metadata['is_header'] = text_level > 0
+
+            elif layout_type == 'table':
+                # Extract table-specific MinerU fields
+                metadata['table_body'] = item.get('table_body', '')  # HTML table structure
+                metadata['table_caption'] = item.get('table_caption', [])
+                metadata['table_footnote'] = item.get('table_footnote', [])
+
+                # Use caption as text if main text field is empty
+                # (MinerU often has empty .text for tables, content is in table_body)
+                if not text and metadata['table_caption']:
+                    text = ' '.join(metadata['table_caption'])
+
+            elif layout_type == 'image':
+                # Extract image-specific MinerU fields
+                metadata['img_path'] = item.get('img_path', '')
+                metadata['image_caption'] = item.get('image_caption', [])
+                metadata['image_footnote'] = item.get('image_footnote', [])
+
+                # Use caption as text (for embedding - makes figures searchable)
+                # Images themselves can't be embedded, but captions can
+                if metadata['image_caption']:
+                    text = ' '.join(metadata['image_caption'])
+
+            # Detect semantic type (Layer 2: semantic classification)
+            # Uses pattern matching + text_level + layout_type
+            semantic_type = detect_semantic_type(text, layout_type, text_level)
+            metadata['semantic_type'] = semantic_type
+
+            # Add header_level for headers (convenience field)
+            if semantic_type == 'header' and text_level > 0:
+                metadata['header_level'] = text_level
+
+            # Only create TextElement if we have text content
+            if text:
+                text_elements.append(TextElement(text=text, metadata=metadata))
+                element_index += 1
+
+        log.info(f"Created {len(text_elements)} elements from {len(content_list)} content_list items (element-level mode)")
         return text_elements
 
     def _create_elements_from_markdown_fallback(

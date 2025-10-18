@@ -91,6 +91,9 @@ class Document(Base):
     chunks = relationship(
         "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
     )
+    structures = relationship(
+        "DocumentStructure", back_populates="document", cascade="all, delete-orphan"
+    )
 
 
 class DocumentChunk(Base):
@@ -110,6 +113,23 @@ class DocumentChunk(Base):
 
     document = relationship("Document", back_populates="chunks")
     collection = relationship("Collection", back_populates="chunks")
+
+
+class DocumentStructure(Base):
+    """
+    Store extracted document structure (TOC, LOF, LOT, headers).
+
+    Phase 4 of MinerU structure utilization - enables structure-based
+    navigation and querying without embedding TOC/LOF in vector store.
+    """
+    __tablename__ = "document_structures"
+    id = Column(String, primary_key=True)
+    document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
+    structure_type = Column(String, nullable=False, index=True)  # 'toc', 'lof', 'lot', 'headers'
+    data = Column(JSONB, nullable=False)  # Structured entries (format depends on type)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    document = relationship("Document", back_populates="structures")
 
 
 class GraphRAGIndex(Base):

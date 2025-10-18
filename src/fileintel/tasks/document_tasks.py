@@ -18,7 +18,7 @@ from fileintel.document_processing.chunking import TextChunker
 logger = logging.getLogger(__name__)
 
 
-def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
+def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
     """
     Pure function to read document content based on file type.
 
@@ -26,8 +26,11 @@ def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
         file_path: Path to the document file
 
     Returns:
-        Tuple of (raw_text_content, page_mappings)
-        where page_mappings contains position and page info for each element
+        Tuple of (raw_text_content, page_mappings, document_metadata)
+        where:
+        - raw_text_content: Combined text from all elements
+        - page_mappings: Position and page info for each element
+        - document_metadata: Processor metadata (may include 'document_structure')
 
     Raises:
         FileNotFoundError: If file doesn't exist
@@ -134,7 +137,7 @@ def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
             current_position += len(text_content) + 1  # +1 for space separator
 
     combined_text = " ".join(text_parts)
-    return combined_text, page_mappings
+    return combined_text, page_mappings, metadata
 
 
 def clean_and_chunk_text(
@@ -400,8 +403,8 @@ def process_document(
         # Update progress
         self.update_progress(0, 3, "Reading document content")
 
-        # Read document content with page mappings
-        content, page_mappings = read_document_content(file_path)
+        # Read document content with page mappings and metadata
+        content, page_mappings, doc_metadata = read_document_content(file_path)
         logger.info(f"Extracted {len(content)} characters from {file_path} with {len(page_mappings)} page mappings")
 
         # Update progress
@@ -541,6 +544,36 @@ def process_document(
                 logger.info(
                     f"Stored {len(chunks)} chunks in database for document {actual_document_id}"
                 )
+
+                # Store document structure if available (Phase 4: Structured Storage)
+                if doc_metadata and 'document_structure' in doc_metadata:
+                    structure_data = doc_metadata['document_structure']
+                    structures_saved = 0
+
+                    for struct_type in ['toc', 'lof', 'lot', 'headers']:
+                        if struct_type in structure_data:
+                            struct_entries = structure_data[struct_type]
+
+                            # Check if we have actual entries to save
+                            if struct_type == 'headers':
+                                has_data = struct_entries.get('hierarchy')
+                            else:
+                                has_data = struct_entries.get('entries')
+
+                            if has_data:
+                                try:
+                                    storage.store_document_structure(
+                                        document_id=actual_document_id,
+                                        structure_type=struct_type,
+                                        data=struct_entries
+                                    )
+                                    structures_saved += 1
+                                except Exception as struct_err:
+                                    logger.error(f"Failed to store {struct_type} structure: {struct_err}")
+
+                    if structures_saved > 0:
+                        logger.info(f"Stored {structures_saved} document structures for {actual_document_id}")
+
             finally:
                 storage.close()
 
@@ -665,7 +698,7 @@ def extract_document_metadata(
 
         # Get chunks if not provided
         if content_chunks is None:
-            content, page_mappings = read_document_content(file_path)
+            content, page_mappings, _ = read_document_content(file_path)  # Ignore doc_metadata here
             chunk_dicts = clean_and_chunk_text(content, page_mappings=page_mappings)
             # Extract just the text for metadata extraction (preserving backward compatibility)
             content_chunks = [chunk_dict["text"] for chunk_dict in chunk_dicts]
