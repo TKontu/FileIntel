@@ -673,18 +673,35 @@ class TextChunker:
             logger.warning(f"BGE token counting failed: {e}, falling back to OpenAI count")
             return self._count_tokens_openai(text)
 
-    def _check_token_safety(self, text: str, max_tokens: int, context: str) -> bool:
-        """Check if text exceeds token limit and log warnings."""
+    def _check_token_safety(self, text: str, max_tokens: int, context: str,
+                           document_id: str = None, chunk_index: int = None) -> bool:
+        """Check if text exceeds token limit and log warnings with full context."""
         token_count = self._count_tokens(text)
+
+        # Build context string with all available information
+        context_parts = [context]
+        if document_id:
+            context_parts.append(f"document_id={document_id}")
+        if chunk_index is not None:
+            context_parts.append(f"chunk_index={chunk_index}")
+        full_context = " | ".join(context_parts)
+
         if token_count > max_tokens:
+            # Show more text for debugging (500 chars instead of 100)
+            text_preview = text[:500] + "..." if len(text) > 500 else text
             logger.error(
-                f"CRITICAL: {context} chunk has {token_count} tokens, exceeds {max_tokens} limit. "
-                f"This will cause embedding failures. Text preview: {text[:100]}..."
+                f"CRITICAL: {full_context} | "
+                f"Token count: {token_count}/{max_tokens} (exceeds limit by {token_count - max_tokens}) | "
+                f"Text length: {len(text)} chars | "
+                f"This will cause embedding failures. | "
+                f"Full chunk text:\n{text_preview}"
             )
             return False
         elif token_count > max_tokens * TOKEN_WARNING_THRESHOLD:  # Warning threshold
             logger.warning(
-                f"{context} chunk has {token_count} tokens, approaching {max_tokens} limit"
+                f"{full_context} | "
+                f"Token count: {token_count}/{max_tokens} (approaching limit) | "
+                f"Text length: {len(text)} chars"
             )
         return True
 
@@ -734,16 +751,23 @@ class TextChunker:
         return chunk_text, new_chunk, new_length
 
     def _validate_chunks_against_token_limit(
-        self, chunks: List[str], max_tokens: int
+        self, chunks: List[str], max_tokens: int, document_id: str = None
     ) -> List[str]:
         """Validate all chunks against token limits and filter out oversized ones."""
         validated_chunks = []
-        for chunk in chunks:
-            if self._check_token_safety(chunk, max_tokens, "Vector RAG"):
+        for i, chunk in enumerate(chunks):
+            if self._check_token_safety(chunk, max_tokens, "Vector RAG",
+                                       document_id=document_id, chunk_index=i):
                 validated_chunks.append(chunk)
             else:
                 # This should rarely happen due to the logic above, but safety net
-                logger.error(f"Dropping oversized chunk: {chunk[:100]}...")
+                text_preview = chunk[:500] + "..." if len(chunk) > 500 else chunk
+                logger.error(
+                    f"Dropping oversized chunk | "
+                    f"document_id={document_id or 'unknown'} | "
+                    f"chunk_index={i} | "
+                    f"chunk_text:\n{text_preview}"
+                )
         return validated_chunks
 
     def _chunk_by_sentences(
@@ -753,6 +777,7 @@ class TextChunker:
         max_chars: int,
         max_tokens: int,
         overlap_sentences: int = 1,
+        document_id: str = None,
     ) -> List[str]:
         """
         Chunk text by complete sentences with intelligent overlap.
@@ -764,6 +789,7 @@ class TextChunker:
             max_chars: Soft character limit per chunk
             max_tokens: Hard token limit per chunk (for embedding safety)
             overlap_sentences: Number of sentences to overlap between chunks
+            document_id: Optional document identifier for error logging
         """
         sentences = self._split_into_sentences(text)
         if not sentences:
@@ -803,16 +829,21 @@ class TextChunker:
             chunks.append(" ".join(current_chunk))
 
         # Validate all chunks against token limits
-        return self._validate_chunks_against_token_limit(chunks, max_tokens)
+        return self._validate_chunks_against_token_limit(chunks, max_tokens, document_id=document_id)
 
-    def chunk_text(self, text: str) -> List[str]:
+    def chunk_text(self, text: str, document_id: str = None) -> List[str]:
         """
         Chunks text into smaller pieces for Vector RAG.
         Prioritizes complete sentences over strict character limits.
         Enforces token limits for embedding safety.
+
+        Args:
+            text: Input text to chunk
+            document_id: Optional document identifier for error logging
         """
+        doc_context = f" | document_id={document_id}" if document_id else ""
         logger.info(
-            f"Chunking text: {len(text)} characters, token limit: {self.vector_max_tokens}"
+            f"Chunking text: {len(text)} characters, token limit: {self.vector_max_tokens}{doc_context}"
         )
 
         chunks = self._chunk_by_sentences(
@@ -821,6 +852,7 @@ class TextChunker:
             self.max_chars,
             self.vector_max_tokens,  # Hard token limit
             self.overlap_sentences,
+            document_id=document_id,
         )
 
         # Critical verification
@@ -831,26 +863,36 @@ class TextChunker:
         logger.info(
             f"Chunking complete: {len(chunks)} chunks, "
             f"token range: {min(token_counts) if token_counts else 0}-{max_tokens}, "
-            f"limit: {self.vector_max_tokens}, oversized: {oversized}"
+            f"limit: {self.vector_max_tokens}, oversized: {oversized}{doc_context}"
         )
 
         if oversized > 0:
             logger.error(
-                f"CRITICAL: {oversized} chunks exceed token limit! This should not happen!"
+                f"CRITICAL: {oversized} chunks exceed token limit! This should not happen!{doc_context}"
             )
             for i, count in enumerate(token_counts):
                 if count > self.vector_max_tokens:
+                    text_preview = chunks[i][:500] + "..." if len(chunks[i]) > 500 else chunks[i]
                     logger.error(
-                        f"Oversized chunk {i}: {count} tokens: {chunks[i][:200]}..."
+                        f"Oversized chunk | "
+                        f"document_id={document_id or 'unknown'} | "
+                        f"chunk_index={i} | "
+                        f"token_count={count}/{self.vector_max_tokens} | "
+                        f"text_length={len(chunks[i])} chars | "
+                        f"chunk_text:\n{text_preview}"
                     )
 
         return chunks
 
-    def chunk_text_for_graphrag(self, text: str) -> List[str]:
+    def chunk_text_for_graphrag(self, text: str, document_id: str = None) -> List[str]:
         """
         Chunks text into larger pieces for GraphRAG entity extraction.
         Prioritizes semantic coherence over strict limits.
         Enforces token limits for embedding safety.
+
+        Args:
+            text: Input text to chunk
+            document_id: Optional document identifier for error logging
         """
         chunks = self._chunk_by_sentences(
             text,
@@ -858,11 +900,13 @@ class TextChunker:
             self.max_chars,
             self.graphrag_max_tokens,  # Hard token limit
             self.overlap_sentences,
+            document_id=document_id,
         )
 
         # Additional validation for GraphRAG chunks
-        for chunk in chunks:
-            self._check_token_safety(chunk, self.graphrag_max_tokens, "GraphRAG")
+        for i, chunk in enumerate(chunks):
+            self._check_token_safety(chunk, self.graphrag_max_tokens, "GraphRAG",
+                                    document_id=document_id, chunk_index=i)
 
         return chunks
 

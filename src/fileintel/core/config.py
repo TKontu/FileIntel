@@ -140,12 +140,20 @@ class MinerUSettings(BaseModel):
     enable_table: bool = Field(default=True)
     language: str = Field(default="en")
 
+    # Backend/model selection (dual purpose field)
+    # - Selfhosted API: backend selection ("pipeline" or "vlm")
+    # - Commercial API: model version string
+    model_version: str = Field(default="vlm")
+
+    # Debug output settings (for troubleshooting)
+    save_outputs: bool = Field(default=False)
+    output_directory: str = Field(default="/home/appuser/app/mineru_outputs")
+
     # Commercial API specific settings (used when api_type="commercial")
     # Optional fields that can be None (for self-hosted API which doesn't need them)
     api_token: Optional[str] = Field(default="")
     poll_interval: int = Field(default=10)
     max_retries: int = Field(default=3)
-    model_version: str = Field(default="vlm")
     shared_folder_path: str = Field(default="/shared/uploads")
     shared_folder_url_prefix: str = Field(default="file:///shared/uploads")
 

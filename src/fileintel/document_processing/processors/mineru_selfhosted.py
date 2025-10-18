@@ -17,6 +17,7 @@ import zipfile
 import json
 import io
 import re
+import shutil
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 import logging
@@ -75,7 +76,21 @@ class MinerUSelfHostedProcessor:
                 f"Self-hosted processor requires api_type='selfhosted', got: '{mineru_config.api_type}'"
             )
 
-        logger.info(f"Configured for self-hosted MinerU API at {mineru_config.base_url}")
+        # Validate model_version (used as backend selector for selfhosted)
+        valid_backends = ['pipeline', 'vlm']
+        backend = getattr(mineru_config, 'model_version', 'pipeline')
+        if backend not in valid_backends:
+            raise DocumentProcessingError(
+                f"Invalid model_version '{backend}'. Must be one of: {valid_backends}"
+            )
+
+        logger.info(f"Configured for self-hosted MinerU API at {mineru_config.base_url} (backend: {backend})")
+
+        if backend == 'vlm':
+            logger.info(
+                "VLM backend selected: First request may take 30-60s for model loading. "
+                "Subsequent requests will be faster."
+            )
 
     def read(self, file_path: Path, adapter: logging.LoggerAdapter = None) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
@@ -92,6 +107,9 @@ class MinerUSelfHostedProcessor:
             log.info(f"Processing {file_path.name} with self-hosted MinerU API")
 
             mineru_results = self._process_with_selfhosted_api(file_path, log)
+
+            # Save outputs if enabled (for debugging)
+            self._save_mineru_outputs(mineru_results, file_path, log)
 
             # Extract data from response
             markdown_content, json_data = self._extract_results_from_response(mineru_results)
@@ -117,13 +135,22 @@ class MinerUSelfHostedProcessor:
     def _process_with_selfhosted_api(self, file_path: Path, log) -> Dict[str, Any]:
         """Process PDF with self-hosted MinerU FastAPI."""
         url = f"{self.config.document_processing.mineru.base_url}/file_parse"
+        mineru_config = self.config.document_processing.mineru
 
         # Prepare form data for self-hosted API
         form_data = self._build_form_data()
 
+        # Adjust timeout for VLM backend (first request loads models)
+        backend = getattr(mineru_config, 'model_version', 'pipeline')
+        timeout = mineru_config.timeout
+        if backend == 'vlm' and timeout < 180:
+            # VLM first request needs at least 3 minutes for model loading
+            log.info(f"Extending timeout from {timeout}s to 180s for VLM backend first request")
+            timeout = 180
+
         # Use context manager for proper file handle management
         try:
-            log.info(f"Uploading {file_path.name} to self-hosted MinerU API")
+            log.info(f"Uploading {file_path.name} to self-hosted MinerU API (backend: {backend})")
 
             with open(file_path, 'rb') as file_handle:
                 files = {
@@ -135,7 +162,7 @@ class MinerUSelfHostedProcessor:
                     url,
                     data=form_data,
                     files=files,
-                    timeout=self.config.document_processing.mineru.timeout
+                    timeout=timeout
                 )
                 response.raise_for_status()
 
@@ -171,6 +198,101 @@ class MinerUSelfHostedProcessor:
         except requests.RequestException as e:
             raise DocumentProcessingError(f"Self-hosted MinerU API request failed: {e}")
 
+    def _save_mineru_outputs(self, mineru_results: Dict[str, Any], file_path: Path, log) -> None:
+        """
+        Save MinerU outputs to disk for debugging and inspection.
+
+        Only saves if config.document_processing.mineru.save_outputs is True.
+        Organizes outputs by document name in the configured output directory.
+        """
+        mineru_config = self.config.document_processing.mineru
+
+        if not mineru_config.save_outputs:
+            return  # Output saving disabled
+
+        # Create output directory for this document
+        output_base = Path(mineru_config.output_directory)
+        doc_name = file_path.stem  # Filename without extension
+        doc_output_dir = output_base / doc_name
+
+        try:
+            doc_output_dir.mkdir(parents=True, exist_ok=True)
+            log.info(f"Saving MinerU outputs to {doc_output_dir}")
+
+            if mineru_results['response_type'] == 'zip':
+                # Extract and save ZIP contents
+                zip_content = mineru_results['zip_content']
+
+                # Save the raw ZIP file
+                zip_path = doc_output_dir / f"{doc_name}.zip"
+                with open(zip_path, 'wb') as f:
+                    f.write(zip_content)
+                log.info(f"Saved raw ZIP: {zip_path}")
+
+                # Extract ZIP contents
+                with zipfile.ZipFile(io.BytesIO(zip_content)) as zip_file:
+                    zip_file.extractall(doc_output_dir)
+                    extracted_files = zip_file.namelist()
+                    log.info(f"Extracted {len(extracted_files)} files from ZIP")
+
+            else:
+                # JSON response - save the JSON data
+                json_response = mineru_results['json_content']
+                json_path = doc_output_dir / f"{doc_name}_response.json"
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_response, f, indent=2, ensure_ascii=False)
+                log.info(f"Saved JSON response: {json_path}")
+
+                # Extract and save individual components if available
+                if 'results' in json_response:
+                    results = json_response['results']
+                    if results:
+                        doc_key = list(results.keys())[0]
+                        doc_data = results[doc_key]
+
+                        # Save markdown
+                        if doc_data.get('md_content'):
+                            md_path = doc_output_dir / f"{doc_name}.md"
+                            with open(md_path, 'w', encoding='utf-8') as f:
+                                f.write(doc_data['md_content'])
+                            log.info(f"Saved markdown: {md_path}")
+
+                        # Save content_list JSON
+                        if doc_data.get('content_list'):
+                            content_list = doc_data['content_list']
+                            if isinstance(content_list, str):
+                                content_list = json.loads(content_list)
+                            cl_path = doc_output_dir / f"{doc_name}_content_list.json"
+                            with open(cl_path, 'w', encoding='utf-8') as f:
+                                json.dump(content_list, f, indent=2, ensure_ascii=False)
+                            log.info(f"Saved content_list: {cl_path}")
+
+                        # Save model_output JSON
+                        if doc_data.get('model_output'):
+                            model_output = doc_data['model_output']
+                            if isinstance(model_output, str):
+                                model_output = json.loads(model_output)
+                            mo_path = doc_output_dir / f"{doc_name}_model.json"
+                            with open(mo_path, 'w', encoding='utf-8') as f:
+                                json.dump(model_output, f, indent=2, ensure_ascii=False)
+                            log.info(f"Saved model_output: {mo_path}")
+
+                        # Save middle_json
+                        if doc_data.get('middle_json'):
+                            middle_json = doc_data['middle_json']
+                            if isinstance(middle_json, str):
+                                middle_json = json.loads(middle_json)
+                            mj_path = doc_output_dir / f"{doc_name}_middle.json"
+                            with open(mj_path, 'w', encoding='utf-8') as f:
+                                json.dump(middle_json, f, indent=2, ensure_ascii=False)
+                            log.info(f"Saved middle_json: {mj_path}")
+
+            log.info(f"Successfully saved MinerU outputs for {file_path.name}")
+
+        except Exception as e:
+            # Don't fail processing if output saving fails
+            log.warning(f"Failed to save MinerU outputs for {file_path.name}: {e}")
+
     def _build_form_data(self) -> Dict[str, str]:
         """
         Build form data for self-hosted API request.
@@ -180,10 +302,20 @@ class MinerUSelfHostedProcessor:
         """
         mineru_config = self.config.document_processing.mineru
 
-        return {
+        # Map model_version to API backend values
+        # 'vlm' -> 'vlm-vllm-async-engine' (VLM backend with async vLLM inference engine)
+        # 'pipeline' -> 'pipeline' (OCR + Layout detection pipeline)
+        backend = getattr(mineru_config, 'model_version', 'pipeline')
+        backend_api_values = {
+            'pipeline': 'pipeline',
+            'vlm': 'vlm-vllm-async-engine'
+        }
+        api_backend = backend_api_values.get(backend, 'pipeline')
+
+        # Base form data common to all backends
+        form_data = {
             'lang_list': mineru_config.language,  # Single string, not list
-            'backend': 'pipeline',  # or 'vlm' based on model_version
-            'parse_method': 'auto',
+            'backend': api_backend,
             'formula_enable': str(mineru_config.enable_formula).lower(),  # Convert boolean to string
             'table_enable': str(mineru_config.enable_table).lower(),
             'return_md': 'true',
@@ -195,6 +327,13 @@ class MinerUSelfHostedProcessor:
             'start_page_id': '0',  # Convert integers to strings
             'end_page_id': '99999'
         }
+
+        # Pipeline backend requires parse_method parameter
+        # VLM backend doesn't use it (uses vision-language model for all documents)
+        if backend == 'pipeline':
+            form_data['parse_method'] = 'auto'
+
+        return form_data
 
     def _extract_results_from_response(self, mineru_results: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """Extract markdown content and JSON data from API response."""
@@ -397,11 +536,14 @@ class MinerUSelfHostedProcessor:
 
         Same logic as commercial API processor for consistency.
         """
+        mineru_config = self.config.document_processing.mineru
+        backend = getattr(mineru_config, 'model_version', 'pipeline')
+
         content_list = json_data.get('content_list')
 
         if not content_list:
             log.warning("No content_list found in self-hosted API response, falling back to markdown")
-            return self._create_elements_from_markdown_fallback(markdown_content, file_path)
+            return self._create_elements_from_markdown_fallback(markdown_content, file_path, backend)
 
         # Extract markdown headers and map to pages for enhanced metadata
         markdown_headers = self._extract_markdown_headers(markdown_content)
@@ -456,7 +598,8 @@ class MinerUSelfHostedProcessor:
             metadata = {
                 'source': str(file_path),
                 'page_number': page_idx + 1,  # Convert 0-based to 1-based
-                'extraction_method': 'mineru_selfhosted_json',
+                'extraction_method': f'mineru_selfhosted_{backend}_json',
+                'backend': backend,
                 'format': 'structured_json',
                 'element_count': total_elements,
                 'element_types': element_types,
@@ -489,7 +632,8 @@ class MinerUSelfHostedProcessor:
     def _create_elements_from_markdown_fallback(
         self,
         markdown_content: str,
-        file_path: Path
+        file_path: Path,
+        backend: str = 'pipeline'
     ) -> List[TextElement]:
         """Fallback to single markdown element when JSON data is unavailable."""
         if not markdown_content.strip():
@@ -498,7 +642,8 @@ class MinerUSelfHostedProcessor:
         metadata = {
             'source': str(file_path),
             'page_number': 1,
-            'extraction_method': 'mineru_selfhosted_markdown_fallback',
+            'extraction_method': f'mineru_selfhosted_{backend}_markdown_fallback',
+            'backend': backend,
             'format': 'markdown'
         }
 
@@ -511,6 +656,9 @@ class MinerUSelfHostedProcessor:
         file_path: Path
     ) -> Dict[str, Any]:
         """Build comprehensive metadata from all available sources."""
+        mineru_config = self.config.document_processing.mineru
+        backend = getattr(mineru_config, 'model_version', 'pipeline')
+
         content_list = json_data.get('content_list', [])
         model_data = json_data.get('model_data', [])
         middle_data = json_data.get('middle_data', {})
@@ -529,6 +677,7 @@ class MinerUSelfHostedProcessor:
         metadata = {
             'processor': 'mineru_selfhosted',
             'api_type': 'selfhosted_fastapi',
+            'backend': backend,  # Track which backend was used
             'response_type': mineru_results.get('response_type'),
             'file_path': str(file_path),
             'total_pages': len(model_data) if model_data else pages_found,

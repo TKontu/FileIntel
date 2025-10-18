@@ -120,10 +120,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         # Return the higher count for safety
         return max(openai_tokens, bert_tokens) if self.bert_tokenizer else openai_tokens
 
-    def _truncate_text(self, text: str) -> str:
+    def _truncate_text(self, text: str, chunk_context: str = None) -> str:
         """
         LAST RESORT: Truncate text to fit within token limit.
         This should rarely be needed if chunking is working properly.
+
+        Args:
+            text: Text to truncate
+            chunk_context: Optional context for logging (document_id, chunk_id, etc.)
         """
         tokens = self.tokenizer.encode(text)
         if len(tokens) <= self.max_tokens:
@@ -131,10 +135,17 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
         # This is a critical error - chunking should prevent this
         logger = logging.getLogger(__name__)
+
+        # Show more text for debugging (500 chars instead of 200)
+        text_preview = text[:500] + "..." if len(text) > 500 else text
+        context_str = f" | {chunk_context}" if chunk_context else ""
+
         logger.error(
-            f"EMERGENCY TRUNCATION: Text has {len(tokens)} tokens, exceeds {self.max_tokens} limit. "
-            f"This indicates a bug in the text chunking system. "
-            f"Text preview: {text[:200]}..."
+            f"EMERGENCY TRUNCATION{context_str} | "
+            f"Token count: {len(tokens)}/{self.max_tokens} (exceeds by {len(tokens) - self.max_tokens}) | "
+            f"Text length: {len(text)} chars | "
+            f"This indicates a bug in the text chunking system | "
+            f"Full text:\n{text_preview}"
         )
 
         # Truncate tokens and decode back to text
@@ -142,7 +153,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         truncated_text = self.tokenizer.decode(truncated_tokens)
 
         logger.error(
-            f"Truncated from {len(tokens)} to {len(truncated_tokens)} tokens. "
+            f"Truncated from {len(tokens)} to {len(truncated_tokens)} tokens{context_str}. "
             f"FIX THE CHUNKING SYSTEM TO PREVENT THIS!"
         )
 
@@ -180,16 +191,26 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             )
             for idx in oversized[:3]:  # Log first few oversized texts
                 text = texts[idx]
+                # Show more text for debugging (500 chars instead of 100)
+                text_preview = text[:500] + "..." if len(text) > 500 else text
                 if self.bert_tokenizer:
                     openai_count, bert_count, analysis = self._count_tokens_dual(text)
                     logger.error(
-                        f"Oversized text {idx}: {analysis} - OpenAI:{openai_count}, BERT:{bert_count}, "
-                        f"chars:{len(text)}, preview: {text[:100]}..."
+                        f"Oversized text | "
+                        f"index={idx} | "
+                        f"analysis={analysis} | "
+                        f"OpenAI_tokens={openai_count} | "
+                        f"BERT_tokens={bert_count} | "
+                        f"chars={len(text)} | "
+                        f"text:\n{text_preview}"
                     )
                 else:
                     logger.error(
-                        f"Oversized text {idx}: {token_counts[idx]} tokens, "
-                        f"chars:{len(text)}, preview: {text[:100]}..."
+                        f"Oversized text | "
+                        f"index={idx} | "
+                        f"tokens={token_counts[idx]}/{self.max_tokens} | "
+                        f"chars={len(text)} | "
+                        f"text:\n{text_preview}"
                     )
 
         # Truncate all texts to fit within token limits
@@ -242,15 +263,23 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                             f"Successfully processed individual text {i+1}/{len(texts)}"
                         )
                     except Exception as individual_error:
+                        # Show more text for debugging
+                        text_preview = text[:500] + "..." if len(text) > 500 else text
+                        token_count = self._count_tokens(text)
                         logger.error(
-                            f"Failed to process individual text {i+1}: {individual_error}"
+                            f"Failed to process individual text | "
+                            f"index={i+1}/{len(texts)} | "
+                            f"tokens={token_count} | "
+                            f"chars={len(text)} | "
+                            f"error={str(individual_error)} | "
+                            f"text:\n{text_preview}"
                         )
                         # Try aggressive truncation as last resort
                         if "tokens" in str(individual_error) and "maximum" in str(
                             individual_error
                         ):
                             logger.warning(
-                                f"Attempting emergency truncation for text {i+1}"
+                                f"Attempting emergency truncation for text {i+1}/{len(texts)}"
                             )
                             try:
                                 # Extra aggressive truncation to 300 tokens
@@ -263,12 +292,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                                 )
                                 embeddings.append(emergency_response.data[0].embedding)
                                 logger.warning(
-                                    f"Emergency truncation succeeded for text {i+1}"
+                                    f"Emergency truncation succeeded for text {i+1}/{len(texts)}"
                                 )
                                 continue
                             except Exception as emergency_error:
                                 logger.error(
-                                    f"Emergency truncation failed for text {i+1}: {emergency_error}"
+                                    f"Emergency truncation failed | "
+                                    f"index={i+1}/{len(texts)} | "
+                                    f"error={str(emergency_error)}"
                                 )
 
                         # Use zero vector as final fallback

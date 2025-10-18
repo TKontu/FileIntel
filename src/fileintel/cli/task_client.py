@@ -51,10 +51,19 @@ class TaskAPIClient:
         """Make API request with proper error handling."""
         url = f"{base_url or self.base_url_v2}/{endpoint}"
 
+        # Set default timeout if not provided (30 seconds connect, 300 seconds read)
+        # This prevents indefinite hangs when API is blocked
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = (30, 300)
+
         try:
             response = requests.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.Timeout as e:
+            self.console.print(f"[bold red]API request timed out:[/bold red] {e}")
+            self.console.print("[yellow]The API server may be overloaded or hung. Try again later.[/yellow]")
+            raise
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]API request failed:[/bold red] {e}")
             raise
@@ -65,10 +74,18 @@ class TaskAPIClient:
         """Make raw API request for file operations."""
         url = f"{base_url or self.base_url_v2}/{endpoint}"
 
+        # Set default timeout (30s connect, 300s read)
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = (30, 300)
+
         try:
             response = requests.request(method, url, **kwargs)
             response.raise_for_status()
             return response
+        except requests.exceptions.Timeout as e:
+            self.console.print(f"[bold red]API request timed out:[/bold red] {e}")
+            self.console.print("[yellow]The API server may be overloaded. Try again later.[/yellow]")
+            raise
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]API request failed:[/bold red] {e}")
             raise

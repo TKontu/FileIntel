@@ -57,3 +57,7 @@ graphrag_indices/*
 /examples/*
 
 #Graphrag
+
+
+#Mineru
+/mineru_outputs/*

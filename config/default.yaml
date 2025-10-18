@@ -100,11 +100,24 @@ document_processing:
     enable_table: true
     language: "en"
 
+    # Backend selection for selfhosted API / model version for commercial API
+    # - "pipeline": OCR + Layout detection pipeline (faster, 2-10s per document)
+    # - "vlm": Vision-Language Model (better for complex layouts, first request slow 30-60s)
+    # Note: When using selfhosted API, ensure Docker Compose profile matches this setting:
+    #   - model_version: "pipeline" → docker compose --profile pipeline up -d
+    #   - model_version: "vlm" → docker compose --profile vlm up -d
+    model_version: "pipeline"
+
+    # Debug output settings (for troubleshooting extraction issues)
+    # When enabled, saves MinerU raw outputs (markdown, JSON, images) to disk
+    # WARNING: Can consume significant disk space - only enable for debugging
+    save_outputs: true
+    output_directory: "/home/appuser/app/mineru_outputs"
+
     # Commercial API specific settings (used when api_type="commercial")
     api_token: ${MINERU_API_TOKEN:-}
     poll_interval: 10
     max_retries: 3
-    model_version: "vlm"
     shared_folder_path: "/shared/uploads"
     shared_folder_url_prefix: "file:///shared/uploads"
 

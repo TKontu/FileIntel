@@ -94,11 +94,12 @@ def complete_collection_analysis(
             # Choose workflow based on requested operations
             if extract_metadata and generate_embeddings:
                 # Full workflow: documents → metadata → embeddings → completion
+                # Note: chord()(callback) in Celery 5.x automatically calls apply_async() internally
                 workflow_result = chord(document_signatures)(
                     generate_collection_metadata_and_embeddings.s(
                         collection_id=collection_id,
                     )
-                ).apply_async()
+                )
 
                 logger.info(
                     f"Started full workflow with {len(document_signatures)} document tasks for collection {collection_id}"
@@ -116,7 +117,7 @@ def complete_collection_analysis(
                     generate_collection_metadata.s(
                         collection_id=collection_id,
                     )
-                ).apply_async()
+                )
 
                 logger.info(
                     f"Started metadata workflow with {len(document_signatures)} document tasks for collection {collection_id}"
@@ -134,7 +135,7 @@ def complete_collection_analysis(
                     generate_collection_embeddings_simple.s(
                         collection_id=collection_id,
                     )
-                ).apply_async()
+                )
 
                 logger.info(
                     f"Started embeddings workflow with {len(document_signatures)} document tasks for collection {collection_id}"
@@ -150,7 +151,7 @@ def complete_collection_analysis(
                 # Simple document processing only - use chord with completion callback
                 workflow_result = chord(document_signatures)(
                     completion_callback
-                ).apply_async()
+                )
 
                 logger.info(
                     f"Started simple workflow with {len(document_signatures)} document tasks and completion callback for collection {collection_id}"
@@ -363,8 +364,8 @@ def generate_collection_embeddings_simple(
 
             completion_callback = mark_collection_completed.s(collection_id)
             # embedding_jobs is already a group, use it directly
-            workflow = chord(embedding_jobs)(completion_callback)
-            workflow_result = workflow.apply_async()
+            # Note: chord()(callback) already calls apply_async() in Celery 5.x
+            workflow_result = chord(embedding_jobs)(completion_callback)
 
             self.update_progress(3, 3, "Collection processing workflow initiated")
 
@@ -471,7 +472,8 @@ def incremental_collection_update(
             )
 
             # Chord: callback runs after all group tasks complete (don't block with .get())
-            chord_result = chord(new_doc_jobs)(callback).apply_async()
+            # Note: chord()(callback) already calls apply_async() in Celery 5.x
+            chord_result = chord(new_doc_jobs)(callback)
 
             self.update_progress(3, 3, "Incremental update workflow started")
 
@@ -574,8 +576,8 @@ def update_collection_index(
         )
 
         task_group = group(all_jobs)  # Pass list directly
-        workflow = chord(task_group)(completion_callback)
-        workflow_result = workflow.apply_async()
+        # Note: chord()(callback) already calls apply_async() in Celery 5.x
+        workflow_result = chord(task_group)(completion_callback)
 
         logger.info(f"Started incremental update workflow with {len(all_jobs)} jobs for collection {collection_id}")
 
@@ -740,8 +742,8 @@ def generate_collection_metadata(
 
                 completion_callback = mark_collection_completed.s(collection_id)
                 task_group = group(metadata_jobs)  # Pass list directly
-                workflow = chord(task_group)(completion_callback)
-                workflow_result = workflow.apply_async()
+                # Note: chord()(callback) already calls apply_async() in Celery 5.x
+                workflow_result = chord(task_group)(completion_callback)
 
                 logger.info(
                     f"Started chord workflow: {len(metadata_jobs)} metadata jobs → completion callback for collection {collection_id}"
@@ -893,8 +895,8 @@ def generate_collection_metadata_and_embeddings(
                 completion_callback = mark_collection_completed.s(collection_id)
                 # Create group from list of signatures
                 task_group = group(all_jobs)  # Pass list directly, not unpacked
-                workflow = chord(task_group)(completion_callback)
-                workflow_result = workflow.apply_async()
+                # Note: chord()(callback) already calls apply_async() in Celery 5.x
+                workflow_result = chord(task_group)(completion_callback)
 
                 logger.info(
                     f"Started chord workflow: {len(all_jobs)} jobs (metadata+embeddings) → completion callback for collection {collection_id}"

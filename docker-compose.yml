@@ -90,6 +90,7 @@ services:
       - ./prompts:/home/appuser/app/prompts
       - ./logs:/home/appuser/app/logs
       - ./uploads:/home/appuser/app/uploads
+      - ./mineru_outputs:/home/appuser/app/mineru_outputs
       - ./input:/home/appuser/app/input
       - ./output:/home/appuser/app/output
       - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh

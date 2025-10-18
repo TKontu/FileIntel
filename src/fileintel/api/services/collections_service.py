@@ -93,7 +93,11 @@ class CollectionsService:
     async def upload_document_to_collection(
         self, collection: Collection, file, file_content: bytes
     ) -> Dict[str, Any]:
-        """Handle document upload to collection."""
+        """Handle document upload to collection (non-blocking)."""
+        import asyncio
+        import hashlib
+        import aiofiles
+
         # Validate file upload
         validate_file_upload(file)
 
@@ -103,19 +107,22 @@ class CollectionsService:
         unique_filename = f"{file_id}{file_extension}"
         file_path = Path(self.config.paths.uploads) / unique_filename
 
-        # Ensure upload directory exists
-        file_path.parent.mkdir(parents=True, exist_ok=True)
+        # Ensure upload directory exists (run in thread to avoid blocking)
+        await asyncio.to_thread(file_path.parent.mkdir, parents=True, exist_ok=True)
 
-        # Save file
-        with open(file_path, "wb") as f:
-            f.write(file_content)
+        # Save file asynchronously using aiofiles (prevents event loop blocking)
+        async with aiofiles.open(file_path, "wb") as f:
+            await f.write(file_content)
 
-        # Calculate file hash
-        import hashlib
+        # Calculate file hash in thread pool (CPU-bound operation)
+        def _calculate_hash():
+            return hashlib.sha256(file_content).hexdigest()
 
-        content_hash = hashlib.sha256(file_content).hexdigest()
+        content_hash = await asyncio.to_thread(_calculate_hash)
 
         # Store document in database
+        # Note: Keeping synchronous for now to avoid SQLAlchemy session thread-safety issues
+        # The session is created in the request thread and shouldn't be accessed from other threads
         document = self.storage.create_document(
             filename=unique_filename,
             content_hash=content_hash,

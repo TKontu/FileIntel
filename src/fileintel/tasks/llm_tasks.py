@@ -273,9 +273,41 @@ def generate_and_store_chunk_embedding(
             storage.close()
 
     except Exception as e:
-        logger.error(
-            f"Error generating and storing embedding for chunk {chunk_id}: {e}"
-        )
+        # Get chunk and document info for better error logging
+        try:
+            from fileintel.celery_config import get_shared_storage
+            storage = get_shared_storage()
+            try:
+                chunk = storage.get_chunk(chunk_id)
+                if chunk:
+                    document_id = chunk.document_id
+                    chunk_index = chunk.metadata.get('position', 'unknown') if chunk.metadata else 'unknown'
+                    text_preview = text[:500] + "..." if len(text) > 500 else text
+                    logger.error(
+                        f"Error generating and storing embedding | "
+                        f"chunk_id={chunk_id} | "
+                        f"document_id={document_id} | "
+                        f"chunk_index={chunk_index} | "
+                        f"text_length={len(text)} chars | "
+                        f"error={str(e)} | "
+                        f"chunk_text:\n{text_preview}"
+                    )
+                else:
+                    logger.error(
+                        f"Error generating and storing embedding | "
+                        f"chunk_id={chunk_id} (chunk not found in DB) | "
+                        f"text_length={len(text)} chars | "
+                        f"error={str(e)}"
+                    )
+            finally:
+                storage.close()
+        except Exception as log_error:
+            # Fallback logging if we can't get chunk details
+            logger.error(
+                f"Error generating and storing embedding for chunk {chunk_id}: {e} "
+                f"(Failed to retrieve chunk details: {log_error})"
+            )
+
         return {"chunk_id": chunk_id, "error": str(e), "status": "failed"}
 
 
