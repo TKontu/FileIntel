@@ -5,7 +5,8 @@ Return your response as a JSON object with these fields (only include fields whe
 ```json
 {
   "title": "Document title as it appears in the text",
-  "authors": ["Author 1", "Author 2", "Author 3"],
+  "authors": ["Author 1 Full Name", "Author 2 Full Name", "Author 3 Full Name"],
+  "author_surnames": ["Surname1", "Surname2", "Surname3"],
   "publication_date": "YYYY-MM-DD or YYYY or Month YYYY format",
   "publisher": "Publisher name or organization",
   "doi": "DOI identifier if found",
@@ -22,6 +23,8 @@ Return your response as a JSON object with these fields (only include fields whe
 - Only include fields where you found actual information in the text
 - Do not include empty strings, null values, or empty arrays
 - For authors, extract full names as they appear
+- For author_surnames, extract ONLY the surname/family name for each author (e.g., "John Smith" -> "Smith", "María García López" -> "García López")
+- The author_surnames array must match the authors array in length and order
 - For dates, use the most specific format possible (prefer YYYY-MM-DD)
 - For keywords, extract 3-8 relevant terms from the document
 - Keep abstracts under 500 characters

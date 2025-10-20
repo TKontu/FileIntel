@@ -146,6 +146,10 @@ class PostgreSQLStorage(StorageInterface):
             document_id, chunks, chunk_metadata
         )
 
+    def get_chunk_by_id(self, chunk_id: str):
+        """Get a single chunk by its UUID."""
+        return self.document_storage.get_chunk_by_id(chunk_id)
+
     def get_all_chunks_for_document(self, document_id: str):
         """Get all chunks for a document."""
         return self.document_storage.get_all_chunks_for_document(document_id)

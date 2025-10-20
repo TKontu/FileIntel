@@ -207,11 +207,15 @@ class CitationFormatter:
         """
         Extract surname only from primary author for in-text citations.
 
-        Handles formats:
-        - "LastName, FirstName" → "LastName"
-        - "FirstName LastName" → "LastName"
-        - "FirstName MiddleName LastName" → "LastName"
+        Uses author_surnames field if available (LLM-extracted, handles all name formats).
+        Falls back to simple extraction for backward compatibility.
         """
+        # Prefer author_surnames if available (LLM-extracted, robust)
+        author_surnames = metadata.get("author_surnames", [])
+        if author_surnames and isinstance(author_surnames, list) and author_surnames:
+            return author_surnames[0]
+
+        # Fallback: simple extraction from full name (may not work for all formats)
         full_name = self._extract_primary_author(metadata)
         if not full_name:
             return None
@@ -228,7 +232,23 @@ class CitationFormatter:
         return full_name
 
     def _format_authors_full(self, metadata: Dict[str, Any]) -> Optional[str]:
-        """Format all authors for complete citation."""
+        """
+        Format all authors for complete citation.
+
+        Uses author_surnames if available for proper Harvard format,
+        falls back to full names.
+        """
+        # Prefer author_surnames for proper Harvard format
+        author_surnames = metadata.get("author_surnames", [])
+        if author_surnames and isinstance(author_surnames, list):
+            if len(author_surnames) == 1:
+                return author_surnames[0]
+            elif len(author_surnames) == 2:
+                return f"{author_surnames[0]} and {author_surnames[1]}"
+            else:
+                return f"{author_surnames[0]} et al."
+
+        # Fallback to full author names
         authors = metadata.get("authors", "")
         if not authors:
             return None

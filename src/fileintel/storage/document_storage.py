@@ -371,6 +371,10 @@ class DocumentStorage:
         self.base._safe_commit()
         return chunk_objects
 
+    def get_chunk_by_id(self, chunk_id: str):
+        """Get a single chunk by its UUID."""
+        return self.db.query(DocumentChunk).filter(DocumentChunk.id == chunk_id).first()
+
     def get_all_chunks_for_document(self, document_id: str):
         """Get all chunks for a document."""
         chunks = (

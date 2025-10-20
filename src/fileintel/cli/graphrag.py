@@ -55,6 +55,9 @@ def query_with_graphrag(
         ..., help="The name or ID of the collection to query."
     ),
     question: str = typer.Argument(..., help="The question to ask using GraphRAG."),
+    show_sources: bool = typer.Option(
+        False, "--show-sources", "-s", help="Show source documents with page numbers."
+    ),
 ):
     """Query a collection using GraphRAG for graph-based reasoning."""
 
@@ -80,11 +83,18 @@ def query_with_graphrag(
     if isinstance(answer, dict):
         answer = answer.get("response", str(answer))
 
+    # Convert citations if --show-sources flag is set
+    display_answer = answer
+    if show_sources:
+        converted_answer, sources = _display_source_documents(answer, collection_identifier, cli_handler)
+        if converted_answer:
+            display_answer = converted_answer
+
     cli_handler.console.print(f"[bold green]Answer:[/bold green]")
 
     # Display the answer (don't use Markdown renderer to avoid centered headers)
     # Instead, just print with proper formatting preserved
-    cli_handler.console.print(answer)
+    cli_handler.console.print(display_answer)
 
     # Show context information if available (from GraphRAG response)
     context = response_data.get("context", {})
@@ -366,3 +376,192 @@ def explore_workspace(
     cli_handler.console.print(f"  fileintel graphrag communities {collection_identifier}")
     cli_handler.console.print(f"  fileintel query graphrag-global '{collection_identifier}' 'your question'")
     cli_handler.console.print(f"  fileintel query graphrag-local '{collection_identifier}' 'your question'")
+
+
+def _parse_citation_ids(answer_text):
+    """Parse inline citations and extract specific IDs."""
+    import re
+
+    citation_pattern = r'\[Data: (Reports|Entities|Relationships) \(([0-9, ]+)\)\]'
+    citations = re.findall(citation_pattern, answer_text)
+
+    parsed = {
+        "report_ids": set(),
+        "entity_ids": set(),
+        "relationship_ids": set()
+    }
+
+    for cit_type, ids_str in citations:
+        ids = [int(x.strip()) for x in ids_str.split(',')]
+
+        if cit_type == "Reports":
+            parsed["report_ids"].update(ids)
+        elif cit_type == "Entities":
+            parsed["entity_ids"].update(ids)
+        elif cit_type == "Relationships":
+            parsed["relationship_ids"].update(ids)
+
+    return parsed
+
+
+def _convert_to_harvard_citations(answer_text, sources):
+    """Convert GraphRAG numbered citations to Harvard-style citations.
+
+    Args:
+        answer_text: Text with [Data: Reports (5)] style citations
+        sources: List of source documents with metadata
+
+    Returns:
+        Text with (Author, Year) style citations
+    """
+    import re
+
+    if not sources:
+        return answer_text
+
+    # Build citations from document metadata
+    citations = []
+    for i, source in enumerate(sources[:10], 1):  # Top 10 sources
+        metadata = source.get("metadata", {})
+        page_numbers = source.get("page_numbers")  # Now formatted as "p. 45" or "pp. 16-17" etc.
+
+        # Extract citation from metadata (authors, year, title)
+        authors = metadata.get("authors", [])
+        author_surnames = metadata.get("author_surnames", [])
+
+        # Extract year from various metadata fields
+        year = metadata.get("publication_year") or metadata.get("year")
+        if not year and "publication_date" in metadata:
+            # Extract year from publication_date (e.g., "2021-03" -> "2021")
+            pub_date = str(metadata["publication_date"])
+            year = pub_date[:4] if len(pub_date) >= 4 else None
+
+        title = metadata.get("title", source.get("document", "Unknown"))
+
+        # Build citation in Harvard format (Surname et al., Year)
+        # Use author_surnames if available (LLM-extracted), otherwise use full author names
+        citation_names = author_surnames if author_surnames else authors
+
+        if citation_names and year:
+            # Format: "Surname et al., Year"
+            if len(citation_names) == 1:
+                citation = f"{citation_names[0]}, {year}"
+            elif len(citation_names) == 2:
+                citation = f"{citation_names[0]} & {citation_names[1]}, {year}"
+            else:
+                citation = f"{citation_names[0]} et al., {year}"
+        elif year:
+            # Has year but no authors
+            citation = f"{title}, {year}"
+        else:
+            # Fallback: use title
+            citation = title.replace('.pdf', '')
+
+        # Add page numbers if available (already formatted)
+        if page_numbers:
+            citation = f"{citation}, {page_numbers}"
+
+        citations.append(citation)
+
+    # Replace numbered citations with Harvard style
+    # Simple approach: replace all [Data: ...] with first citation
+    # More sophisticated: map specific IDs to specific sources
+    if citations:
+        primary_citation = citations[0]
+        # Remove all [Data: ...] citations and replace with primary source
+        result = re.sub(
+            r'\s*\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+\)\]',
+            f' ({primary_citation})',
+            answer_text
+        )
+        return result
+
+    return answer_text
+
+
+def _display_source_documents(answer_text, collection_identifier, cli_handler):
+    """Display source documents traced from GraphRAG answer.
+
+    Returns:
+        tuple: (converted_answer_text, sources) or (answer_text, None) if tracing fails
+    """
+
+    # Phase 1: Parse citation IDs
+    citation_ids = _parse_citation_ids(answer_text)
+
+    if not citation_ids["report_ids"] and not citation_ids["entity_ids"]:
+        cli_handler.console.print("\n[dim]Note: GraphRAG response contains no inline citations to trace[/dim]")
+        return answer_text, None
+
+    # Display citation summary
+    cli_handler.console.print("\n[bold blue]GraphRAG Source References:[/bold blue]")
+    if citation_ids["report_ids"]:
+        cli_handler.console.print(f"  • Community Reports: {len(citation_ids['report_ids'])} referenced")
+    if citation_ids["entity_ids"]:
+        cli_handler.console.print(f"  • Entities: {len(citation_ids['entity_ids'])} referenced")
+    if citation_ids["relationship_ids"]:
+        cli_handler.console.print(f"  • Relationships: {len(citation_ids['relationship_ids'])} referenced")
+
+    # Get workspace path
+    def _get_index_info(api):
+        return api._request("GET", f"graphrag/{collection_identifier}/status")
+
+    try:
+        index_result = cli_handler.handle_api_call(_get_index_info, "get GraphRAG index info")
+        index_data = index_result.get("data", index_result)
+        workspace_path = index_data.get("index_path")
+
+        if not workspace_path:
+            cli_handler.console.print("\n[yellow]No GraphRAG index found for source tracing[/yellow]")
+            return answer_text, None
+
+        # Transform Docker path to local filesystem path
+        # API runs in Docker (/data/graphrag_indices/...) but CLI runs locally (./graphrag_indices/...)
+        if workspace_path.startswith("/data/graphrag_indices/"):
+            workspace_path = workspace_path.replace("/data/graphrag_indices/", "./graphrag_indices/graphrag_indices/")
+
+        # Phase 2-5: Trace to source documents
+        from fileintel.rag.graph_rag.utils.source_tracer import trace_citations_to_sources
+
+        sources = trace_citations_to_sources(
+            citation_ids,
+            workspace_path,
+            cli_handler.get_api_client()
+        )
+
+        # Convert to Harvard citations
+        converted_answer = _convert_to_harvard_citations(answer_text, sources)
+
+        # Display sources
+        _display_sources(sources, cli_handler)
+
+        return converted_answer, sources
+
+    except Exception as e:
+        cli_handler.console.print(f"\n[yellow]Could not trace sources: {e}[/yellow]")
+        return answer_text, None
+
+
+def _display_sources(sources, cli_handler):
+    """Display source documents in CLI."""
+    if not sources:
+        cli_handler.console.print("\n[dim]No source documents found[/dim]")
+        return
+
+    cli_handler.console.print(f"\n[bold blue]Source Documents ({len(sources)}):[/bold blue]")
+
+    for i, source in enumerate(sources[:10], 1):
+        doc = source.get("document", "Unknown")
+        page = source.get("page_number")
+        chunk_count = source.get("chunk_count", 1)
+
+        if page:
+            cli_handler.console.print(f"\n  [{i}] {doc}, p. {page}")
+        else:
+            cli_handler.console.print(f"\n  [{i}] {doc}")
+
+        if chunk_count > 1:
+            cli_handler.console.print(f"      [dim]({chunk_count} chunks referenced)[/dim]")
+
+    if len(sources) > 10:
+        cli_handler.console.print(f"\n  [dim]... and {len(sources) - 10} more documents[/dim]")

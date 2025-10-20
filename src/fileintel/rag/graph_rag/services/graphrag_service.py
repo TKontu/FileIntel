@@ -255,11 +255,18 @@ class GraphRAGService:
         if isinstance(raw_response, dict):
             answer = raw_response.get("response", str(raw_response))
             context = raw_response.get("context", {})
+
+            # Extract text_unit IDs for source tracing (DataFrames can't be JSON serialized)
+            text_unit_ids = self._extract_text_unit_ids_from_context(context)
+
             return {
                 "answer": answer,
                 "sources": [],
-                "context": context,
-                "metadata": {"search_type": "global"}
+                "context": {},  # Empty - can't serialize DataFrames
+                "metadata": {
+                    "search_type": "global",
+                    "text_unit_ids": list(text_unit_ids)  # Add for source tracing
+                }
             }
         return raw_response
 
@@ -278,6 +285,23 @@ class GraphRAGService:
                 "metadata": {"search_type": "local"}
             }
         return raw_response
+
+    def _extract_text_unit_ids_from_context(self, context: dict) -> set:
+        """Extract text_unit IDs from GraphRAG context for source tracing."""
+        import pandas as pd
+
+        text_unit_ids = set()
+
+        # From community reports
+        if "reports" in context:
+            reports_df = context["reports"]
+            if isinstance(reports_df, pd.DataFrame) and not reports_df.empty:
+                # Get workspace path for this collection
+                # Note: This is a simplified extraction - full traversal happens in source_tracer
+                # For now, just return empty set - CLI will do full traversal
+                pass
+
+        return text_unit_ids
 
     def is_collection_indexed(self, collection_id: str) -> bool:
         """Check if a collection has a GraphRAG index."""

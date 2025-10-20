@@ -170,6 +170,7 @@ class MetadataExtractor:
         canonical_fields = {
             "title",
             "authors",
+            "author_surnames",
             "publication_date",
             "publisher",
             "doi",

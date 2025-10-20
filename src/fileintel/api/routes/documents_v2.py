@@ -328,3 +328,26 @@ async def get_document_info(
             'graph_chunks': graph_count
         }
     })
+
+
+@router.get("/chunks/{chunk_id}")
+@api_error_handler("get chunk by id")
+async def get_chunk_by_id(
+    chunk_id: str,
+    storage: PostgreSQLStorage = Depends(get_storage)
+):
+    """Get a single chunk by its UUID for GraphRAG source tracing."""
+    chunk = storage.get_chunk_by_id(chunk_id)
+
+    if not chunk:
+        raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
+
+    return create_success_response({
+        'chunk_id': str(chunk.id),
+        'document_id': str(chunk.document_id),
+        'collection_id': str(chunk.collection_id),
+        'chunk_text': chunk.chunk_text,
+        'chunk_metadata': chunk.chunk_metadata or {},
+        'position': chunk.position,
+        'has_embedding': chunk.embedding is not None
+    })
