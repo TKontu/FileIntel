@@ -376,11 +376,12 @@ class UnifiedLLMProvider:
                 chunk.get("text", "") if isinstance(chunk, dict) else str(chunk)
             )
 
-            # Use enhanced citation formatting
+            # Use in-text citation format (with page numbers) for context
             if isinstance(chunk, dict):
                 try:
-                    from fileintel.citation import format_source_reference
-                    source_info = format_source_reference(chunk)
+                    from fileintel.citation import format_in_text_citation
+                    # Use in-text citation so LLM sees the page-specific format to use
+                    source_info = format_in_text_citation(chunk)
                 except ImportError:
                     # Fallback to filename if citation module not available
                     source_info = chunk.get("original_filename", chunk.get("filename", f"Source {i}"))
@@ -433,7 +434,9 @@ Question: {query}
 Retrieved Sources:
 {context}
 
-Please provide your answer based on the sources above. If the sources don't contain sufficient information to fully answer the question, indicate what information is available and what might be missing. Always cite which sources support your key points."""
+Please provide your answer based on the sources above. If the sources don't contain sufficient information to fully answer the question, indicate what information is available and what might be missing.
+
+IMPORTANT: When citing sources, include specific page numbers when available. Use the format (Author, Year, p. X) for page-specific claims. Cite sources to support your key points."""
 
     def generate_summary(
         self,

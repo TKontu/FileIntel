@@ -12,6 +12,7 @@ from fileintel.api.routes import (
     query,
     graphrag_v2,
     metadata_v2,
+    documents_v2,
 )
 from fileintel.rag.graph_rag.services.dataframe_cache import GraphRAGDataFrameCache
 from fileintel.api.dependencies import get_storage
@@ -48,6 +49,7 @@ configure_cors(app)
 # V1 routes removed - migrated to task-based v2 API
 # V2 Task-based API endpoints
 app.include_router(collections_v2.router, prefix=API_V2_PREFIX, tags=["collections-v2"])
+app.include_router(documents_v2.router, prefix=API_V2_PREFIX, tags=["documents-v2"])
 app.include_router(tasks_v2.router, prefix=API_V2_PREFIX, tags=["tasks-v2"])
 app.include_router(query.router, prefix=API_V2_PREFIX, tags=["query-v2"])
 app.include_router(graphrag_v2.router, prefix=API_V2_PREFIX, tags=["graphrag-v2"])

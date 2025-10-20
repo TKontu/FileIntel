@@ -88,6 +88,12 @@ document_processing:
   # PDF processor selection: "mineru" or "traditional" (auto-fallback on failure)
   primary_pdf_processor: "mineru"
 
+  # Type-aware chunking (Phase 1 - NEW)
+  # When enabled: uses element-based chunking with corruption filtering, statistical heuristics, and specialized chunkers
+  # When disabled: uses traditional text-based chunking (backward compatible)
+  # Default: false (can enable after testing)
+  use_type_aware_chunking: true
+
   # MinerU OCR settings
   mineru:
     # API type: "selfhosted" for FastAPI or "commercial" for async task API

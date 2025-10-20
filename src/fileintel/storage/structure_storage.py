@@ -38,7 +38,7 @@ class DocumentStructureStorage:
 
         Args:
             document_id: ID of the document
-            structure_type: Type of structure ('toc', 'lof', 'lot', 'headers')
+            structure_type: Type of structure ('toc', 'lof', 'lot', 'headers', 'filtered_content')
             data: Structured data (format depends on type)
 
         Returns:
@@ -48,10 +48,11 @@ class DocumentStructureStorage:
             TOC: {"entries": [{"section": "1.1", "title": "Intro", "page": 5}, ...]}
             LOF: {"entries": [{"figure": "Figure 1", "title": "Diagram", "page": 8}, ...]}
             Headers: {"hierarchy": [{"level": 1, "text": "Chapter 1", "page": 1}, ...]}
+            Filtered: {"filtered_count": 5, "total_elements": 100, "items": [...]}
         """
         try:
             # Validate structure type
-            valid_types = ['toc', 'lof', 'lot', 'headers']
+            valid_types = ['toc', 'lof', 'lot', 'headers', 'filtered_content']
             if structure_type not in valid_types:
                 raise ValueError(f"Invalid structure_type: {structure_type}. Must be one of {valid_types}")
 
@@ -89,7 +90,7 @@ class DocumentStructureStorage:
 
         Args:
             document_id: ID of the document
-            structure_type: Optional filter by type ('toc', 'lof', 'lot', 'headers')
+            structure_type: Optional filter by type ('toc', 'lof', 'lot', 'headers', 'filtered_content')
 
         Returns:
             List of DocumentStructure instances

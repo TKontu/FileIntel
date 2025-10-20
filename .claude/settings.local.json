@@ -4,7 +4,9 @@
       "Bash(tree:*)",
       "Read(//tmp/**)",
       "Bash(/home/linux/.local/bin/poetry run /usr/bin/python3 -c \"\ntry:\n    from src.fileintel.storage.postgresql_storage import PostgreSQLStorage\n    print(''PostgreSQLStorage import: SUCCESS'')\nexcept Exception as e:\n    print(f''PostgreSQLStorage import error: {e}'')\n\")",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(poetry run:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []

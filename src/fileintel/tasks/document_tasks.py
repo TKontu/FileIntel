@@ -6,6 +6,7 @@ Tasks are designed as pure functions with clear inputs/outputs and proper error 
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union
 from celery import group
@@ -14,23 +15,228 @@ from fileintel.celery_config import app
 from .base import BaseFileIntelTask
 from fileintel.core.config import get_config
 from fileintel.document_processing.chunking import TextChunker
+from fileintel.document_processing.elements import TextElement
 
 logger = logging.getLogger(__name__)
 
+# Corruption detection thresholds (Phase 0: Prevent Data Loss)
+CORRUPTION_THRESHOLDS = {
+    'max_pdf_artifacts': 20,        # More than 20 (cid:X) indicates corrupt extraction
+    'min_stat_table_tokens': 2000,  # Statistical tables are typically large appendix content
+    'max_avg_word_length': 15,      # Normal English ~5-6 chars, >15 indicates no word spacing
+    'max_table_lines': 500,         # Corrupt tables render one value per line
+    'book_index_page_density': 0.3, # Index pages have 30%+ page number references
+    'book_index_comma_density': 0.05, # Index pages use commas to separate page refs
+    'extremely_large_element': 10000  # >10k tokens almost certainly corrupt
+}
 
-def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+
+def _has_excessive_pdf_artifacts(text: str) -> bool:
+    """Check for PDF extraction artifacts like (cid:X) placeholders."""
+    return text.count('(cid:') > CORRUPTION_THRESHOLDS['max_pdf_artifacts']
+
+
+def _is_statistical_reference_table(text: str) -> bool:
+    """Detect statistical reference tables in appendices."""
+    if not re.search(r'TABLE [IVX]+', text, re.IGNORECASE):
+        return False
+
+    stat_terms = ['Critical Values', 'Degrees of Freedom', 'Percentage Points', 'Distribution']
+    term_count = sum(1 for term in stat_terms if term in text)
+
+    from fileintel.document_processing.type_aware_chunking import estimate_tokens
+    tokens = estimate_tokens(text)
+
+    return term_count >= 2 and tokens > CORRUPTION_THRESHOLDS['min_stat_table_tokens']
+
+
+def _has_missing_word_boundaries(text: str) -> bool:
+    """Detect text extracted without word spacing."""
+    words = text.split()
+    if len(words) < 10:
+        return False
+
+    avg_length = sum(len(w) for w in words) / len(words)
+    return avg_length > CORRUPTION_THRESHOLDS['max_avg_word_length']
+
+
+def _is_corrupt_table_extraction(text: str) -> bool:
+    """Detect tables rendered as one number per line."""
+    lines = [l for l in text.split('\n') if l.strip()]
+    if len(lines) <= CORRUPTION_THRESHOLDS['max_table_lines']:
+        return False
+
+    avg_line_length = sum(len(l) for l in lines) / len(lines)
+    return avg_line_length < 15
+
+
+def _is_book_index(text: str) -> bool:
+    """Detect book index pages with page number references."""
+    if len(text) < 1000:
+        return False
+
+    # Count page number references
+    page_numbers = len(re.findall(r'\b\d{1,4}\b', text))
+    words = text.split()
+    if not words:
+        return False
+
+    page_density = page_numbers / len(words)
+    comma_density = text.count(',') / len(text)
+
+    if page_density <= CORRUPTION_THRESHOLDS['book_index_page_density']:
+        return False
+    if comma_density <= CORRUPTION_THRESHOLDS['book_index_comma_density']:
+        return False
+
+    # Additional check: short average line length
+    lines = [l for l in text.split('\n') if l.strip()]
+    if not lines:
+        return False
+    avg_line_len = sum(len(l) for l in lines) / len(lines)
+    return avg_line_len < 80
+
+
+def _should_filter_element(element: TextElement) -> Tuple[bool, Optional[str]]:
     """
-    Pure function to read document content based on file type.
+    Determine if element should be filtered before chunking.
+
+    Single responsibility: make filtering decision based on all checks.
+
+    Returns: (should_filter, reason)
+    """
+    if not element or not element.text:
+        return (True, 'empty_element')
+
+    # Check 1: MinerU semantic type (trust MinerU if available)
+    semantic_type = element.metadata.get('semantic_type') if element.metadata else None
+    if semantic_type in ['toc', 'lof', 'lot']:
+        return (True, f'semantic_type_{semantic_type}')
+
+    # Check 2: Corruption patterns (early returns for clarity)
+    text = element.text
+
+    if _has_excessive_pdf_artifacts(text):
+        return (True, 'excessive_pdf_artifacts')
+
+    if _is_statistical_reference_table(text):
+        return (True, 'statistical_reference_table')
+
+    if _has_missing_word_boundaries(text):
+        return (True, 'no_word_boundaries')
+
+    if _is_corrupt_table_extraction(text):
+        return (True, 'corrupt_table_extraction')
+
+    if _is_book_index(text):
+        return (True, 'book_index')
+
+    # Check 3: Extremely large (likely corrupt)
+    from fileintel.document_processing.type_aware_chunking import estimate_tokens
+    if estimate_tokens(text) > CORRUPTION_THRESHOLDS['extremely_large_element']:
+        return (True, 'extremely_large_element')
+
+    return (False, None)
+
+
+def _filter_elements(elements: List[TextElement]) -> Tuple[List[TextElement], List[Dict]]:
+    """
+    Filter corrupt/non-content elements.
+
+    Pure function - no I/O, easily testable.
+
+    Returns: (clean_elements, filtered_metadata)
+    """
+    clean = []
+    filtered = []
+
+    for idx, element in enumerate(elements):
+        try:
+            should_filter, reason = _should_filter_element(element)
+
+            if should_filter:
+                from fileintel.document_processing.type_aware_chunking import estimate_tokens
+
+                logger.warning(
+                    f"Filtering element {idx}: {reason} | "
+                    f"{estimate_tokens(element.text)} tokens | "
+                    f"preview: {element.text[:80]}..."
+                )
+
+                filtered.append({
+                    'index': idx,
+                    'reason': reason,
+                    'token_count': estimate_tokens(element.text),
+                    'char_count': len(element.text),
+                    'preview': element.text[:500]
+                })
+            else:
+                clean.append(element)
+
+        except Exception as e:
+            # HIGH FIX: Add full traceback and mark element as potentially problematic
+            import traceback
+            logger.error(
+                f"Filter error on element {idx}: {e}\n"
+                f"Traceback: {traceback.format_exc()}\n"
+                f"Element preview: {element.text[:200] if element and element.text else 'No text'}"
+            )
+            # Fail open - keep element if filtering crashes (prevent data loss)
+            # But mark it so we know filtering failed
+            if hasattr(element, 'metadata') and element.metadata is not None:
+                element.metadata['filtering_error'] = str(e)
+            clean.append(element)
+
+    return clean, filtered
+
+
+def _store_filtering_results(
+    document_id: str,
+    total_elements: int,
+    filtered_metadata: List[Dict],
+    storage
+) -> None:
+    """
+    Persist filtering results for transparency.
+
+    Separate function for storage I/O - doesn't affect filtering logic.
+
+    Stores filtered element metadata in document_structures table with
+    structure_type='filtered_content'. This provides transparency into
+    what content was filtered during Phase 0 corruption detection.
+    """
+    if not filtered_metadata:
+        return
+
+    try:
+        storage.store_document_structure(
+            document_id=document_id,
+            structure_type='filtered_content',
+            data={
+                'filtered_count': len(filtered_metadata),
+                'total_elements': total_elements,
+                'items': filtered_metadata[:50]  # Limit storage to first 50 items
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to store filtering metadata: {e}")
+        # Don't fail the whole process if metadata storage fails
+
+
+def read_document_with_elements(file_path: str) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], List[TextElement]]:
+    """
+    Read document preserving structured elements for filtering and processing.
 
     Args:
         file_path: Path to the document file
 
     Returns:
-        Tuple of (raw_text_content, page_mappings, document_metadata)
+        Tuple of (combined_text, page_mappings, metadata, elements)
         where:
-        - raw_text_content: Combined text from all elements
+        - combined_text: Combined text from all elements
         - page_mappings: Position and page info for each element
-        - document_metadata: Processor metadata (may include 'document_structure')
+        - metadata: Processor metadata (may include 'document_structure')
+        - elements: List of TextElement objects for filtering/processing
 
     Raises:
         FileNotFoundError: If file doesn't exist
@@ -137,7 +343,27 @@ def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]], Di
             current_position += len(text_content) + 1  # +1 for space separator
 
     combined_text = " ".join(text_parts)
-    return combined_text, page_mappings, metadata
+    return combined_text, page_mappings, metadata, elements
+
+
+def read_document_content(file_path: str) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    BACKWARDS COMPATIBLE: Read document without elements.
+
+    For new code, use read_document_with_elements() to access structured elements.
+
+    Args:
+        file_path: Path to the document file
+
+    Returns:
+        Tuple of (raw_text_content, page_mappings, document_metadata)
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If file type is unsupported
+    """
+    text, mappings, meta, _ = read_document_with_elements(file_path)
+    return text, mappings, meta
 
 
 def clean_and_chunk_text(
@@ -381,7 +607,13 @@ def validate_chunking_system(self, sample_text: str = None) -> Dict[str, Any]:
         }
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+@app.task(
+    base=BaseFileIntelTask,
+    bind=True,
+    queue="document_processing",
+    soft_time_limit=None,  # No soft limit - documents can take hours/days
+    time_limit=None        # No hard limit - let them run as long as needed
+)
 def process_document(
     self, file_path: str, document_id: str = None, collection_id: str = None, **kwargs
 ) -> Dict[str, Any]:
@@ -403,23 +635,100 @@ def process_document(
         # Update progress
         self.update_progress(0, 3, "Reading document content")
 
-        # Read document content with page mappings and metadata
-        content, page_mappings, doc_metadata = read_document_content(file_path)
+        # Read document content with page mappings, metadata, and elements for filtering
+        content, page_mappings, doc_metadata, elements = read_document_with_elements(file_path)
         logger.info(f"Extracted {len(content)} characters from {file_path} with {len(page_mappings)} page mappings")
+
+        # Filter corrupt/non-content elements before chunking
+        clean_elements, filtered_metadata = _filter_elements(elements)
+
+        # CRITICAL: Validate we have elements remaining after filtering
+        if not clean_elements:
+            error_msg = (
+                f"All {len(elements)} elements filtered as corrupt/non-content. "
+                f"Document has no valid content to process. "
+                f"Filtered reasons: {[f['reason'] for f in filtered_metadata[:5]]}"
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        if filtered_metadata:
+            logger.warning(f"Filtered {len(filtered_metadata)} corrupt/non-content elements from document")
+            # Rebuild content from clean elements only
+            clean_text_parts = []
+            clean_page_mappings = []
+            current_position = 0
+            for elem in clean_elements:
+                if hasattr(elem, "text") and elem.text:
+                    text_content = elem.text
+                    clean_text_parts.append(text_content)
+
+                    elem_metadata = getattr(elem, "metadata", {})
+                    page_info = {
+                        "start_pos": current_position,
+                        "end_pos": current_position + len(text_content),
+                        "page_number": elem_metadata.get("page_number"),
+                        "chapter": elem_metadata.get("chapter"),
+                        "extraction_method": elem_metadata.get("extraction_method"),
+                        "section_title": elem_metadata.get("section_title"),
+                        "section_path": elem_metadata.get("section_path"),
+                        "markdown_headers": elem_metadata.get("markdown_headers")
+                    }
+                    clean_page_mappings.append(page_info)
+                    current_position += len(text_content) + 1
+
+            content = " ".join(clean_text_parts)
+            page_mappings = clean_page_mappings
+            logger.info(f"After filtering: {len(content)} characters with {len(clean_page_mappings)} page mappings")
 
         # Update progress
         self.update_progress(1, 3, "Cleaning and chunking text")
 
-        # Clean and chunk text with page tracking - get both chunks and full result to avoid double processing
-        chunker = TextChunker()
-        if chunker.enable_two_tier:
-            # Two-tier mode: get both chunks and full result in one call
-            chunks, full_chunking_result = clean_and_chunk_text(content, page_mappings=page_mappings, return_full_result=True)
-        else:
-            # Traditional mode: only need chunks
-            chunks = clean_and_chunk_text(content, page_mappings=page_mappings)
-            full_chunking_result = None
-        logger.info(f"Created {len(chunks)} chunks from document")
+        # Get configuration to determine chunking strategy
+        config = get_config()
+
+        # CRITICAL FIX: Use local variable to avoid race condition with concurrent tasks
+        use_type_aware = config.document_processing.use_type_aware_chunking
+
+        # Choose chunking strategy based on configuration
+        if use_type_aware and clean_elements:
+            # HIGH FIX: Add error boundary with fallback to traditional chunking
+            try:
+                # Phase 1: Type-aware chunking using element metadata
+                from fileintel.document_processing.type_aware_chunking import chunk_elements_by_type
+                logger.info(f"Using type-aware chunking for {len(clean_elements)} elements")
+
+                chunker = TextChunker()
+                chunks_list = chunk_elements_by_type(
+                    clean_elements,
+                    max_tokens=450,  # BGE embedding limit
+                    chunker=chunker
+                )
+                # Convert to format expected by downstream code
+                chunks = [chunk_dict for chunk_dict in chunks_list]
+                full_chunking_result = None
+                logger.info(f"Type-aware chunking created {len(chunks)} chunks")
+            except Exception as e:
+                # If type-aware chunking fails, fall back to traditional
+                import traceback
+                logger.error(
+                    f"Type-aware chunking failed, falling back to traditional chunking: {e}\n"
+                    f"Traceback: {traceback.format_exc()}"
+                )
+                # Fall through to traditional path below
+                use_type_aware = False  # Only mutate local variable, not shared config
+
+        if not (use_type_aware and clean_elements):
+            # Traditional text-based chunking (backwards compatible)
+            chunker = TextChunker()
+            if chunker.enable_two_tier:
+                # Two-tier mode: get both chunks and full result in one call
+                chunks, full_chunking_result = clean_and_chunk_text(content, page_mappings=page_mappings, return_full_result=True)
+            else:
+                # Traditional mode: only need chunks
+                chunks = clean_and_chunk_text(content, page_mappings=page_mappings)
+                full_chunking_result = None
+            logger.info(f"Traditional chunking created {len(chunks)} chunks")
 
         # Update progress
         self.update_progress(2, 3, "Storing chunks in database")
@@ -427,7 +736,6 @@ def process_document(
         # Store chunks in database
         if document_id and collection_id:
             from fileintel.celery_config import get_shared_storage
-            from fileintel.core.config import get_config
             import os
             import hashlib
 
@@ -497,6 +805,16 @@ def process_document(
                         )
                         actual_document_id = document_id
 
+                # HIGH FIX: Validate that chunking produced at least one chunk
+                if not chunks:
+                    error_msg = (
+                        f"Chunking produced zero chunks for document {document_id}. "
+                        f"Document has {len(clean_elements)} elements after filtering. "
+                        f"This indicates a critical chunking failure."
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
                 # Format chunks for storage
                 # Chunks now come as dictionaries with text and metadata
                 chunk_data = []
@@ -544,6 +862,15 @@ def process_document(
                 logger.info(
                     f"Stored {len(chunks)} chunks in database for document {actual_document_id}"
                 )
+
+                # Store filtering results for transparency
+                if filtered_metadata:
+                    _store_filtering_results(
+                        document_id=actual_document_id,
+                        total_elements=len(elements),
+                        filtered_metadata=filtered_metadata,
+                        storage=storage
+                    )
 
                 # Store document structure if available (Phase 4: Structured Storage)
                 if doc_metadata and 'document_structure' in doc_metadata:
@@ -603,7 +930,13 @@ def process_document(
         }
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+@app.task(
+    base=BaseFileIntelTask,
+    bind=True,
+    queue="document_processing",
+    soft_time_limit=None,  # No soft limit - collections can take very long
+    time_limit=None        # No hard limit - let them run as long as needed
+)
 def process_collection(
     self, collection_id: str, file_paths: List[str], **kwargs
 ) -> Dict[str, Any]:
@@ -676,7 +1009,13 @@ def process_collection(
         return {"collection_id": collection_id, "error": str(e), "status": "failed"}
 
 
-@app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
+@app.task(
+    base=BaseFileIntelTask,
+    bind=True,
+    queue="document_processing",
+    soft_time_limit=None,  # No soft limit - metadata extraction can take long
+    time_limit=None        # No hard limit - let it run as long as needed
+)
 def extract_document_metadata(
     self, file_path: str, content_chunks: List[str] = None, **kwargs
 ) -> Dict[str, Any]:
@@ -708,7 +1047,6 @@ def extract_document_metadata(
         # Create sync LLM provider directly
         from fileintel.llm_integration.unified_provider import UnifiedLLMProvider
         from fileintel.celery_config import get_shared_storage
-        from fileintel.core.config import get_config
 
         config = get_config()
         storage = get_shared_storage()

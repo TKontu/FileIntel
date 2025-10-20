@@ -63,8 +63,13 @@ class GraphRAGService:
 
         raw_response = await self.global_search(query, collection_id)
 
-        answer = getattr(raw_response, "response", str(raw_response))
-        sources = getattr(raw_response, "context_data", [])
+        # Extract response from dict (global_search returns a dict from data_adapter)
+        if isinstance(raw_response, dict):
+            answer = raw_response.get("response", str(raw_response))
+            sources = raw_response.get("context", {}).get("data", [])
+        else:
+            answer = getattr(raw_response, "response", str(raw_response))
+            sources = getattr(raw_response, "context_data", [])
 
         # Calculate confidence based on result quality
         confidence = self._calculate_confidence(raw_response, sources)
@@ -244,11 +249,35 @@ class GraphRAGService:
     # Orchestrator interface methods
     async def global_query(self, collection_id: str, query: str):
         """Wrapper for global_search to match orchestrator interface."""
-        return await self.global_search(query, collection_id)
+        raw_response = await self.global_search(query, collection_id)
+
+        # Convert response format to match API expectations
+        if isinstance(raw_response, dict):
+            answer = raw_response.get("response", str(raw_response))
+            context = raw_response.get("context", {})
+            return {
+                "answer": answer,
+                "sources": [],
+                "context": context,
+                "metadata": {"search_type": "global"}
+            }
+        return raw_response
 
     async def local_query(self, collection_id: str, query: str):
         """Wrapper for local_search to match orchestrator interface."""
-        return await self.local_search(query, collection_id, community="")
+        raw_response = await self.local_search(query, collection_id, community="")
+
+        # Convert response format to match API expectations
+        if isinstance(raw_response, dict):
+            answer = raw_response.get("response", str(raw_response))
+            context = raw_response.get("context", {})
+            return {
+                "answer": answer,
+                "sources": [],
+                "context": context,
+                "metadata": {"search_type": "local"}
+            }
+        return raw_response
 
     def is_collection_indexed(self, collection_id: str) -> bool:
         """Check if a collection has a GraphRAG index."""

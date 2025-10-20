@@ -10,6 +10,8 @@ from kombu import Queue
 from fileintel.core.config import get_config
 import logging
 
+logger = logging.getLogger(__name__)
+
 # Create Celery application instance
 app = Celery("fileintel")
 
@@ -141,6 +143,8 @@ def configure_celery_app(config=None):
         # Task execution settings
         task_compression="gzip",
         result_compression="gzip",
+        # Task state tracking - critical for detecting stale tasks
+        task_track_started=True,  # Track when tasks actually start (not just queued)
         # Monitoring and debugging
         worker_send_task_events=True,
         task_send_sent_event=True,
@@ -343,30 +347,292 @@ def health_check_task(self):
     }
 
 
-# Signal handlers for production monitoring
-from celery.signals import task_success, task_failure, task_retry
+# Signal handlers for production monitoring and task tracking
+from celery.signals import (
+    task_success,
+    task_failure,
+    task_retry,
+    worker_ready,
+    celeryd_after_setup,
+    task_prerun,
+    task_postrun,
+)
+from datetime import datetime, timedelta
+
+
+def _get_task_registry_session():
+    """Get a database session for task registry operations."""
+    from fileintel.storage.models import SessionLocal
+
+    return SessionLocal()
+
+
+def _safe_serialize(data):
+    """
+    Safely serialize task arguments for JSONB storage.
+
+    Handles non-serializable objects by converting to string representation.
+    """
+    if data is None:
+        return None
+
+    import json
+    try:
+        # Test if data is JSON-serializable
+        json.dumps(data)
+        return data
+    except (TypeError, ValueError):
+        # Fall back to string representation for non-serializable types
+        try:
+            return str(data)[:1000]  # Limit size to prevent bloat
+        except Exception:
+            return "<unserializable>"
+
+
+@task_prerun.connect
+def task_started_handler(sender=None, task_id=None, task=None, args=None, kwargs=None, **extra):
+    """Track task start in database registry."""
+    if not task_id:
+        logger.error("task_prerun called with empty task_id - skipping registry")
+        return
+
+    try:
+        from fileintel.storage.models import CeleryTaskRegistry
+        import os
+
+        session = _get_task_registry_session()
+        try:
+            # Get worker info
+            worker_id = task.request.hostname if task and hasattr(task, 'request') else 'unknown'
+            worker_pid = os.getpid()
+
+            # Create or update task registry entry
+            task_entry = session.query(CeleryTaskRegistry).filter_by(task_id=task_id).first()
+
+            if task_entry:
+                # Update existing entry
+                task_entry.status = 'STARTED'
+                task_entry.started_at = datetime.utcnow()
+                task_entry.worker_id = worker_id
+                task_entry.worker_pid = worker_pid
+                task_entry.last_heartbeat = datetime.utcnow()
+            else:
+                # Create new entry
+                task_entry = CeleryTaskRegistry(
+                    task_id=task_id,
+                    task_name=sender.name if sender else 'unknown',
+                    worker_id=worker_id,
+                    worker_pid=worker_pid,
+                    status='STARTED',
+                    started_at=datetime.utcnow(),
+                    last_heartbeat=datetime.utcnow(),
+                    args=_safe_serialize(args),
+                    kwargs=_safe_serialize(kwargs),
+                )
+                session.add(task_entry)
+
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"Error tracking task start for {task_id}: {e}")
+        # Don't fail the task due to tracking issues
 
 
 @task_success.connect
 def task_success_handler(
     sender=None, task_id=None, result=None, retries=None, einfo=None, **kwargs
 ):
-    """Handle successful task completion for monitoring."""
-    # Log success for monitoring systems
-    pass
+    """Handle successful task completion and update registry."""
+    try:
+        from fileintel.storage.models import CeleryTaskRegistry
+
+        session = _get_task_registry_session()
+        try:
+            task_entry = session.query(CeleryTaskRegistry).filter_by(task_id=task_id).first()
+            if task_entry:
+                task_entry.status = 'SUCCESS'
+                task_entry.completed_at = datetime.utcnow()
+                task_entry.result = {'success': True, 'result': str(result)[:1000]}  # Limit size
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"Error updating task success for {task_id}: {e}")
 
 
 @task_failure.connect
 def task_failure_handler(
     sender=None, task_id=None, exception=None, traceback=None, einfo=None, **kwargs
 ):
-    """Handle task failures for monitoring and alerting."""
-    # Log failure for monitoring systems
-    pass
+    """Handle task failures and update registry."""
+    try:
+        from fileintel.storage.models import CeleryTaskRegistry
+
+        session = _get_task_registry_session()
+        try:
+            task_entry = session.query(CeleryTaskRegistry).filter_by(task_id=task_id).first()
+            if task_entry:
+                task_entry.status = 'FAILURE'
+                task_entry.completed_at = datetime.utcnow()
+                task_entry.result = {'error': str(exception)[:1000]}  # Limit size
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"Error updating task failure for {task_id}: {e}")
 
 
 @task_retry.connect
 def task_retry_handler(sender=None, task_id=None, reason=None, einfo=None, **kwargs):
-    """Handle task retries for monitoring."""
-    # Log retry for monitoring systems
-    pass
+    """Handle task retries and update registry."""
+    try:
+        from fileintel.storage.models import CeleryTaskRegistry
+
+        session = _get_task_registry_session()
+        try:
+            task_entry = session.query(CeleryTaskRegistry).filter_by(task_id=task_id).first()
+            if task_entry:
+                task_entry.status = 'RETRY'
+                task_entry.last_heartbeat = datetime.utcnow()
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"Error updating task retry for {task_id}: {e}")
+
+
+@worker_ready.connect
+def cleanup_stale_tasks(sender=None, **kwargs):
+    """
+    Clean up stale tasks on worker startup.
+
+    When workers are forcibly terminated (e.g., docker-compose down),
+    tasks can be left in STARTED state in the database. This handler:
+    1. Finds tasks in STARTED state from workers that are no longer alive
+    2. Revokes those tasks so they can be retried or cleaned up
+    """
+    logger.info("Worker ready - checking for stale tasks in database...")
+
+    try:
+        from fileintel.storage.models import CeleryTaskRegistry
+
+        # Get currently active workers
+        inspect = app.control.inspect()
+        stats = inspect.stats()
+
+        if not stats:
+            logger.warning(
+                "Cannot get worker stats from Celery - skipping stale task cleanup "
+                "to avoid incorrectly revoking active tasks during worker startup"
+            )
+            return
+
+        active_worker_ids = set(stats.keys())
+        logger.info(f"Active workers: {active_worker_ids}")
+
+        # Get currently executing tasks to avoid revoking them
+        active_task_ids = set()
+        active_tasks = inspect.active()
+        if active_tasks:
+            for worker_tasks in active_tasks.values():
+                for task_dict in worker_tasks:
+                    active_task_ids.add(task_dict['id'])
+            logger.info(f"Found {len(active_task_ids)} currently active tasks")
+
+        # Query database for tasks in STARTED or RETRY state
+        session = _get_task_registry_session()
+        try:
+            stale_tasks = (
+                session.query(CeleryTaskRegistry)
+                .filter(CeleryTaskRegistry.status.in_(['STARTED', 'RETRY']))
+                .all()
+            )
+
+            if not stale_tasks:
+                logger.info("No tasks in STARTED/RETRY state found")
+                return
+
+            stale_count = 0
+            for task_entry in stale_tasks:
+                # Skip if task is currently active on any worker (prevents race condition)
+                if task_entry.task_id in active_task_ids:
+                    logger.debug(f"Task {task_entry.task_id} is currently active - skipping")
+                    continue
+
+                # Check if worker is still alive
+                if task_entry.worker_id not in active_worker_ids:
+                    logger.warning(
+                        f"Found stale task {task_entry.task_id} from dead worker "
+                        f"{task_entry.worker_id} - revoking"
+                    )
+
+                    # Revoke the task
+                    try:
+                        app.control.revoke(task_entry.task_id, terminate=False)
+
+                        # Mark as revoked in database
+                        task_entry.status = 'REVOKED'
+                        task_entry.completed_at = datetime.utcnow()
+                        task_entry.result = {
+                            'error': f'Worker {task_entry.worker_id} died unexpectedly'
+                        }
+                        session.commit()
+
+                        stale_count += 1
+
+                    except Exception as revoke_error:
+                        session.rollback()
+                        logger.error(
+                            f"Error revoking stale task {task_entry.task_id}: {revoke_error}"
+                        )
+                else:
+                    # Worker is alive - check heartbeat for very old tasks
+                    if task_entry.last_heartbeat:
+                        time_since_heartbeat = datetime.utcnow() - task_entry.last_heartbeat
+                        # If no heartbeat for 6 hours, consider it stale
+                        if time_since_heartbeat > timedelta(hours=6):
+                            logger.warning(
+                                f"Task {task_entry.task_id} has no heartbeat for "
+                                f"{time_since_heartbeat} - may be stuck"
+                            )
+                            # Don't auto-revoke - just log warning for manual investigation
+
+            if stale_count > 0:
+                logger.info(f"Revoked {stale_count} stale tasks from dead workers")
+            else:
+                logger.info("No stale tasks found requiring cleanup")
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"Error during stale task cleanup: {e}")
+        # Don't fail worker startup due to cleanup issues
+
+    logger.info("Stale task check complete")
+
+
+@celeryd_after_setup.connect
+def setup_worker_logging(sender=None, instance=None, **kwargs):
+    """Configure enhanced logging after worker setup."""
+    logger.info(f"Celery worker initialized: {sender}")
+    logger.info("Task acks_late=True: Tasks will be requeued if worker dies")
+    logger.info("Task reject_on_worker_lost=True: Tasks will fail if worker is lost")
+    logger.info("Worker ready to process tasks")

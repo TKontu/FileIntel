@@ -208,6 +208,11 @@ class DocumentProcessingSettings(BaseModel):
     )
     # MinerU configuration
     mineru: MinerUSettings = Field(default_factory=MinerUSettings)
+    # Type-aware chunking (Phase 1)
+    use_type_aware_chunking: bool = Field(
+        default=False,
+        description="Enable type-aware chunking based on element semantic types (tables, images, etc.)"
+    )
 
 
 class LoggingSettings(BaseModel):

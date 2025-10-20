@@ -422,7 +422,7 @@ class TextChunker:
                 'type': 'graph',
                 'vector_chunk_ids': [c['id'] for c in chunk_group],
                 'unique_sentence_ids': unique_sentence_ids,
-                'deduplicated_text': deduplicated_text,
+                'text': deduplicated_text,  # CRITICAL FIX: Use 'text' key for storage compatibility
                 'sentence_count': len(unique_sentence_ids),
                 'token_count': total_tokens,
                 'original_chunks_count': len(chunk_group),
@@ -753,19 +753,30 @@ class TextChunker:
     def _validate_chunks_against_token_limit(
         self, chunks: List[str], max_tokens: int, document_id: str = None
     ) -> List[str]:
-        """Validate all chunks against token limits and filter out oversized ones."""
+        """
+        Validate all chunks against token limits.
+
+        CHANGED: No longer drops oversized chunks - corrupt content should be filtered
+        before chunking (Phase 0). If oversized chunks still occur, they are preserved
+        with metadata for investigation rather than silent data loss.
+        """
         validated_chunks = []
         for i, chunk in enumerate(chunks):
-            if self._check_token_safety(chunk, max_tokens, "Vector RAG",
-                                       document_id=document_id, chunk_index=i):
-                validated_chunks.append(chunk)
-            else:
-                # This should rarely happen due to the logic above, but safety net
+            # Check token safety but preserve all chunks
+            is_safe = self._check_token_safety(chunk, max_tokens, "Vector RAG",
+                                              document_id=document_id, chunk_index=i)
+
+            # Always include the chunk (no more dropping!)
+            validated_chunks.append(chunk)
+
+            if not is_safe:
+                # Log for visibility but DO NOT DROP
                 text_preview = chunk[:500] + "..." if len(chunk) > 500 else chunk
                 logger.error(
-                    f"Dropping oversized chunk | "
+                    f"Oversized chunk detected (preserved with metadata) | "
                     f"document_id={document_id or 'unknown'} | "
                     f"chunk_index={i} | "
+                    f"INVESTIGATE: This should have been filtered in Phase 0 | "
                     f"chunk_text:\n{text_preview}"
                 )
         return validated_chunks

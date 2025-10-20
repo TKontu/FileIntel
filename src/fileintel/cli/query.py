@@ -56,10 +56,16 @@ def query_collection(
     if sources:
         cli_handler.console.print(f"\n[bold blue]Sources ({len(sources)}):[/bold blue]")
         for i, source in enumerate(sources, 1):
-            # Use enhanced citation if available, otherwise fallback to filename
-            citation = source.get("citation", source.get("filename", "Unknown"))
+            # Use in-text citation (with page numbers) if available, otherwise fallback
+            in_text = source.get("in_text_citation")
+            full_citation = source.get("citation", source.get("filename", "Unknown"))
             relevance = source.get("similarity_score", source.get("relevance_score", 0))
-            cli_handler.console.print(f"  {i}. {citation} (relevance: {relevance:.3f})")
+
+            # Display format: "In-text citation" - Full reference (relevance)
+            if in_text:
+                cli_handler.console.print(f"  {i}. {in_text} - {full_citation} (relevance: {relevance:.3f})")
+            else:
+                cli_handler.console.print(f"  {i}. {full_citation} (relevance: {relevance:.3f})")
 
 
 @app.command("document")

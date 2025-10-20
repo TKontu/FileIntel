@@ -49,24 +49,30 @@ class CitationFormatter:
 
     def format_in_text_citation(self, chunk: Dict[str, Any]) -> str:
         """
-        Format an in-text citation for Harvard style.
+        Format an in-text citation for Harvard style with page number.
 
         Args:
-            chunk: Chunk data containing document metadata
+            chunk: Chunk data containing document metadata and chunk metadata
 
         Returns:
-            Formatted in-text citation like (Author, Year) or (Filename)
+            Formatted in-text citation like (Author, Year, p. 15) or (Author, Year) if no page
         """
         try:
             document_metadata = chunk.get("document_metadata", {})
+            chunk_metadata = chunk.get("metadata", chunk.get("chunk_metadata", {}))
+            page_number = chunk_metadata.get("page_number")
 
             if self._has_citation_metadata(document_metadata):
-                author = self._extract_primary_author(document_metadata)
+                author_surname = self._extract_author_surname(document_metadata)
                 year = self._extract_year(document_metadata)
-                if author and year:
-                    return f"({author}, {year})"
-                elif author:
-                    return f"({author})"
+
+                # Build citation with page number if available
+                if author_surname and year and page_number:
+                    return f"({author_surname}, {year}, p. {page_number})"
+                elif author_surname and year:
+                    return f"({author_surname}, {year})"
+                elif author_surname:
+                    return f"({author_surname})"
 
             # Fallback to simplified filename
             filename = chunk.get("original_filename", chunk.get("filename", "Unknown"))
@@ -196,6 +202,30 @@ class CitationFormatter:
             return author_list[0] if author_list else None
 
         return str(authors) if authors else None
+
+    def _extract_author_surname(self, metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract surname only from primary author for in-text citations.
+
+        Handles formats:
+        - "LastName, FirstName" → "LastName"
+        - "FirstName LastName" → "LastName"
+        - "FirstName MiddleName LastName" → "LastName"
+        """
+        full_name = self._extract_primary_author(metadata)
+        if not full_name:
+            return None
+
+        # Handle "LastName, FirstName" format
+        if ',' in full_name:
+            return full_name.split(',')[0].strip()
+
+        # Handle "FirstName LastName" format - take last word
+        name_parts = full_name.strip().split()
+        if name_parts:
+            return name_parts[-1]
+
+        return full_name
 
     def _format_authors_full(self, metadata: Dict[str, Any]) -> Optional[str]:
         """Format all authors for complete citation."""

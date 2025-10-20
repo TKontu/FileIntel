@@ -233,3 +233,114 @@ def system_status():
 
     if not workers:
         cli_handler.console.print("[yellow]No active workers found[/yellow]")
+
+
+@app.command("cleanup-stale")
+def cleanup_stale_tasks(
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--execute", help="Show what would be cleaned without doing it."
+    ),
+    max_age_hours: int = typer.Option(
+        6, "--max-age-hours", help="Consider tasks stale if no heartbeat for this many hours."
+    ),
+):
+    """
+    Clean up stale tasks from dead workers.
+
+    When workers die unexpectedly (docker-compose down, crashes), tasks can be
+    left in STARTED state. This command finds and revokes such tasks.
+    """
+    from fileintel.storage.models import CeleryTaskRegistry, SessionLocal
+    from celery import current_app
+    from datetime import datetime, timedelta
+
+    cli_handler.console.print("[bold blue]Scanning for stale tasks...[/bold blue]")
+
+    try:
+        # Get active workers
+        inspect = current_app.control.inspect()
+        stats = inspect.stats()
+
+        if stats:
+            active_worker_ids = set(stats.keys())
+            cli_handler.console.print(f"Active workers: {', '.join(active_worker_ids)}")
+        else:
+            active_worker_ids = set()
+            cli_handler.console.print("[yellow]Warning: No active workers found[/yellow]")
+
+        # Query database
+        session = SessionLocal()
+        try:
+            stale_tasks = (
+                session.query(CeleryTaskRegistry)
+                .filter(CeleryTaskRegistry.status.in_(['STARTED', 'RETRY']))
+                .all()
+            )
+
+            if not stale_tasks:
+                cli_handler.console.print("[green]No tasks in STARTED/RETRY state[/green]")
+                return
+
+            cli_handler.console.print(f"Found {len(stale_tasks)} tasks to check")
+
+            stale_count = 0
+            heartbeat_warnings = 0
+
+            for task_entry in stale_tasks:
+                is_stale = False
+                reason = ""
+
+                # Check if worker is dead
+                if task_entry.worker_id not in active_worker_ids:
+                    is_stale = True
+                    reason = f"Worker {task_entry.worker_id} is dead"
+
+                # Check heartbeat age
+                elif task_entry.last_heartbeat:
+                    age = datetime.utcnow() - task_entry.last_heartbeat
+                    if age > timedelta(hours=max_age_hours):
+                        is_stale = True
+                        reason = f"No heartbeat for {age}"
+                        heartbeat_warnings += 1
+
+                if is_stale:
+                    stale_count += 1
+                    cli_handler.console.print(
+                        f"  [yellow]Stale:[/yellow] {task_entry.task_id[:12]}... "
+                        f"({task_entry.task_name}) - {reason}"
+                    )
+
+                    if not dry_run:
+                        try:
+                            # Revoke the task
+                            current_app.control.revoke(task_entry.task_id, terminate=False)
+
+                            # Update database
+                            task_entry.status = 'REVOKED'
+                            task_entry.completed_at = datetime.utcnow()
+                            task_entry.result = {'error': f'Cleaned up: {reason}'}
+                            session.commit()
+
+                            cli_handler.console.print(f"    [green]Revoked[/green]")
+                        except Exception as revoke_error:
+                            session.rollback()
+                            cli_handler.console.print(
+                                f"    [red]Failed to revoke: {revoke_error}[/red]"
+                            )
+
+            if dry_run:
+                cli_handler.console.print(
+                    f"\n[bold yellow]DRY RUN:[/bold yellow] Found {stale_count} stale tasks"
+                )
+                cli_handler.console.print("Use --execute to actually revoke them")
+            else:
+                cli_handler.console.print(
+                    f"\n[bold green]Revoked {stale_count} stale tasks[/bold green]"
+                )
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        cli_handler.display_error(f"Error during cleanup: {e}")
+        raise typer.Exit(1)

@@ -117,15 +117,17 @@ class DocumentChunk(Base):
 
 class DocumentStructure(Base):
     """
-    Store extracted document structure (TOC, LOF, LOT, headers).
+    Store extracted document structure (TOC, LOF, LOT, headers, filtered content).
 
     Phase 4 of MinerU structure utilization - enables structure-based
     navigation and querying without embedding TOC/LOF in vector store.
+
+    Also stores Phase 0 corruption filtering metadata for transparency.
     """
     __tablename__ = "document_structures"
     id = Column(String, primary_key=True)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
-    structure_type = Column(String, nullable=False, index=True)  # 'toc', 'lof', 'lot', 'headers'
+    structure_type = Column(String, nullable=False, index=True)  # 'toc', 'lof', 'lot', 'headers', 'filtered_content'
     data = Column(JSONB, nullable=False)  # Structured entries (format depends on type)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -202,6 +204,39 @@ class GraphRAGRelationship(Base):
     collection = relationship("Collection")
 
 
+class CeleryTaskRegistry(Base):
+    """
+    Track active Celery tasks for stale task detection.
+
+    When workers die unexpectedly (docker-compose down, crashes),
+    tasks can be left in STARTED state. This table tracks which
+    worker is processing which task, enabling cleanup on restart.
+    """
+    __tablename__ = "celery_task_registry"
+
+    task_id = Column(String, primary_key=True)
+    task_name = Column(String, nullable=False, index=True)
+    worker_id = Column(String, nullable=False, index=True)  # celery worker hostname
+    worker_pid = Column(Integer, nullable=True)  # process ID
+    status = Column(String, nullable=False, index=True)  # PENDING, STARTED, SUCCESS, FAILURE, REVOKED
+
+    # Timing information
+    queued_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Task metadata
+    args = Column(JSONB, nullable=True)  # Task arguments (for retry/debugging)
+    kwargs = Column(JSONB, nullable=True)  # Task keyword arguments
+    result = Column(JSONB, nullable=True)  # Task result or error
+
+    # Heartbeat for long-running tasks
+    last_heartbeat = Column(DateTime(timezone=True), nullable=True)  # Updated periodically during execution
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 from urllib.parse import quote_plus
 
 # Construct the database URL from environment variables
@@ -221,7 +256,13 @@ DATABASE_URL = (
     f"postgresql://{encoded_user}:{encoded_password}@{db_host}:{db_port}/{db_name}"
 )
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,  # Increased for concurrent task tracking (default: 5)
+    max_overflow=40,  # Allow burst capacity (default: 10)
+    pool_pre_ping=True,  # Verify connections before use
+    pool_recycle=3600,  # Recycle connections every hour
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

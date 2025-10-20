@@ -73,10 +73,41 @@ def query_with_graphrag(
     )
     cli_handler.console.print()
 
-    answer = response_data.get("answer", "No answer provided")
-    cli_handler.console.print(f"[bold green]Answer:[/bold green] {answer}")
+    # Handle both "answer" (from service wrapper) and "response" (from direct GraphRAG)
+    answer = response_data.get("answer") or response_data.get("response", "No answer provided")
 
-    # Show GraphRAG-specific information
+    # If answer is a dict (raw GraphRAG response), extract the response text
+    if isinstance(answer, dict):
+        answer = answer.get("response", str(answer))
+
+    cli_handler.console.print(f"[bold green]Answer:[/bold green]")
+
+    # Display the answer (don't use Markdown renderer to avoid centered headers)
+    # Instead, just print with proper formatting preserved
+    cli_handler.console.print(answer)
+
+    # Show context information if available (from GraphRAG response)
+    context = response_data.get("context", {})
+
+    # Show community reports if available
+    if "reports" in context:
+        reports = context["reports"]
+        if reports is not None and len(reports) > 0:
+            cli_handler.console.print(
+                f"\n[bold blue]Community Reports Used ({len(reports)}):[/bold blue]"
+            )
+            # Display top 5 reports
+            for i, (_, report) in enumerate(list(reports.head(5).iterrows()), 1):
+                title = report.get("title", "Unknown Community")
+                rank = report.get("rank", 0)
+                cli_handler.console.print(
+                    f"  {i}. {title} [dim](rank: {rank:.1f})[/dim]"
+                )
+
+            if len(reports) > 5:
+                cli_handler.console.print(f"  [dim]... and {len(reports) - 5} more[/dim]")
+
+    # Show GraphRAG-specific information (legacy format)
     entities = response_data.get("entities", [])
     if entities:
         cli_handler.console.print(

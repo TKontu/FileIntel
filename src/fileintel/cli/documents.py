@@ -312,6 +312,93 @@ def view_chunks(
         cli_handler.console.print()  # Empty line between chunks
 
 
+@app.command("export")
+def export_document(
+    document_id: str = typer.Argument(..., help="The ID of the document to export."),
+    output: str = typer.Option(None, "--output", "-o", help="Output file path (default: <document_id>.md)."),
+    chunk_type: str = typer.Option(None, "--chunk-type", "-t", help="Filter by chunk type (vector or graph)."),
+    include_metadata: bool = typer.Option(False, "--metadata", "-m", help="Include chunk metadata in export."),
+):
+    """Export document chunks as a markdown file.
+
+    Examples:
+        # Basic export
+        fileintel documents export 3b9e6ac7-2152-4133-bd87-2cd0ffc09863
+
+        # Export with metadata
+        fileintel documents export 3b9e6ac7-2152-4133-bd87-2cd0ffc09863 --metadata
+
+        # Export to specific file
+        fileintel documents export 3b9e6ac7-2152-4133-bd87-2cd0ffc09863 -o my_doc.md
+
+        # Export only graph chunks
+        fileintel documents export 3b9e6ac7-2152-4133-bd87-2cd0ffc09863 -t graph
+    """
+    import requests
+    from pathlib import Path
+
+    # Build query parameters
+    params = {}
+    if chunk_type:
+        params['chunk_type'] = chunk_type
+    if include_metadata:
+        params['include_metadata'] = 'true'
+
+    def _export(api):
+        # Use the export endpoint (use base_url_v2 attribute)
+        base_url = getattr(api, 'base_url_v2', getattr(api, 'base_url', 'http://localhost:8000/api/v2'))
+        url = f"{base_url}/documents/{document_id}/export"
+        response = requests.get(url, params=params)
+
+        if response.status_code == 404:
+            raise Exception(f"Document {document_id} not found or has no chunks")
+        elif response.status_code != 200:
+            raise Exception(f"Export failed: {response.text}")
+
+        return response
+
+    cli_handler.console.print(f"[blue]Exporting document {document_id}...[/blue]")
+
+    response = cli_handler.handle_api_call(_export, "export document")
+
+    # Determine output filename
+    if output:
+        output_path = Path(output)
+    else:
+        # Try to get filename from Content-Disposition header
+        content_disp = response.headers.get('Content-Disposition', '')
+        if 'filename=' in content_disp:
+            # Extract filename from Content-Disposition
+            import re
+            match = re.search(r'filename="?([^"]+)"?', content_disp)
+            if match:
+                output_path = Path(match.group(1))
+            else:
+                output_path = Path(f"{document_id}.md")
+        else:
+            output_path = Path(f"{document_id}.md")
+
+    # Write the markdown file
+    output_path.write_text(response.text, encoding='utf-8')
+
+    # Get file stats
+    file_size = output_path.stat().st_size
+    if file_size > 1024 * 1024:
+        size_str = f"{file_size / (1024 * 1024):.1f} MB"
+    elif file_size > 1024:
+        size_str = f"{file_size / 1024:.1f} KB"
+    else:
+        size_str = f"{file_size} bytes"
+
+    cli_handler.display_success(f"Document exported to {output_path}")
+    cli_handler.console.print(f"  File size: {size_str}")
+
+    # Count chunks from the markdown
+    chunk_count = response.text.count('### Chunk ')
+    if chunk_count > 0:
+        cli_handler.console.print(f"  Total chunks: {chunk_count}")
+
+
 @app.command("system-status")
 def system_status():
     """Check document management system status."""
