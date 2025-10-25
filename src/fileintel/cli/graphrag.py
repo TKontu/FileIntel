@@ -6,7 +6,9 @@ Streamlined GraphRAG operations using shared CLI utilities.
 
 import typer
 import os
-from typing import Optional
+import logging
+import time
+from typing import Optional, List
 from pathlib import Path
 
 from .shared import (
@@ -15,6 +17,17 @@ from .shared import (
     monitor_task_with_progress,
     get_entity_by_identifier,
 )
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+# Session-level caches (cleared after each query)
+_session_chunk_cache = {}
+_session_embedding_cache = {}
+_embedding_provider = None
+
+# Feature flag for optimizations (can be disabled via environment variable)
+USE_CITATION_CACHING = os.getenv("FILEINTEL_CITATION_CACHING", "true").lower() == "true"
 
 app = typer.Typer(help="GraphRAG operations.")
 
@@ -404,79 +417,334 @@ def _parse_citation_ids(answer_text):
     return parsed
 
 
-def _convert_to_harvard_citations(answer_text, sources):
-    """Convert GraphRAG numbered citations to Harvard-style citations.
+def _convert_to_harvard_citations(answer_text, sources, collection_identifier, cli_handler):
+    """Convert GraphRAG numbered citations to Harvard-style citations using vector similarity.
+
+    For each citation in the answer, extracts the surrounding context and uses vector
+    similarity search to find the most relevant source document.
+
+    OPTIMIZED: Uses caching and metrics tracking.
 
     Args:
         answer_text: Text with [Data: Reports (5)] style citations
-        sources: List of source documents with metadata
+        sources: List of source documents with metadata and chunk_uuids
+        collection_identifier: Collection ID for vector search
+        cli_handler: CLI handler for API access
 
     Returns:
-        Text with (Author, Year) style citations
+        Text with (Author, Year) style citations matched by relevance
     """
     import re
 
     if not sources:
         return answer_text
 
-    # Build citations from document metadata
-    citations = []
-    for i, source in enumerate(sources[:10], 1):  # Top 10 sources
-        metadata = source.get("metadata", {})
-        page_numbers = source.get("page_numbers")  # Now formatted as "p. 45" or "pp. 16-17" etc.
+    # Initialize metrics
+    metrics = {
+        "citations_found": 0,
+        "citations_converted": 0,
+        "chunks_fetched": 0,
+        "chunk_errors": 0,
+        "processing_time_ms": 0
+    }
 
-        # Extract citation from metadata (authors, year, title)
-        authors = metadata.get("authors", [])
-        author_surnames = metadata.get("author_surnames", [])
+    start_time = time.time()
 
-        # Extract year from various metadata fields
-        year = metadata.get("publication_year") or metadata.get("year")
-        if not year and "publication_date" in metadata:
-            # Extract year from publication_date (e.g., "2021-03" -> "2021")
-            pub_date = str(metadata["publication_date"])
-            year = pub_date[:4] if len(pub_date) >= 4 else None
+    # Extract all citation contexts (text segment + citation marker)
+    citation_pattern = r'([^.!?]*\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+\)\][^.!?]*[.!?])'
+    citation_contexts = re.finditer(citation_pattern, answer_text)
 
-        title = metadata.get("title", source.get("document", "Unknown"))
+    # Build mapping of citation marker to best matching source
+    citation_mappings = {}
 
-        # Build citation in Harvard format (Surname et al., Year)
-        # Use author_surnames if available (LLM-extracted), otherwise use full author names
-        citation_names = author_surnames if author_surnames else authors
+    for match in citation_contexts:
+        full_context = match.group(1)
+        # Extract just the citation marker
+        marker_match = re.search(r'\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+\)\]', full_context)
+        if not marker_match:
+            continue
 
-        if citation_names and year:
-            # Format: "Surname et al., Year"
-            if len(citation_names) == 1:
-                citation = f"{citation_names[0]}, {year}"
-            elif len(citation_names) == 2:
-                citation = f"{citation_names[0]} & {citation_names[1]}, {year}"
-            else:
-                citation = f"{citation_names[0]} et al., {year}"
-        elif year:
-            # Has year but no authors
-            citation = f"{title}, {year}"
-        else:
-            # Fallback: use title
-            citation = title.replace('.pdf', '')
+        citation_marker = marker_match.group(0)
+        metrics["citations_found"] += 1
 
-        # Add page numbers if available (already formatted)
-        if page_numbers:
-            citation = f"{citation}, {page_numbers}"
+        # Skip if we already processed this exact citation marker
+        if citation_marker in citation_mappings:
+            continue
 
-        citations.append(citation)
+        # Extract context text (remove the citation marker for similarity search)
+        context_text = full_context.replace(citation_marker, '').strip()
 
-    # Replace numbered citations with Harvard style
-    # Simple approach: replace all [Data: ...] with first citation
-    # More sophisticated: map specific IDs to specific sources
-    if citations:
-        primary_citation = citations[0]
-        # Remove all [Data: ...] citations and replace with primary source
-        result = re.sub(
-            r'\s*\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+\)\]',
-            f' ({primary_citation})',
-            answer_text
+        # Find best matching source using vector similarity
+        best_source, best_page = _find_best_source_by_similarity(
+            context_text, sources, collection_identifier, cli_handler, metrics
         )
-        return result
 
-    return answer_text
+        if best_source:
+            # Build Harvard citation for this source with specific page
+            harvard_citation = _build_harvard_citation(best_source, specific_page=best_page)
+            citation_mappings[citation_marker] = harvard_citation
+            metrics["citations_converted"] += 1
+
+    # Replace each citation marker with its matched Harvard citation
+    result = answer_text
+    for marker, harvard_citation in citation_mappings.items():
+        # Escape special regex characters in marker
+        escaped_marker = re.escape(marker)
+        result = re.sub(
+            rf'\s*{escaped_marker}',
+            f' ({harvard_citation})',
+            result
+        )
+
+    # Calculate metrics
+    metrics["processing_time_ms"] = int((time.time() - start_time) * 1000)
+    metrics["cache_chunks"] = len(_session_chunk_cache)
+    metrics["cache_embeddings"] = len(_session_embedding_cache)
+
+    # Log metrics
+    logger.info(f"Citation conversion completed: {metrics}")
+
+    return result
+
+
+def _find_best_source_by_similarity(context_text, sources, collection_identifier, cli_handler, metrics=None):
+    """Find the most relevant source for a citation context using vector similarity.
+
+    OPTIMIZED: Uses caching for chunks and embeddings.
+
+    Args:
+        context_text: The text segment containing the citation
+        sources: List of candidate source documents
+        collection_identifier: Collection ID
+        cli_handler: CLI handler for API access
+        metrics: Optional metrics dict to update
+
+    Returns:
+        Tuple of (best_source, best_page) or (None, None)
+        - best_source: Best matching source dict or None
+        - best_page: Specific page number of best matching chunk or None
+    """
+    if metrics is None:
+        metrics = {}
+
+    try:
+        # Use singleton provider (reused across citations)
+        embedding_provider = _get_embedding_provider()
+
+        # Generate embedding for the context (with caching)
+        context_embedding = _get_cached_embedding(context_text, embedding_provider)
+
+        # Get embeddings for all candidate chunk texts
+        best_source = None
+        best_page = None
+        best_similarity = -1.0
+
+        api = cli_handler.get_api_client()
+
+        for source in sources:
+            # Get chunk texts for this source
+            chunk_uuids = source.get("chunk_uuids", [])
+
+            for chunk_uuid in chunk_uuids[:5]:  # Limit to first 5 chunks per document
+                try:
+                    # Fetch chunk from API (with caching)
+                    chunk_data = _get_session_chunk(chunk_uuid, api)
+                    chunk_text = chunk_data.get("chunk_text", "")
+                    metrics["chunks_fetched"] = metrics.get("chunks_fetched", 0) + 1
+
+                    if not chunk_text:
+                        continue
+
+                    # Extract page number from this specific chunk
+                    chunk_metadata = chunk_data.get("chunk_metadata", {})
+                    page_number = chunk_metadata.get("page_number")
+
+                    # Generate embedding for chunk (with caching)
+                    chunk_embedding = _get_cached_embedding(chunk_text, embedding_provider)
+
+                    # Calculate cosine similarity
+                    similarity = _cosine_similarity(context_embedding, chunk_embedding)
+
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_source = source
+                        best_page = page_number  # Track specific page of best match
+
+                except Exception as e:
+                    # Log specific errors for debugging
+                    logger.warning(f"Error processing chunk {chunk_uuid}: {e}")
+                    metrics["chunk_errors"] = metrics.get("chunk_errors", 0) + 1
+                    continue
+
+        if best_source:
+            logger.debug(f"Best match: {best_source.get('document')} page {best_page} with similarity {best_similarity:.3f}")
+
+        return (best_source, best_page)
+
+    except Exception as e:
+        # Fallback: return first source if vector search fails
+        logger.error(f"Vector similarity search failed: {e}", exc_info=True)
+        cli_handler.console.print(f"[dim]Vector similarity search failed: {e}[/dim]")
+        return (sources[0], None) if sources else (None, None)
+
+
+def _cosine_similarity(vec1, vec2):
+    """Calculate cosine similarity between two vectors."""
+    import numpy as np
+
+    vec1 = np.array(vec1)
+    vec2 = np.array(vec2)
+
+    dot_product = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    return dot_product / (norm1 * norm2)
+
+
+def _build_harvard_citation(source, specific_page=None):
+    """Build Harvard-style citation from source metadata.
+
+    Args:
+        source: Source dict with metadata and page_numbers
+        specific_page: Specific page number from best matching chunk (takes priority)
+
+    Returns:
+        Formatted Harvard citation string
+    """
+    metadata = source.get("metadata", {})
+
+    # Ensure metadata is a dict
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    # Extract citation from metadata (authors, year, title)
+    authors = metadata.get("authors", [])
+    author_surnames = metadata.get("author_surnames", [])
+
+    # Extract year from various metadata fields
+    year = metadata.get("publication_year") or metadata.get("year")
+    if not year and "publication_date" in metadata:
+        pub_date = str(metadata["publication_date"])
+        year = pub_date[:4] if len(pub_date) >= 4 else None
+
+    title = metadata.get("title", source.get("document", "Unknown"))
+
+    # Build citation in Harvard format (Surname et al., Year)
+    citation_names = author_surnames if author_surnames else authors
+
+    if citation_names and year:
+        if len(citation_names) == 1:
+            citation = f"{citation_names[0]}, {year}"
+        elif len(citation_names) == 2:
+            citation = f"{citation_names[0]} & {citation_names[1]}, {year}"
+        else:
+            citation = f"{citation_names[0]} et al., {year}"
+    elif year:
+        # Use title without .pdf extension if no authors
+        clean_title = title.replace('.pdf', '')
+        citation = f"{clean_title}, {year}"
+    else:
+        # Fallback: use document name without .pdf extension
+        citation = source.get("document", "Unknown").replace('.pdf', '')
+
+    # Add page reference
+    # Priority: specific_page (from similarity match) > aggregated page_numbers (fallback)
+    if specific_page is not None:
+        citation = f"{citation}, p. {specific_page}"
+    elif source.get("page_numbers"):
+        citation = f"{citation}, {source.get('page_numbers')}"
+
+    return citation
+
+
+def _get_embedding_provider():
+    """Get or create singleton embedding provider.
+
+    Returns:
+        OpenAIEmbeddingProvider instance (reused across citations)
+    """
+    global _embedding_provider
+    if _embedding_provider is None:
+        from fileintel.llm_integration.embedding_provider import OpenAIEmbeddingProvider
+        from fileintel.core.config import get_config
+        config = get_config()
+        _embedding_provider = OpenAIEmbeddingProvider(settings=config)
+        logger.debug("Created singleton embedding provider")
+    return _embedding_provider
+
+
+def _get_session_chunk(chunk_uuid: str, api) -> dict:
+    """Fetch chunk with session-level caching.
+
+    Args:
+        chunk_uuid: Chunk UUID to fetch
+        api: API client instance
+
+    Returns:
+        Chunk data dict
+
+    Raises:
+        Various exceptions from API (propagated to caller)
+    """
+    if chunk_uuid not in _session_chunk_cache:
+        response = api._request("GET", f"chunks/{chunk_uuid}")
+        _session_chunk_cache[chunk_uuid] = response.get("data", response)
+        logger.debug(f"Cached chunk {chunk_uuid}")
+    else:
+        logger.debug(f"Cache hit for chunk {chunk_uuid}")
+
+    return _session_chunk_cache[chunk_uuid]
+
+
+def _get_cached_embedding(text: str, embedding_provider) -> List[float]:
+    """Get embedding with session-level caching.
+
+    Args:
+        text: Text to embed
+        embedding_provider: Embedding provider instance
+
+    Returns:
+        Embedding vector (list of floats)
+
+    Raises:
+        ValueError: If embedding generation fails
+    """
+    import hashlib
+
+    # Use hash of text as cache key to handle long texts
+    cache_key = hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    if cache_key not in _session_embedding_cache:
+        embeddings = embedding_provider.get_embeddings([text])
+        if not embeddings:
+            raise ValueError(f"Embedding generation failed for text: {text[:50]}...")
+        _session_embedding_cache[cache_key] = embeddings[0]
+        logger.debug(f"Cached embedding for text (key: {cache_key})")
+    else:
+        logger.debug(f"Cache hit for embedding (key: {cache_key})")
+
+    return _session_embedding_cache[cache_key]
+
+
+def _clear_session_cache():
+    """Clear all session-level caches.
+
+    Called automatically after each query via finally block.
+    """
+    global _session_chunk_cache, _session_embedding_cache
+
+    chunks_cleared = len(_session_chunk_cache)
+    embeddings_cleared = len(_session_embedding_cache)
+
+    _session_chunk_cache.clear()
+    _session_embedding_cache.clear()
+
+    if chunks_cleared > 0 or embeddings_cleared > 0:
+        logger.debug(f"Cleared session cache: {chunks_cleared} chunks, {embeddings_cleared} embeddings")
 
 
 def _display_source_documents(answer_text, collection_identifier, cli_handler):
@@ -529,8 +797,8 @@ def _display_source_documents(answer_text, collection_identifier, cli_handler):
             cli_handler.get_api_client()
         )
 
-        # Convert to Harvard citations
-        converted_answer = _convert_to_harvard_citations(answer_text, sources)
+        # Convert to Harvard citations with vector similarity matching
+        converted_answer = _convert_to_harvard_citations(answer_text, sources, collection_identifier, cli_handler)
 
         # Display sources
         _display_sources(sources, cli_handler)
@@ -538,8 +806,12 @@ def _display_source_documents(answer_text, collection_identifier, cli_handler):
         return converted_answer, sources
 
     except Exception as e:
+        logger.error(f"Source tracing failed: {e}", exc_info=True)
         cli_handler.console.print(f"\n[yellow]Could not trace sources: {e}[/yellow]")
         return answer_text, None
+    finally:
+        # Always cleanup cache, even on error
+        _clear_session_cache()
 
 
 def _display_sources(sources, cli_handler):

@@ -506,9 +506,12 @@ def _get_source_metadata_hybrid(
                 response = requests.get(url, timeout=(30, 300))
                 if response.status_code == 200:
                     doc_info = response.json().get("data", response.json())
-                    doc_metadata = doc_info.get("metadata", {})
-            except Exception:
-                pass
+                    # API returns 'document_metadata' field (from collections_v2.py endpoint)
+                    doc_metadata = doc_info.get("document_metadata", {})
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to fetch document metadata for {document_id}: {e}")
 
         # Format page numbers: single, consecutive, or non-consecutive
         page_str = _format_page_numbers(pages) if pages else None
@@ -517,6 +520,7 @@ def _get_source_metadata_hybrid(
             "document": doc_title,
             "page_numbers": page_str,
             "chunk_count": len(chunk_list),
+            "chunk_uuids": chunk_list,  # Include chunk UUIDs for vector similarity matching
             "metadata": doc_metadata or {},
         })
 

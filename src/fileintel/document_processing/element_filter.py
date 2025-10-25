@@ -161,18 +161,18 @@ def filter_elements_for_rag(
     Args:
         elements: List of TextElements to filter
         skip_semantic_types: Semantic types to exclude from embeddings
-                            Default: ['toc', 'lof', 'lot']
+                            Default: ['toc', 'lof', 'lot', 'bibliography']
         extract_structure_types: Types to parse as structure (not embedded)
                                 Default: ['toc', 'lof', 'lot']
 
     Returns:
         (filtered_elements, extracted_structure) tuple where:
-        - filtered_elements: Elements to embed (TOC/LOF removed)
+        - filtered_elements: Elements to embed (TOC/LOF/bibliography removed)
         - extracted_structure: Dict with parsed structure data
     """
     # Defaults
     if skip_semantic_types is None:
-        skip_semantic_types = ['toc', 'lof', 'lot']
+        skip_semantic_types = ['toc', 'lof', 'lot', 'bibliography']
     if extract_structure_types is None:
         extract_structure_types = ['toc', 'lof', 'lot']
 

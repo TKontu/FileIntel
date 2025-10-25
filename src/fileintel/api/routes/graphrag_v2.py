@@ -9,8 +9,9 @@ from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from ..models import ApiResponseV2
-from ..dependencies import get_storage, get_config
+from ..dependencies import get_storage
 from ..services import get_collection_by_identifier
+from ...core.config import get_config
 from ...rag.graph_rag.services.graphrag_service import GraphRAGService
 from ...tasks.graphrag_tasks import build_graphrag_index_task
 
@@ -36,10 +37,10 @@ async def create_graphrag_index(
     request: GraphRAGIndexRequest,
     background_tasks: BackgroundTasks,
     storage=Depends(get_storage),
-    config=Depends(get_config),
 ):
     """Create or rebuild GraphRAG index for a collection."""
     try:
+        config = get_config()
         # Get collection by identifier (ID or name)
         collection = await get_collection_by_identifier(storage, request.collection_id)
         if not collection:
@@ -111,10 +112,11 @@ async def create_graphrag_index(
 
 @router.get("/{collection_identifier}/status", response_model=ApiResponseV2)
 async def get_graphrag_status(
-    collection_identifier: str, storage=Depends(get_storage), config=Depends(get_config)
+    collection_identifier: str, storage=Depends(get_storage)
 ):
     """Get GraphRAG index status for a collection."""
     try:
+        config = get_config()
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:
@@ -150,7 +152,6 @@ async def get_graphrag_entities(
         20, description="Maximum number of entities to return"
     ),
     storage=Depends(get_storage),
-    config=Depends(get_config),
 ):
     """
     Get GraphRAG entities for a collection.
@@ -164,6 +165,7 @@ async def get_graphrag_entities(
     The storage layer uses 'entity_name' field when persisting to database.
     """
     try:
+        config = get_config()
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:
@@ -248,7 +250,6 @@ async def get_graphrag_communities(
         10, description="Maximum number of communities to return"
     ),
     storage=Depends(get_storage),
-    config=Depends(get_config),
 ):
     """
     Get GraphRAG communities for a collection.
@@ -257,6 +258,7 @@ async def get_graphrag_communities(
     Communities are read directly from GraphRAG parquet files for performance.
     """
     try:
+        config = get_config()
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:
@@ -349,10 +351,11 @@ async def get_graphrag_communities(
 
 @router.delete("/{collection_identifier}/index", response_model=ApiResponseV2)
 async def remove_graphrag_index(
-    collection_identifier: str, storage=Depends(get_storage), config=Depends(get_config)
+    collection_identifier: str, storage=Depends(get_storage)
 ):
     """Remove GraphRAG index for a collection."""
     try:
+        config = get_config()
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:

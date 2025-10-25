@@ -129,32 +129,51 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             text: Text to truncate
             chunk_context: Optional context for logging (document_id, chunk_id, etc.)
         """
-        tokens = self.tokenizer.encode(text)
-        if len(tokens) <= self.max_tokens:
-            return text
-
-        # This is a critical error - chunking should prevent this
         logger = logging.getLogger(__name__)
 
-        # Show more text for debugging (500 chars instead of 200)
+        # CRITICAL: Use BERT tokenizer if available, as that's what vLLM uses
+        # Using OpenAI tokenizer causes token count mismatches
+        if self.bert_tokenizer:
+            # BERT tokenizer (matches vLLM server)
+            encoding = self.bert_tokenizer(text, return_tensors=None, add_special_tokens=True, truncation=False)
+            tokens = encoding['input_ids']
+            token_count = len(tokens)
+
+            if token_count <= self.max_tokens:
+                return text
+
+            # Truncate using BERT tokenizer
+            logger.debug(f"Truncating with BERT tokenizer: {token_count} → {self.max_tokens} tokens")
+            truncated_encoding = self.bert_tokenizer(
+                text,
+                max_length=self.max_tokens,
+                truncation=True,
+                return_tensors=None,
+                add_special_tokens=True
+            )
+            truncated_text = self.bert_tokenizer.decode(truncated_encoding['input_ids'], skip_special_tokens=True)
+        else:
+            # Fallback to OpenAI tokenizer
+            tokens = self.tokenizer.encode(text)
+            token_count = len(tokens)
+
+            if token_count <= self.max_tokens:
+                return text
+
+            # Truncate using OpenAI tokenizer
+            logger.debug(f"Truncating with OpenAI tokenizer: {token_count} → {self.max_tokens} tokens")
+            truncated_tokens = tokens[: self.max_tokens]
+            truncated_text = self.tokenizer.decode(truncated_tokens)
+
+        # Log truncation
         text_preview = text[:500] + "..." if len(text) > 500 else text
         context_str = f" | {chunk_context}" if chunk_context else ""
 
-        logger.error(
-            f"EMERGENCY TRUNCATION{context_str} | "
-            f"Token count: {len(tokens)}/{self.max_tokens} (exceeds by {len(tokens) - self.max_tokens}) | "
+        logger.debug(
+            f"Auto-truncating text{context_str} | "
+            f"Token count: {token_count}/{self.max_tokens} (exceeds by {token_count - self.max_tokens}) | "
             f"Text length: {len(text)} chars | "
-            f"This indicates a bug in the text chunking system | "
-            f"Full text:\n{text_preview}"
-        )
-
-        # Truncate tokens and decode back to text
-        truncated_tokens = tokens[: self.max_tokens]
-        truncated_text = self.tokenizer.decode(truncated_tokens)
-
-        logger.error(
-            f"Truncated from {len(tokens)} to {len(truncated_tokens)} tokens{context_str}. "
-            f"FIX THE CHUNKING SYSTEM TO PREVENT THIS!"
+            f"Preview:\n{text_preview}"
         )
 
         return truncated_text
@@ -185,9 +204,9 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             i for i, count in enumerate(token_counts) if count > self.max_tokens
         ]
         if oversized:
-            logger.error(
-                f"CRITICAL: {len(oversized)} texts exceed {self.max_tokens} token limit! "
-                f"Indices: {oversized[:5]}... This will cause vLLM failures!"
+            logger.warning(
+                f"WARNING: {len(oversized)} texts exceed {self.max_tokens} token limit (will auto-truncate). "
+                f"Indices: {oversized[:5]}..."
             )
             for idx in oversized[:3]:  # Log first few oversized texts
                 text = texts[idx]
@@ -195,7 +214,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                 text_preview = text[:500] + "..." if len(text) > 500 else text
                 if self.bert_tokenizer:
                     openai_count, bert_count, analysis = self._count_tokens_dual(text)
-                    logger.error(
+                    logger.debug(
                         f"Oversized text | "
                         f"index={idx} | "
                         f"analysis={analysis} | "
@@ -205,7 +224,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                         f"text:\n{text_preview}"
                     )
                 else:
-                    logger.error(
+                    logger.debug(
                         f"Oversized text | "
                         f"index={idx} | "
                         f"tokens={token_counts[idx]}/{self.max_tokens} | "

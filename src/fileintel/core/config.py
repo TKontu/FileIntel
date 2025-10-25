@@ -30,10 +30,10 @@ class LLMSettings(BaseModel):
     api_key: Optional[str] = Field(default="ollama")  # Default for Ollama
     # Task timeout limits (prevents worker exhaustion on long-running tasks)
     task_timeout_seconds: int = Field(
-        default=300, ge=60, le=3600, description="Soft timeout for LLM tasks (seconds)"
+        default=300, ge=60, description="Soft timeout for LLM tasks (seconds)"
     )
     task_hard_limit_seconds: int = Field(
-        default=360, ge=60, le=3600, description="Hard kill timeout for LLM tasks (seconds)"
+        default=360, ge=60, description="Hard kill timeout for LLM tasks (seconds)"
     )
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
@@ -52,7 +52,7 @@ class AsyncProcessingSettings(BaseModel):
         default=25, ge=1, le=32, description="Total concurrent HTTP connections"
     )
     batch_timeout: int = Field(
-        default=30, ge=10, le=120, description="Timeout per batch in seconds"
+        default=30, ge=10, description="Timeout per batch in seconds"
     )
     fallback_to_sequential: bool = Field(
         default=True, description="Fallback to sequential on batch failure"
@@ -93,6 +93,7 @@ class RAGSettings(BaseModel):
     embedding_model: str = Field(default="bge-large-en")
     embedding_max_tokens: int = Field(default=450, description="Maximum tokens for individual embedding requests")
     enable_two_tier_chunking: bool = Field(default=False, description="Enable two-tier vector/graph chunking system")
+    exclude_bibliography_sections: bool = Field(default=True, description="Exclude bibliography/reference sections from embeddings")
 
     # Unified chunking configuration
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
@@ -135,7 +136,7 @@ class MinerUSettings(BaseModel):
 
     # Common settings for both API types
     base_url: str = Field(default="http://192.168.0.136:8000")
-    timeout: int = Field(default=600)
+    timeout: Optional[int] = Field(default=600, description="Timeout in seconds (None to disable)")
     enable_formula: bool = Field(default=False)
     enable_table: bool = Field(default=True)
     language: str = Field(default="en")
@@ -246,6 +247,13 @@ class APISettings(BaseModel):
     authentication: AuthenticationSettings = Field(
         default_factory=AuthenticationSettings
     )
+    # HTTP client timeout configuration for CLI
+    request_timeout_connect: int = Field(
+        default=30, description="HTTP connection timeout in seconds"
+    )
+    request_timeout_read: Optional[int] = Field(
+        default=14400, description="HTTP read timeout in seconds (None to disable)"
+    )
 
 
 class StorageSettings(BaseModel):
@@ -294,6 +302,21 @@ class CelerySettings(BaseModel):
             "fileintel.tasks.graphrag.*": {"queue": "graphrag_indexing"},
         }
     )
+    # Task timeout limits (configurable from YAML)
+    task_soft_time_limit: Optional[int] = Field(
+        default=14400, description="Soft time limit for tasks in seconds (None to disable)"
+    )
+    task_time_limit: Optional[int] = Field(
+        default=18000, description="Hard time limit for tasks in seconds (None to disable)"
+    )
+
+
+class CLISettings(BaseModel):
+    """CLI timeout configuration."""
+
+    task_wait_timeout: Optional[int] = Field(
+        default=14400, description="CLI task wait timeout in seconds (None to disable)"
+    )
 
 
 class BatchProcessingSettings(BaseModel):
@@ -327,6 +350,7 @@ class Settings(BaseModel):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     # retry field removed - Celery handles retry configuration
     celery: CelerySettings = Field(default_factory=CelerySettings)
+    cli: CLISettings = Field(default_factory=CLISettings)
     batch_processing: BatchProcessingSettings = Field(default_factory=BatchProcessingSettings)
 
     @model_validator(mode="after")

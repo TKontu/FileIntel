@@ -9,8 +9,9 @@ from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from ..models import ApiResponseV2
-from ..dependencies import get_storage, get_config
+from ..dependencies import get_storage
 from ..services import get_collection_by_identifier
+from ...core.config import get_config
 from ...tasks.llm_tasks import extract_document_metadata
 
 logger = logging.getLogger(__name__)
@@ -35,10 +36,10 @@ async def extract_document_metadata_endpoint(
     request: MetadataExtractionRequest,
     background_tasks: BackgroundTasks,
     storage=Depends(get_storage),
-    config=Depends(get_config),
 ):
     """Extract metadata from a document using LLM analysis."""
     try:
+        config = get_config()
         # Get document by ID
         document = storage.get_document(request.document_id)
         if not document:
@@ -161,10 +162,10 @@ async def extract_collection_metadata(
     collection_identifier: str,
     force_reextract: bool = Query(False, description="Force re-extraction for all documents"),
     storage=Depends(get_storage),
-    config=Depends(get_config),
 ):
     """Extract metadata for all documents in a collection."""
     try:
+        config = get_config()
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:
@@ -213,7 +214,6 @@ async def extract_collection_metadata(
             file_metadata = document.document_metadata if document.document_metadata else None
 
             # Start background task with timeout
-            config = get_config()
             task_result = extract_document_metadata.apply_async(
                 args=[document.id, text_chunks, file_metadata],
                 soft_time_limit=config.llm.task_timeout_seconds,

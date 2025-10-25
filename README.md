@@ -1,108 +1,509 @@
 # FileIntel
 
-FileIntel is a powerful document analysis system that uses a Retrieval-Augmented Generation (RAG) architecture to provide intelligent answers from your documents. It allows you to create collections of documents, upload various document formats, and then query the entire collection to get synthesized answers based on the content of the documents.
+**A production-ready hybrid RAG system combining vector search and knowledge graphs for intelligent document analysis.**
+
+FileIntel is a powerful document intelligence platform that leverages both vector embeddings (semantic search) and Microsoft's GraphRAG (relationship discovery) to provide deep insights from your document collections. Built with a distributed, scalable architecture, it's designed for serious document analysis workloads.
 
 ## Features
 
-*   **RAG-based Document Analysis:** Utilizes a RAG architecture to provide accurate and context-aware answers from your documents.
-*   **Collection-based Knowledge Management:** Organize your documents into collections to create distinct knowledge bases.
-*   **Support for Multiple Document Formats:** Supports various document formats, including PDF, EPUB, and MOBI.
-*   **Distributed Task Processing:** Uses Celery for distributed task processing to handle document indexing, analysis, and GraphRAG operations asynchronously.
-*   **RESTful API:** Provides a simple and easy-to-use RESTful API for interacting with the system.
-*   **CLI:** Includes a command-line interface for easy interaction with the API.
+### Core Capabilities
 
-## Architecture
+- **Hybrid RAG System**: Combines vector-based semantic search with graph-based relationship discovery
+- **Intelligent Query Routing**: Automatically selects the best RAG strategy (vector, graph, or hybrid) based on query type
+- **Multi-Format Support**: PDF, EPUB, MOBI with advanced extraction using MinerU (OCR + layout detection)
+- **Type-Aware Chunking**: Semantic chunking that respects document structure (paragraphs, sections, tables)
+- **Citation Generation**: Automatic citation formatting with source tracking and page numbers
+- **Metadata Extraction**: Comprehensive bibliographic metadata extraction from documents
 
-FileIntel is built on a distributed task processing architecture, orchestrated with Docker Compose. The main components are:
+### Architecture Highlights
 
-*   **API Service:** A FastAPI application providing both v1 (legacy) and v2 (task-based) endpoints for all user interactions.
-*   **Celery Workers:** Distributed task processors that handle document processing, RAG operations, and GraphRAG indexing asynchronously.
-*   **PostgreSQL Database:** The primary data store, using the `pgvector` extension to store and query vector embeddings.
-*   **Redis:** Functions as the Celery message broker and result backend for distributed task coordination.
+- **Distributed Task Processing**: Celery-based async processing with Redis message broker
+- **Scalable Storage**: PostgreSQL with pgvector extension for efficient vector operations
+- **Flexible LLM Integration**: Supports OpenAI API, Anthropic Claude, and local models (via vLLM/Ollama)
+- **Production-Ready**: Docker Compose orchestration, health checks, task monitoring, and Flower dashboard
+- **RESTful API**: FastAPI-based v2 API with task-based operations
+- **Rich CLI**: Full-featured command-line interface for all operations
 
-For a more detailed overview of the architecture, please refer to the `architecture.md` file.
+## Quick Start
 
-## Getting Started
+### Prerequisites
 
-To get started with FileIntel, you will need to have Docker and Docker Compose installed on your system.
+- Docker & Docker Compose
+- 8GB+ RAM (16GB+ recommended for GraphRAG)
+- GPU recommended for local LLM inference (optional)
 
-1.  **Clone the repository:**
+### Installation
 
-    ```bash
-    git clone https://github.com/your-username/FileIntel.git
-    cd FileIntel
-    ```
+1. **Clone the repository:**
+```bash
+git clone https://github.com/yourusername/fileintel.git
+cd fileintel
+```
 
-2.  **Create a `.env` file:**
+2. **Create environment file:**
+```bash
+cat > .env << EOF
+# Database credentials
+POSTGRES_USER=user
+POSTGRES_PASSWORD=password
+POSTGRES_DB=fileintel
 
-    Create a `.env` file in the root of the project and add the following environment variables:
+# LLM API keys (choose your provider)
+OPENAI_API_KEY=your_key_here
+# ANTHROPIC_API_KEY=your_key_here
 
-    ```
-    POSTGRES_USER=user
-    POSTGRES_PASSWORD=password
-    POSTGRES_DB=fileintel
-    ```
+# Optional: Redis and paths
+REDIS_HOST=redis
+REDIS_PORT=6379
+EOF
+```
 
-3.  **Update the `docker-compose.yml` file:**
+3. **Start the services:**
+```bash
+# Basic setup (vector RAG only)
+docker-compose up -d
 
-    Update the `docker-compose.yml` file to use the environment variables from the `.env` file:
+# Or with MinerU OCR (recommended for PDFs)
+docker-compose --profile pipeline up -d
 
-    ```yaml
-    services:
-      postgres:
-        image: "pgvector/pgvector:pg13"
-        environment:
-          POSTGRES_USER: ${POSTGRES_USER}
-          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-          POSTGRES_DB: ${POSTGRES_DB}
-        # ...
-      api:
-        # ...
-        environment:
-          # ...
-          - DB_USER=${POSTGRES_USER}
-          - DB_PASSWORD=${POSTGRES_PASSWORD}
-          - DB_HOST=postgres
-          - DB_PORT=5432
-          - DB_NAME=${POSTGRES_DB}
-        # ...
-      celery:
-        # ...
-        environment:
-          # ...
-          - DB_USER=${POSTGRES_USER}
-          - DB_PASSWORD=${POSTGRES_PASSWORD}
-          - DB_HOST=postgres
-          - DB_PORT=5432
-          - DB_NAME=${POSTGRES_DB}
-          - CELERY_BROKER_URL=redis://redis:6379/0
-          - CELERY_RESULT_BACKEND=redis://redis:6379/0
-        # ...
-    ```
+# For advanced layout detection (slower, better quality)
+docker-compose --profile vlm up -d
+```
 
-4.  **Build and run the application:**
+4. **Install CLI (optional but recommended):**
+```bash
+pip install -e .
+```
 
-    ```bash
-    docker-compose up --build -d
-    ```
-
-    This will build the Docker images and start all the services in the background.
+5. **Verify installation:**
+```bash
+fileintel health
+```
 
 ## Usage
 
-Once the application is running, you can use the API to create collections, upload documents, and run queries. For detailed instructions on how to use the API, please refer to the `API_USAGE.md` file.
+### Basic Workflow
+
+```bash
+# 1. Create a collection
+fileintel collections create "research-papers" \
+    --description "AI/ML research papers"
+
+# 2. Upload documents
+fileintel documents upload research-papers \
+    --files paper1.pdf paper2.pdf paper3.pdf
+
+# 3. Wait for indexing (or check status)
+fileintel collections status research-papers
+
+# 4. Query the collection
+fileintel query ask research-papers \
+    "What are the main approaches to transformer optimization?"
+
+# 5. Enable GraphRAG for relationship queries
+fileintel graphrag index research-papers
+
+# 6. Query with graph knowledge
+fileintel graphrag query research-papers \
+    "How are attention mechanisms and parameter efficiency related?"
+```
+
+### API Example
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# Create collection
+response = requests.post(
+    f"{BASE_URL}/api/v2/collections",
+    json={
+        "name": "my-docs",
+        "description": "Document collection"
+    }
+)
+collection_id = response.json()["data"]["id"]
+
+# Upload document
+with open("document.pdf", "rb") as f:
+    files = {"file": f}
+    response = requests.post(
+        f"{BASE_URL}/api/v2/documents",
+        files=files,
+        data={"collection_id": collection_id}
+    )
+
+# Query collection
+response = requests.post(
+    f"{BASE_URL}/api/v2/query",
+    json={
+        "collection_id": collection_id,
+        "query": "What are the main findings?",
+        "top_k": 5
+    }
+)
+answer = response.json()["data"]["answer"]
+citations = response.json()["data"]["citations"]
+```
 
 ## Configuration
 
-The application can be configured using the `config/default.yaml` file. This file contains various options for configuring the LLM, document processing, OCR, output, API, storage, and batch processing.
+FileIntel is configured via `config/default.yaml`. Key sections:
 
-## Security Considerations
+### LLM Configuration
+```yaml
+llm:
+  provider: "openai"  # or "anthropic"
+  model: "gpt-4-turbo"
+  temperature: 0.1
+  openai:
+    base_url: "http://localhost:9003/v1"  # For local models
+    api_key: ${OPENAI_API_KEY}
+```
 
-When deploying FileIntel to a production environment, it is important to consider the following security risks:
+### RAG Configuration
+```yaml
+rag:
+  strategy: "separate"  # "merge" or "separate"
+  embedding_model: "text-embedding-3-large"
+  chunking:
+    chunk_size: 800
+    chunk_overlap: 80
+    target_sentences: 3
+  enable_two_tier_chunking: false
+```
 
-*   **Hardcoded Credentials:** The `docker-compose.yml` file contains hardcoded database credentials. It is recommended to use a `.env` file to externalize these credentials, as described in the "Getting Started" section.
-*   **OpenAI API Key:** The `config/default.yaml` file contains a placeholder for the OpenAI API key. It is recommended to use an environment variable to store the API key and update the configuration to load the key from the environment.
-*   **CORS Policy:** The `config/default.yaml` file has a permissive CORS policy (`cors_origins: ["*"]`). It is recommended to restrict the CORS policy to only allow trusted domains.
-*   **Authentication and Authorization:** The API is currently open to the public. It is recommended to implement an authentication and authorization mechanism to secure the API endpoints.
+### GraphRAG Configuration
+```yaml
+graphrag:
+  llm_model: "gpt-4-turbo"
+  embedding_model: "text-embedding-3-large"
+  community_levels: 3
+  auto_index_after_upload: true
+  query_classification_model: "gpt-4-turbo"
+```
 
-By addressing these security risks, you can help to ensure that your FileIntel deployment is secure and protected from unauthorized access.
+### Document Processing
+```yaml
+document_processing:
+  primary_pdf_processor: "mineru"  # or "traditional"
+  use_type_aware_chunking: true
+  mineru:
+    api_type: "selfhosted"
+    base_url: "http://localhost:8000"
+    model_version: "pipeline"  # or "vlm"
+    enable_element_filtering: true
+```
+
+## Architecture
+
+```
+┌─────────────────┐
+│   CLI / API     │  FastAPI + Typer CLI
+└────────┬────────┘
+         │
+    ┌────┴─────┐
+    │  Redis   │  Message Broker
+    └────┬─────┘
+         │
+┌────────┴─────────────┐
+│   Celery Workers     │  Distributed Task Processing
+│  - Document Proc     │
+│  - Vector Indexing   │
+│  - GraphRAG Build    │
+└──────────┬───────────┘
+           │
+    ┌──────┴────────┐
+    │  PostgreSQL   │  Storage + pgvector
+    │  + pgvector   │
+    └───────────────┘
+```
+
+### Key Components
+
+- **API Service**: FastAPI application with v2 task-based endpoints
+- **Celery Workers**: Handle async document processing, indexing, and queries
+- **PostgreSQL + pgvector**: Primary storage with vector similarity search
+- **Redis**: Message broker and result backend
+- **MinerU**: Advanced PDF extraction with OCR and layout detection
+- **Flower** (optional): Web UI for monitoring Celery tasks
+
+## Advanced Features
+
+### GraphRAG Integration
+
+FileIntel integrates Microsoft's GraphRAG for relationship-based queries:
+
+```bash
+# Index collection for graph operations
+fileintel graphrag index my-collection
+
+# Query with graph mode
+fileintel graphrag query my-collection \
+    "How are the entities X and Y related?" \
+    --mode global
+
+# Check index status
+fileintel graphrag status my-collection
+```
+
+### Metadata Extraction
+
+Extract and manage bibliographic metadata:
+
+```bash
+# Extract metadata from document
+fileintel metadata extract document-id
+
+# Export bibliography
+fileintel metadata export collection-id \
+    --format bibtex \
+    --output references.bib
+```
+
+### Citation Management
+
+FileIntel automatically generates citations with source tracking:
+
+```bash
+# Query with citations
+fileintel query ask my-collection \
+    "Summarize the findings" \
+    --with-citations \
+    --citation-style harvard
+```
+
+### Batch Processing
+
+Process multiple documents efficiently:
+
+```bash
+# Batch upload from directory
+fileintel documents batch-upload my-collection \
+    --directory ./papers/ \
+    --pattern "*.pdf"
+
+# Monitor batch progress
+fileintel tasks list --filter processing
+```
+
+## CLI Reference
+
+### Collections
+- `collections create` - Create new collection
+- `collections list` - List all collections
+- `collections status` - Check collection status
+- `collections delete` - Delete collection
+
+### Documents
+- `documents upload` - Upload document(s)
+- `documents list` - List documents in collection
+- `documents delete` - Remove document
+
+### Query
+- `query ask` - Query collection with vector RAG
+- `query batch` - Batch query multiple questions
+
+### GraphRAG
+- `graphrag index` - Build GraphRAG index
+- `graphrag query` - Query with graph knowledge
+- `graphrag status` - Check index status
+
+### Tasks
+- `tasks list` - List running tasks
+- `tasks status` - Check task status
+- `tasks cancel` - Cancel running task
+
+### System
+- `health` - Check system health
+- `status` - Overall system status
+- `version` - Show version info
+
+## API Reference
+
+### REST API v2 Endpoints
+
+**Base URL**: `http://localhost:8000/api/v2`
+
+#### Collections
+- `POST /collections` - Create collection
+- `GET /collections` - List collections
+- `GET /collections/{id}` - Get collection details
+- `DELETE /collections/{id}` - Delete collection
+
+#### Documents
+- `POST /documents` - Upload document
+- `GET /documents` - List documents
+- `DELETE /documents/{id}` - Delete document
+
+#### Query
+- `POST /query` - Query collection
+- `POST /query/batch` - Batch query
+
+#### GraphRAG
+- `POST /graphrag/index` - Build GraphRAG index
+- `POST /graphrag/query` - Query with GraphRAG
+- `GET /graphrag/status/{collection_id}` - Index status
+
+#### Tasks
+- `GET /tasks/{task_id}` - Get task status
+- `GET /tasks/metrics` - System metrics
+
+Full API documentation available at `http://localhost:8000/docs` when running.
+
+## Monitoring
+
+### Flower Dashboard
+
+Monitor Celery workers and tasks:
+
+```bash
+# Access Flower at http://localhost:5555
+# (Enabled by default in docker-compose)
+```
+
+### Task Metrics
+
+```bash
+# CLI metrics
+fileintel tasks list
+fileintel health
+
+# API metrics
+curl http://localhost:8000/api/v2/tasks/metrics
+```
+
+## Performance Tuning
+
+### For Large Collections (10,000+ documents)
+
+```yaml
+# config/default.yaml
+storage:
+  pool_size: 50
+  max_overflow: 50
+
+celery:
+  worker_max_tasks_per_child: 100
+
+rag:
+  async_processing:
+    enabled: true
+    batch_size: 10
+    max_concurrent_requests: 25
+```
+
+### For GPU Acceleration
+
+```yaml
+# Use local vLLM for embedding/inference
+llm:
+  openai:
+    base_url: "http://gpu-server:9003/v1"
+
+rag:
+  embedding_provider: "openai"
+  embedding_model: "bge-large-en"
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Task timeout errors:**
+```yaml
+# Increase timeouts in config/default.yaml
+celery:
+  task_soft_time_limit: 7200  # 2 hours
+  task_time_limit: 7200
+```
+
+**Out of memory during GraphRAG indexing:**
+```yaml
+# Reduce batch size
+graphrag:
+  async_processing:
+    batch_size: 4
+    max_concurrent_requests: 10
+```
+
+**Slow PDF processing:**
+```yaml
+# Switch to faster MinerU backend
+document_processing:
+  mineru:
+    model_version: "pipeline"  # faster than "vlm"
+```
+
+### Logs
+
+```bash
+# View logs
+docker-compose logs -f api
+docker-compose logs -f celery
+
+# Or check files
+tail -f logs/fileintel.log
+```
+
+## Development
+
+### Local Setup
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate
+
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/
+
+# Format code
+black src/
+isort src/
+```
+
+### Database Migrations
+
+```bash
+# Create migration
+alembic revision --autogenerate -m "description"
+
+# Apply migrations
+alembic upgrade head
+
+# Rollback
+alembic downgrade -1
+```
+
+## Contributing
+
+Contributions welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Write tests for new features
+4. Ensure all tests pass
+5. Submit a pull request
+
+## License
+
+[Your License Here]
+
+## Acknowledgments
+
+- [Microsoft GraphRAG](https://github.com/microsoft/graphrag) - Graph-based RAG implementation
+- [MinerU](https://github.com/opendatalab/MinerU) - Advanced PDF extraction
+- [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search for PostgreSQL
+
+## Support
+
+- Issues: https://github.com/yourusername/fileintel/issues
+- Discussions: https://github.com/yourusername/fileintel/discussions
+
+---
+
+Built with Python, FastAPI, Celery, PostgreSQL, and Redis.

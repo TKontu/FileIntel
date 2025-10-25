@@ -33,6 +33,10 @@ app.conf.update(
     # Disable any database-related features
     task_ignore_result=False,  # Allow result monitoring
     task_store_eager_result=False,  # Don't store results immediately
+
+    # Worker control and monitoring settings (required for Flower inspection)
+    worker_send_task_events=True,  # Send task events to broker
+    worker_enable_remote_control=True,  # Allow remote worker control/inspection
 )
 
 # Do NOT auto-discover tasks to avoid importing modules that connect to database

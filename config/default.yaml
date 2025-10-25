@@ -5,8 +5,8 @@ llm:
   temperature: 0.1
   rate_limit: 999
   # Task timeout limits (prevents worker exhaustion)
-  task_timeout_seconds: 300  # 5 minute soft timeout for LLM tasks
-  task_hard_limit_seconds: 360  # 6 minute hard kill timeout
+  task_timeout_seconds: 7200  # 2 hours soft timeout for LLM tasks (was 300)
+  task_hard_limit_seconds: 7200  # 2 hours hard kill timeout (was 360)
   circuit_breaker:
     failure_threshold: 5
     failure_window: 60
@@ -31,6 +31,13 @@ rag:
     chunk_overlap: 80
     target_sentences: 3  # Target sentences per Vector RAG chunk (conservative)
     overlap_sentences: 1  # Sentences to overlap between Vector RAG chunks (forward overlap)
+  # Async processing for GraphRAG (consolidated under rag section)
+  async_processing:
+    enabled: true
+    batch_size: 4
+    max_concurrent_requests: 25
+    batch_timeout: 300  # 5 minutes timeout per batch (was 30)
+    fallback_to_sequential: true
 
 graphrag:
   # Microsoft GraphRAG settings - uses same chunks as Vector RAG
@@ -73,8 +80,8 @@ graphrag:
   async_processing:
     enabled: true                    # ON/OFF switch (set to false to disable)
     batch_size: 4                   # Concurrent requests per batch
-    max_concurrent_requests: 25     # Must match vLLM VLLM_MAX_NUM_SEQS (currently 16)
-    batch_timeout: 30               # Timeout per batch (seconds)
+    max_concurrent_requests: 40     # Must match vLLM VLLM_MAX_NUM_SEQS (currently 16)
+    batch_timeout: 300              # 5 minutes timeout per batch (was 30)
     fallback_to_sequential: true    # Fallback if batching fails
   # Embedding configuration
   embedding_batch_max_tokens: 450   # Max tokens per embedding request (optimal for 512 token model limit)
@@ -101,7 +108,7 @@ document_processing:
 
     # Common settings for both API types
     base_url: "http://192.168.0.136:8000"
-    timeout: 600
+    timeout: null  # Disabled - no timeout for MinerU processing
     enable_formula: false
     enable_table: true
     language: "en"
@@ -124,13 +131,15 @@ document_processing:
     # When true: preserves MinerU element boundaries (one TextElement per content_list item)
     # When false: concatenates all elements per page (current behavior, backward compatible)
     # Default: false (safe, preserves existing behavior)
-    use_element_level_types: false
+    # UPDATED: Enabled to support element filtering and semantic type detection
+    use_element_level_types: true
 
     # Element filtering (EXPERIMENTAL - Phase 2, requires use_element_level_types=true)
     # When true: filters out TOC/LOF elements before chunking (prevents oversized chunks)
     # When false: all elements pass through to chunking (backward compatible)
     # Default: false (safe, preserves existing behavior)
-    enable_element_filtering: false
+    # UPDATED: Enabled after improving detection to handle MinerU inline formats
+    enable_element_filtering: true
 
     # Commercial API specific settings (used when api_type="commercial")
     api_token: ${MINERU_API_TOKEN:-}
@@ -169,8 +178,10 @@ api:
   rate_limit: 9999
   authentication:
     enabled: false
-
     api_key: ${API_KEY:-}
+  # HTTP client timeout configuration for CLI
+  request_timeout_connect: 30      # Connection timeout in seconds
+  request_timeout_read: null       # Read timeout in seconds (null = no timeout)
 
 storage:
   type: "postgres"
@@ -178,9 +189,23 @@ storage:
   cache_ttl: 3600
   redis_host: "localhost"
   # Connection pool settings (prevents exhaustion)
-  pool_size: 20  # Base pool size
-  max_overflow: 30  # Additional connections allowed
-  pool_timeout: 30  # Seconds to wait for connection
+  pool_size: 50  # Increased from 20 to handle worker restarts
+  max_overflow: 50  # Increased from 30 to handle bursts
+  pool_timeout: 300  # Increased from 30 to allow more wait time
+
+celery:
+  # Task timeout limits - configurable for large batch processing
+  task_soft_time_limit: null  # Soft limit in seconds (null = no limit)
+  task_time_limit: null       # Hard limit in seconds (null = no limit)
+
+  # Worker pool restart settings (prevents fork bomb)
+  worker_pool_restarts: true  # Allow pool restarts
+  worker_pool_restart_timeout: 120  # Timeout for worker to send UP message (seconds)
+  worker_max_tasks_per_child: 100  # Restart workers more frequently (was 1000)
+
+cli:
+  # CLI task wait timeout
+  task_wait_timeout: null  # Wait timeout in seconds (null = no limit)
 
 batch_processing:
   directory_input: ${INPUT_DIR:-/home/appuser/app/input}

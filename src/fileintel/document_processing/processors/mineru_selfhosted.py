@@ -57,10 +57,10 @@ class MinerUSelfHostedProcessor:
                 f"MinerU base_url must be a valid HTTP/HTTPS URL, got: {mineru_config.base_url}"
             )
 
-        # Validate timeout
-        if mineru_config.timeout <= 0:
+        # Validate timeout (None is allowed for no timeout)
+        if mineru_config.timeout is not None and mineru_config.timeout <= 0:
             raise DocumentProcessingError(
-                f"MinerU timeout must be positive, got: {mineru_config.timeout}"
+                f"MinerU timeout must be positive or null, got: {mineru_config.timeout}"
             )
 
         # Validate language (warn for unknown languages but don't fail)
@@ -146,6 +146,14 @@ class MinerUSelfHostedProcessor:
                 metadata['document_structure'] = extracted_structure
 
             log.info(f"Self-hosted MinerU processing successful: {len(elements)} elements created")
+
+            # Explicitly release large objects to prevent memory accumulation
+            del mineru_results
+            del json_data
+            del markdown_content
+            import gc
+            gc.collect()
+
             return elements, metadata
 
         except (requests.RequestException, DocumentProcessingError) as e:
@@ -166,7 +174,7 @@ class MinerUSelfHostedProcessor:
         # Adjust timeout for VLM backend (first request loads models)
         backend = getattr(mineru_config, 'model_version', 'pipeline')
         timeout = mineru_config.timeout
-        if backend == 'vlm' and timeout < 180:
+        if backend == 'vlm' and timeout is not None and timeout < 180:
             # VLM first request needs at least 3 minutes for model loading
             log.info(f"Extending timeout from {timeout}s to 180s for VLM backend first request")
             timeout = 180

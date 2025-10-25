@@ -83,7 +83,7 @@ services:
   celery-worker:
     build: .
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--concurrency=4", "--pool=prefork", "--max-tasks-per-child=1000"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--concurrency=6", "--pool=prefork", "--max-tasks-per-child=1000"]
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config

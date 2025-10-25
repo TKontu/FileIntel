@@ -174,9 +174,9 @@ def configure_celery_app(config=None):
         task_inherit_parent_priority=True,
         task_default_priority=5,  # Medium priority
         # Memory and cleanup settings
-        worker_max_memory_per_child=500000,  # 500MB per child process (increased for heavy processing)
-        task_soft_time_limit=1800,  # 30 minutes soft limit
-        task_time_limit=3600,  # 1 hour hard limit
+        worker_max_memory_per_child=1000000,  # 1GB per child process (increased to handle MinerU responses)
+        task_soft_time_limit=celery_settings.task_soft_time_limit,  # Configurable from YAML
+        task_time_limit=celery_settings.task_time_limit,  # Configurable from YAML
         # Result backend optimizations
         result_backend_max_retries=3,
         result_backend_retry_on_timeout=True,
@@ -527,8 +527,29 @@ def cleanup_stale_tasks(sender=None, **kwargs):
     tasks can be left in STARTED state in the database. This handler:
     1. Finds tasks in STARTED state from workers that are no longer alive
     2. Revokes those tasks so they can be retried or cleaned up
+
+    NOTE: This handler has been optimized to run quickly and avoid blocking worker startup.
     """
-    logger.info("Worker ready - checking for stale tasks in database...")
+    import os
+    import threading
+
+    logger.info(f"Worker ready signal received (PID: {os.getpid()}, Thread: {threading.current_thread().name})")
+
+    # Run cleanup in background thread to avoid blocking worker startup
+    def background_cleanup():
+        try:
+            _do_stale_task_cleanup()
+        except Exception as e:
+            logger.error(f"Background stale task cleanup failed: {e}")
+
+    cleanup_thread = threading.Thread(target=background_cleanup, daemon=True)
+    cleanup_thread.start()
+    logger.info("Stale task cleanup started in background thread")
+
+
+def _do_stale_task_cleanup():
+    """Actual cleanup logic - runs in background thread."""
+    logger.info("Background stale task cleanup starting...")
 
     try:
         from fileintel.storage.models import CeleryTaskRegistry
@@ -569,7 +590,10 @@ def cleanup_stale_tasks(sender=None, **kwargs):
                 logger.info("No tasks in STARTED/RETRY state found")
                 return
 
+            # Batch collect stale tasks to revoke (more efficient than one-by-one)
             stale_count = 0
+            tasks_to_revoke = []
+
             for task_entry in stale_tasks:
                 # Skip if task is currently active on any worker (prevents race condition)
                 if task_entry.task_id in active_task_ids:
@@ -578,32 +602,39 @@ def cleanup_stale_tasks(sender=None, **kwargs):
 
                 # Check if worker is still alive
                 if task_entry.worker_id not in active_worker_ids:
-                    logger.warning(
-                        f"Found stale task {task_entry.task_id} from dead worker "
-                        f"{task_entry.worker_id} - revoking"
-                    )
+                    tasks_to_revoke.append(task_entry)
 
-                    # Revoke the task
-                    try:
+            # Batch revoke and update database
+            if tasks_to_revoke:
+                logger.warning(
+                    f"Found {len(tasks_to_revoke)} stale tasks from dead workers - batch revoking"
+                )
+
+                try:
+                    # Batch revoke all stale tasks at once
+                    for task_entry in tasks_to_revoke:
                         app.control.revoke(task_entry.task_id, terminate=False)
 
-                        # Mark as revoked in database
+                        # Update in-memory (batch commit later)
                         task_entry.status = 'REVOKED'
                         task_entry.completed_at = datetime.utcnow()
                         task_entry.result = {
                             'error': f'Worker {task_entry.worker_id} died unexpectedly'
                         }
-                        session.commit()
-
                         stale_count += 1
 
-                    except Exception as revoke_error:
-                        session.rollback()
-                        logger.error(
-                            f"Error revoking stale task {task_entry.task_id}: {revoke_error}"
-                        )
-                else:
-                    # Worker is alive - check heartbeat for very old tasks
+                    # Single commit for all updates
+                    session.commit()
+                    logger.info(f"Batch revoked {stale_count} stale tasks")
+
+                except Exception as revoke_error:
+                    session.rollback()
+                    logger.error(f"Error during batch revoke: {revoke_error}")
+
+            # Check for stuck tasks on alive workers (heartbeat monitoring)
+            for task_entry in stale_tasks:
+                if task_entry.task_id not in active_task_ids and task_entry.worker_id in active_worker_ids:
+                    # Worker is alive but task might be stuck - check heartbeat
                     if task_entry.last_heartbeat:
                         time_since_heartbeat = datetime.utcnow() - task_entry.last_heartbeat
                         # If no heartbeat for 6 hours, consider it stale
@@ -615,7 +646,7 @@ def cleanup_stale_tasks(sender=None, **kwargs):
                             # Don't auto-revoke - just log warning for manual investigation
 
             if stale_count > 0:
-                logger.info(f"Revoked {stale_count} stale tasks from dead workers")
+                logger.info(f"Cleanup complete: Revoked {stale_count} stale tasks from dead workers")
             else:
                 logger.info("No stale tasks found requiring cleanup")
 

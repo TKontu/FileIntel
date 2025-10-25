@@ -6,7 +6,7 @@ Replaces job-based operations with Celery task operations for clean architecture
 
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 
 import requests
@@ -26,6 +26,7 @@ from .constants import (
     PROGRESS_BAR_TOTAL,
     DEFAULT_API_PORT,
 )
+from fileintel.core.config import get_config
 
 # V2 API configuration
 API_BASE_URL_V2 = os.getenv(
@@ -45,16 +46,24 @@ class TaskAPIClient:
         self.base_url_v2 = base_url_v2
         self.console = Console()
 
+        # Load timeout configuration from config
+        config = get_config()
+        self.request_timeout: Tuple[int, Optional[int]] = (
+            config.api.request_timeout_connect,
+            config.api.request_timeout_read
+        )
+        self.task_wait_timeout: Optional[int] = config.cli.task_wait_timeout
+
     def _request(
         self, method: str, endpoint: str, base_url: str = None, **kwargs: Any
     ) -> Any:
         """Make API request with proper error handling."""
         url = f"{base_url or self.base_url_v2}/{endpoint}"
 
-        # Set default timeout if not provided (30 seconds connect, 300 seconds read)
+        # Set default timeout from config if not provided
         # This prevents indefinite hangs when API is blocked
         if 'timeout' not in kwargs:
-            kwargs['timeout'] = (30, 300)
+            kwargs['timeout'] = self.request_timeout
 
         try:
             response = requests.request(method, url, **kwargs)
@@ -74,9 +83,9 @@ class TaskAPIClient:
         """Make raw API request for file operations."""
         url = f"{base_url or self.base_url_v2}/{endpoint}"
 
-        # Set default timeout (30s connect, 300s read)
+        # Set default timeout from config if not provided
         if 'timeout' not in kwargs:
-            kwargs['timeout'] = (30, 300)
+            kwargs['timeout'] = self.request_timeout
 
         try:
             response = requests.request(method, url, **kwargs)
@@ -267,7 +276,7 @@ class TaskAPIClient:
     def wait_for_task_completion(
         self,
         task_id: str,
-        timeout: int = DEFAULT_TASK_TIMEOUT,
+        timeout: Optional[int] = None,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         show_progress: bool = True,
     ) -> Dict[str, Any]:
@@ -276,13 +285,17 @@ class TaskAPIClient:
 
         Args:
             task_id: Task identifier
-            timeout: Maximum time to wait in seconds
+            timeout: Maximum time to wait in seconds (None uses config default)
             poll_interval: How often to check status in seconds
             show_progress: Whether to show progress bar
 
         Returns:
             Final task status response
         """
+        # Use config timeout if not specified
+        if timeout is None:
+            timeout = self.task_wait_timeout
+
         start_time = time.time()
 
         if show_progress:
@@ -291,7 +304,7 @@ class TaskAPIClient:
             return self._wait_simple(task_id, timeout, poll_interval, start_time)
 
     def _wait_with_progress(
-        self, task_id: str, timeout: int, poll_interval: float, start_time: float
+        self, task_id: str, timeout: Optional[int], poll_interval: float, start_time: float
     ) -> Dict[str, Any]:
         """Wait for task completion with progress display."""
         progress = Progress(
@@ -307,7 +320,11 @@ class TaskAPIClient:
                 f"Task {task_id[:TASK_ID_DISPLAY_LENGTH]}...", total=PROGRESS_BAR_TOTAL
             )
 
-            while time.time() - start_time < timeout:
+            while True:
+                # Check timeout if specified
+                if timeout is not None and time.time() - start_time >= timeout:
+                    raise TimeoutError(f"Task {task_id} did not complete within {timeout} seconds")
+
                 status_response = self._check_task_status(task_id)
                 task_data = status_response["data"]
                 task_status = task_data["status"]
@@ -322,13 +339,15 @@ class TaskAPIClient:
 
                 time.sleep(poll_interval)
 
-        raise TimeoutError(f"Task {task_id} did not complete within {timeout} seconds")
-
     def _wait_simple(
-        self, task_id: str, timeout: int, poll_interval: float, start_time: float
+        self, task_id: str, timeout: Optional[int], poll_interval: float, start_time: float
     ) -> Dict[str, Any]:
         """Wait for task completion without progress display."""
-        while time.time() - start_time < timeout:
+        while True:
+            # Check timeout if specified
+            if timeout is not None and time.time() - start_time >= timeout:
+                raise TimeoutError(f"Task {task_id} did not complete within {timeout} seconds")
+
             status_response = self._check_task_status(task_id)
             task_data = status_response["data"]
             task_status = task_data["status"]
@@ -337,8 +356,6 @@ class TaskAPIClient:
                 return status_response
 
             time.sleep(poll_interval)
-
-        raise TimeoutError(f"Task {task_id} did not complete within {timeout} seconds")
 
     # Query Operations (using task-based RAG processing)
     def query_collection(

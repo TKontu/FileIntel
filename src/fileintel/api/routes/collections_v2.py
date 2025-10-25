@@ -38,6 +38,7 @@ from fileintel.storage.models import Collection
 from fileintel.tasks.workflow_tasks import (
     complete_collection_analysis,
     incremental_collection_update,
+    generate_collection_embeddings_simple,
 )
 from fileintel.tasks.document_tasks import process_document, process_collection
 import uuid
@@ -207,28 +208,48 @@ async def upload_document_to_collection(
         file_size = len(content)
         mime_type = file.content_type or "application/octet-stream"
 
-        # Store document in database (file_path is stored in metadata)
-        document = storage.create_document(
-            filename=unique_filename,
-            content_hash=content_hash,
-            file_size=file_size,
-            mime_type=mime_type,
-            collection_id=collection.id,
-            original_filename=file.filename,
-            metadata={
-                "uploaded_via": "api_v2",
-                "original_filename": file.filename,
-                "file_path": str(file_path),
-            },
+        # Check for duplicate in this collection
+        existing_document = storage.get_document_by_hash_and_collection(
+            content_hash, collection.id
         )
+
+        if existing_document:
+            logger.info(
+                f"Duplicate detected: {file.filename} (hash: {content_hash[:16]}...) "
+                f"already exists as document {existing_document.id}"
+            )
+
+            # Return existing document instead of creating duplicate
+            document = existing_document
+            duplicate_detected = True
+        else:
+            # Store document in database (file_path is stored in metadata)
+            document = storage.create_document(
+                filename=unique_filename,
+                content_hash=content_hash,
+                file_size=file_size,
+                mime_type=mime_type,
+                collection_id=collection.id,
+                original_filename=file.filename,
+                metadata={
+                    "uploaded_via": "api_v2",
+                    "original_filename": file.filename,
+                    "file_path": str(file_path),
+                },
+            )
+            duplicate_detected = False
 
         return ApiResponseV2(
             success=True,
             data={
                 "document_id": document.id,
                 "filename": document.filename,
+                "original_filename": document.original_filename,
+                "content_hash": document.content_hash,
+                "file_size": document.file_size,
                 "file_path": str(file_path),
-                "message": "Document uploaded successfully",
+                "duplicate": duplicate_detected,
+                "message": "Duplicate file detected, linked to existing document" if duplicate_detected else "Document uploaded successfully",
             },
             timestamp=datetime.utcnow(),
         )
@@ -418,9 +439,45 @@ async def submit_collection_processing_task(
 
         try:
             documents = validate_collection_has_documents(collection.id, storage)
-            file_paths = validate_file_paths(documents)
+            all_file_paths = validate_file_paths(documents)
         except CollectionValidationError as e:
             raise to_http_exception(e)
+
+        # Filter out documents that already have chunks (skip re-processing)
+        file_paths = []
+        documents_with_chunks = []
+        documents_without_chunks = []
+
+        for doc in documents:
+            doc_chunks = storage.get_all_chunks_for_document(doc.id)
+            if doc_chunks:
+                # Document already has chunks - skip processing
+                documents_with_chunks.append({
+                    "document_id": str(doc.id),
+                    "filename": doc.original_filename or doc.filename,
+                    "chunk_count": len(doc_chunks)
+                })
+                logger.info(
+                    f"Skipping document {doc.id} ({doc.original_filename}) - "
+                    f"already has {len(doc_chunks)} chunks"
+                )
+            else:
+                # Document needs processing
+                file_path = doc.metadata.get("file_path") if doc.metadata else None
+                if not file_path and doc.document_metadata:
+                    file_path = doc.document_metadata.get("file_path")
+
+                if file_path:
+                    file_paths.append(file_path)
+                    documents_without_chunks.append({
+                        "document_id": str(doc.id),
+                        "filename": doc.original_filename or doc.filename
+                    })
+
+        logger.info(
+            f"Collection {collection.id}: {len(documents_with_chunks)} documents already processed, "
+            f"{len(file_paths)} documents need processing"
+        )
 
         # Validate operation type first
         from fileintel.core.validation import (
@@ -433,6 +490,38 @@ async def submit_collection_processing_task(
             validate_operation_type(request.operation_type)
         except ValidationError as e:
             raise to_http_exception(e)
+
+        # Check if all documents already have chunks
+        if not file_paths and len(documents_with_chunks) > 0:
+            # All documents already processed - skip to embeddings/GraphRAG
+            logger.info(
+                f"All {len(documents)} documents already have chunks. "
+                f"Skipping MinerU processing, proceeding directly to embeddings/GraphRAG."
+            )
+
+            # Go straight to embeddings (which will trigger GraphRAG automatically)
+            # Pass empty document_results since documents are already processed
+            task = generate_collection_embeddings_simple.delay(
+                document_results=[],
+                collection_id=str(collection.id)
+            )
+
+            storage.update_collection_status(
+                collection.id, "processing", task_id=task.id
+            )
+
+            return ApiResponseV2(
+                success=True,
+                data=TaskSubmissionResponse(
+                    task_id=task.id,
+                    task_type="embeddings_and_graphrag",
+                    status=TaskState.PENDING,
+                    submitted_at=datetime.utcnow(),
+                    collection_id=collection.id,
+                ).dict(),
+                message=f"Skipped re-processing {len(documents_with_chunks)} documents (already have chunks). Generating embeddings and GraphRAG index.",
+                timestamp=datetime.utcnow(),
+            )
 
         # Submit the appropriate task based on operation type
         if request.operation_type == "complete_analysis":
@@ -836,6 +925,7 @@ async def upload_and_process_documents(
 
         config = get_config()
         uploaded_files = []
+        duplicate_files = []
 
         # Upload files
         for file in files:
@@ -863,29 +953,57 @@ async def upload_and_process_documents(
             file_size = len(content)
             mime_type = file.content_type or "application/octet-stream"
 
-            # Store document in database
-            document = storage.create_document(
-                filename=unique_filename,
-                original_filename=file.filename,
-                content_hash=content_hash,
-                file_size=file_size,
-                mime_type=mime_type,
-                collection_id=collection.id,
-                metadata={"uploaded_via": "api_v2", "file_path": str(file_path)},
+            # Check for duplicate in this collection
+            existing_document = storage.get_document_by_hash_and_collection(
+                content_hash, collection.id
             )
 
-            uploaded_files.append(str(file_path))
+            if existing_document:
+                logger.info(
+                    f"Duplicate detected in batch: {file.filename} (hash: {content_hash[:16]}...) "
+                    f"already exists as document {existing_document.id}"
+                )
 
-        if not uploaded_files:
+                # Track duplicate but don't create new document
+                duplicate_files.append({
+                    "filename": file.filename,
+                    "existing_document_id": str(existing_document.id),
+                    "content_hash": content_hash,
+                    "file_size": file_size,
+                    "reason": "Duplicate file already exists in collection"
+                })
+
+                # Remove the uploaded file since it's a duplicate
+                file_path.unlink(missing_ok=True)
+
+                # Skip to next file
+                continue
+            else:
+                # Store document in database
+                document = storage.create_document(
+                    filename=unique_filename,
+                    original_filename=file.filename,
+                    content_hash=content_hash,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    collection_id=collection.id,
+                    metadata={"uploaded_via": "api_v2", "file_path": str(file_path)},
+                )
+
+                uploaded_files.append(str(file_path))
+
+        if not uploaded_files and not duplicate_files:
             raise HTTPException(status_code=400, detail="No files were uploaded")
 
         result_data = {
             "uploaded_files": len(uploaded_files),
+            "duplicates_skipped": len(duplicate_files),
             "file_paths": uploaded_files,
+            "duplicates": duplicate_files,
         }
 
-        # Process immediately if requested
-        if process_immediately:
+        # Process immediately if requested (only if there are new files)
+        if process_immediately and uploaded_files:
             task = complete_collection_analysis.delay(
                 collection_id=str(collection.id),
                 file_paths=uploaded_files,
@@ -900,6 +1018,14 @@ async def upload_and_process_documents(
                     "processing_status": "submitted",
                     "estimated_duration": len(uploaded_files)
                     * DEFAULT_TASK_ESTIMATION_SECONDS_PER_DOCUMENT,
+                }
+            )
+        elif process_immediately and not uploaded_files:
+            # All files were duplicates
+            result_data.update(
+                {
+                    "processing_status": "skipped",
+                    "message": "All files were duplicates, no processing needed",
                 }
             )
 
