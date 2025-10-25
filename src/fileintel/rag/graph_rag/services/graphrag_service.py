@@ -11,6 +11,7 @@ from fileintel.storage.postgresql_storage import PostgreSQLStorage
 from fileintel.rag.graph_rag.adapters.data_adapter import GraphRAGDataAdapter
 from fileintel.core.config import Settings, get_config
 from fileintel.rag.graph_rag.adapters.config_adapter import GraphRAGConfigAdapter
+from fileintel.rag.reranker_service import RerankerService
 from .parquet_loader import ParquetLoader
 from .dataframe_cache import GraphRAGDataFrameCache
 from .._graphrag_imports import global_search, local_search, build_index, GraphRagConfig
@@ -30,6 +31,15 @@ class GraphRAGService:
         self.parquet_loader = ParquetLoader(self.cache)
         # Cache configs by collection_id to avoid repeated adaptation
         self._config_cache = {}
+
+        # Initialize reranker service if enabled for graph results
+        self.reranker = None
+        if settings.rag.reranking.enabled and settings.rag.reranking.rerank_graph_results:
+            try:
+                self.reranker = RerankerService(settings)
+                logger.info("RerankerService initialized for GraphRAG")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RerankerService: {e}. Continuing without reranking.")
 
     async def _get_cached_config(self, collection_id: str):
         """Get cached GraphRAG config for collection, creating if not exists."""
@@ -70,6 +80,9 @@ class GraphRAGService:
         else:
             answer = getattr(raw_response, "response", str(raw_response))
             sources = getattr(raw_response, "context_data", [])
+
+        # Rerank sources if enabled
+        sources = await self._rerank_sources_if_enabled(query, sources)
 
         # Calculate confidence based on result quality
         confidence = self._calculate_confidence(raw_response, sources)
@@ -438,6 +451,79 @@ class GraphRAGService:
 
         except Exception as e:
             logger.error(f"Error saving GraphRAG data to database: {e}")
+
+    async def _rerank_sources_if_enabled(self, query: str, sources: List[Dict[str, Any]], top_k: int = None) -> List[Dict[str, Any]]:
+        """
+        Rerank GraphRAG sources if reranker is enabled.
+
+        Args:
+            query: The search query
+            sources: List of source dicts from GraphRAG
+            top_k: Number of top results to return (defaults to config.final_top_k)
+
+        Returns:
+            Reranked sources or original sources if reranking disabled/failed
+        """
+        if not self.reranker or not sources:
+            return sources
+
+        top_k = top_k or self.settings.rag.reranking.final_top_k
+
+        try:
+            # Convert GraphRAG sources to reranker format
+            # GraphRAG sources may have various text fields - try common ones
+            passages = []
+            for source in sources:
+                # Try to extract text from various possible fields
+                text = (
+                    source.get("content") or
+                    source.get("text") or
+                    source.get("description") or
+                    source.get("title", "")
+                )
+
+                if text:
+                    passages.append({
+                        "content": text,
+                        "relevance_score": source.get("score", source.get("weight", 0.0)),
+                        **source  # Include all other fields
+                    })
+
+            if not passages:
+                logger.debug("No text content found in GraphRAG sources for reranking")
+                return sources
+
+            # Rerank passages
+            reranked_passages = await asyncio.to_thread(
+                self.reranker.rerank,
+                query=query,
+                passages=passages,
+                top_k=top_k,
+                passage_text_key="content"
+            )
+
+            # Convert back to source format
+            reranked_sources = []
+            for passage in reranked_passages:
+                source = passage.copy()
+                # Restore original text field name if it wasn't "content"
+                if "content" in source:
+                    text = source.pop("content")
+                    # Update the appropriate field
+                    if "text" in sources[0]:
+                        source["text"] = text
+                    elif "description" in sources[0]:
+                        source["description"] = text
+                source["reranked_score"] = passage["reranked_score"]
+                source["original_score"] = passage.get("original_score", 0.0)
+                reranked_sources.append(source)
+
+            logger.info(f"Reranked {len(passages)} → {len(reranked_sources)} GraphRAG sources")
+            return reranked_sources
+
+        except Exception as e:
+            logger.error(f"GraphRAG source reranking failed: {e}. Using original sources.")
+            return sources[:top_k] if top_k else sources
 
     def _calculate_confidence(self, raw_response, sources) -> float:
         """

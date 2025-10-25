@@ -47,9 +47,7 @@ result.md
 result.json
 fileintel-image.tar
 debug_similarity.py
-cheatsheet_venv.md
-cheatsheet_git.md
-cheatsheet_docker.md
+cheatsheet*
 #src/graphrag/*
 CLAUDE.md
 graphrag_indices/*

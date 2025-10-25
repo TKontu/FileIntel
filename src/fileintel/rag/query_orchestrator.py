@@ -2,7 +2,8 @@ from typing import Any, Dict, List, Tuple, Optional
 from fileintel.rag.vector_rag.services.vector_rag_service import VectorRAGService
 from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
 from fileintel.rag.query_classifier import QueryClassifier
-from fileintel.core.config import RAGSettings
+from fileintel.rag.reranker_service import RerankerService
+from fileintel.core.config import RAGSettings, Settings
 from fileintel.rag.models import DirectQueryResponse
 from enum import Enum
 import logging
@@ -23,12 +24,22 @@ class QueryOrchestrator:
         graphrag_service: GraphRAGService,
         query_classifier: QueryClassifier,
         config: RAGSettings,
+        settings: Optional[Settings] = None,
     ):
         self.vector_rag_service = vector_rag_service
         self.graphrag_service = graphrag_service
         self.query_classifier = query_classifier
         self.config = config
         self._routing_explanation = "No routing decision made yet."
+
+        # Initialize reranker service if enabled for hybrid results
+        self.reranker = None
+        if settings and settings.rag.reranking.enabled and settings.rag.reranking.rerank_hybrid_results:
+            try:
+                self.reranker = RerankerService(settings)
+                logger.info("RerankerService initialized for hybrid query orchestration")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RerankerService: {e}. Continuing without reranking.")
 
     async def route_query(
         self, query: str, collection_id: str, routing_override: str = "auto"
@@ -211,7 +222,49 @@ class QueryOrchestrator:
                         )  # Boost score
                         break
 
-        # Sort by rank score (highest first)
+        # Rerank combined sources if reranker is enabled
+        if self.reranker and combined_sources:
+            try:
+                # Convert sources to reranker format
+                passages = []
+                for source in combined_sources:
+                    text = source.get("text", "")
+                    if text:
+                        passages.append({
+                            "content": text,
+                            "similarity_score": source.get("rank_score", 0.0),
+                            **source  # Include all other fields
+                        })
+
+                if passages:
+                    # Get top sources limit
+                    max_sources = getattr(self.config, "max_hybrid_sources", 8)
+
+                    # Rerank passages
+                    reranked_passages = self.reranker.rerank(
+                        query=query,
+                        passages=passages,
+                        top_k=max_sources,
+                        passage_text_key="content"
+                    )
+
+                    # Convert back to source format
+                    combined_sources = []
+                    for passage in reranked_passages:
+                        source = passage.copy()
+                        source["text"] = source.pop("content")
+                        source["rank_score"] = source["reranked_score"]
+                        source["original_rank_score"] = source.get("original_score", 0.0)
+                        combined_sources.append(source)
+
+                    logger.info(f"Reranked {len(passages)} hybrid sources → {len(combined_sources)} final sources")
+                    return combined_sources
+
+            except Exception as e:
+                logger.error(f"Hybrid source reranking failed: {e}. Using fallback ranking.")
+                # Fall through to original sorting logic
+
+        # Sort by rank score (highest first) - fallback if no reranking
         combined_sources.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
 
         # Limit to top sources based on configuration

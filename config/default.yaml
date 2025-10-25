@@ -1,117 +1,147 @@
 llm:
-  provider: "openai"
-  model: "gemma3-12b-awq"
-  context_length: 128000
-  temperature: 0.1
-  rate_limit: 999
+  provider: ${LLM_PROVIDER:-openai}
+  model: ${LLM_MODEL:-gemma3-12b-awq}
+  context_length: ${LLM_CONTEXT_LENGTH:-128000}
+  temperature: ${LLM_TEMPERATURE:-0.1}
+  rate_limit: ${LLM_RATE_LIMIT:-999}
   # Task timeout limits (prevents worker exhaustion)
-  task_timeout_seconds: 7200  # 2 hours soft timeout for LLM tasks (was 300)
-  task_hard_limit_seconds: 7200  # 2 hours hard kill timeout (was 360)
+  task_timeout_seconds: ${LLM_TASK_TIMEOUT:-7200}  # 2 hours soft timeout for LLM tasks (was 300)
+  task_hard_limit_seconds: ${LLM_TASK_HARD_LIMIT:-7200}  # 2 hours hard kill timeout (was 360)
   circuit_breaker:
-    failure_threshold: 5
-    failure_window: 60
-    open_duration: 30
+    failure_threshold: ${LLM_CIRCUIT_BREAKER_THRESHOLD:-5}
+    failure_window: ${LLM_CIRCUIT_BREAKER_WINDOW:-60}
+    open_duration: ${LLM_CIRCUIT_BREAKER_DURATION:-30}
   openai:
-    base_url: "http://192.168.0.247:9003/v1"
-    embedding_base_url: "http://192.168.0.136:9003/v1"  # Separate embedding server (optional - defaults to base_url if not set)
+    base_url: ${OPENAI_BASE_URL:-http://192.168.0.247:9003/v1}
+    embedding_base_url: ${OPENAI_EMBEDDING_BASE_URL:-http://192.168.0.136:9003/v1}  # Separate embedding server (optional - defaults to base_url if not set)
     api_key: ${OPENAI_API_KEY:-ollama}  # Use environment variable or default to "ollama" for local setups
-    rate_limit: 999
+    rate_limit: ${OPENAI_RATE_LIMIT:-999}
   anthropic:
     api_key: ${ANTHROPIC_API_KEY:-}  # Load from environment variable, empty if not set
-    rate_limit: 15
+    rate_limit: ${ANTHROPIC_RATE_LIMIT:-15}
 
 rag:
-  strategy: "separate" # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
-  embedding_provider: "openai"
-  embedding_model: "bge-large-en"
-  embedding_max_tokens: 450  # Maximum tokens for embedding input (optimal for 512 token model limit)
-  enable_two_tier_chunking: false  # Enable two-tier vector/graph chunking system
+  strategy: ${RAG_STRATEGY:-separate} # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
+  embedding_provider: ${RAG_EMBEDDING_PROVIDER:-openai}
+  embedding_model: ${RAG_EMBEDDING_MODEL:-bge-large-en}
+  embedding_max_tokens: ${RAG_EMBEDDING_MAX_TOKENS:-450}  # Maximum tokens for embedding input (optimal for 512 token model limit)
+  enable_two_tier_chunking: ${RAG_ENABLE_TWO_TIER_CHUNKING:-false}  # Enable two-tier vector/graph chunking system
   chunking:
-    chunk_size: 800  #characters, ~200 tokens (safe conservative limit for 512 token model)
-    chunk_overlap: 80
-    target_sentences: 3  # Target sentences per Vector RAG chunk (conservative)
-    overlap_sentences: 1  # Sentences to overlap between Vector RAG chunks (forward overlap)
+    chunk_size: ${RAG_CHUNK_SIZE:-800}  #characters, ~200 tokens (safe conservative limit for 512 token model)
+    chunk_overlap: ${RAG_CHUNK_OVERLAP:-80}
+    target_sentences: ${RAG_TARGET_SENTENCES:-3}  # Target sentences per Vector RAG chunk (conservative)
+    overlap_sentences: ${RAG_OVERLAP_SENTENCES:-1}  # Sentences to overlap between Vector RAG chunks (forward overlap)
   # Async processing for GraphRAG (consolidated under rag section)
   async_processing:
-    enabled: true
-    batch_size: 4
-    max_concurrent_requests: 25
-    batch_timeout: 300  # 5 minutes timeout per batch (was 30)
-    fallback_to_sequential: true
+    enabled: ${RAG_ASYNC_ENABLED:-true}
+    batch_size: ${RAG_ASYNC_BATCH_SIZE:-4}
+    max_concurrent_requests: ${RAG_ASYNC_MAX_CONCURRENT:-25}
+    batch_timeout: ${RAG_ASYNC_BATCH_TIMEOUT:-300}  # 5 minutes timeout per batch (was 30)
+    fallback_to_sequential: ${RAG_ASYNC_FALLBACK:-true}
+
+  # LLM-based query classification settings
+  classification_method: ${RAG_CLASSIFICATION_METHOD:-hybrid}  # Options: llm, keyword, hybrid
+  classification_model: ${RAG_CLASSIFICATION_MODEL:-gemma3-12b-awq}  # Small/fast model for quick classification
+  classification_temperature: ${RAG_CLASSIFICATION_TEMPERATURE:-0.0}  # 0.0 = deterministic
+  classification_max_tokens: ${RAG_CLASSIFICATION_MAX_TOKENS:-150}
+  classification_timeout_seconds: ${RAG_CLASSIFICATION_TIMEOUT:-5}  # Fallback to keywords after 5s
+  classification_cache_enabled: ${RAG_CLASSIFICATION_CACHE_ENABLED:-true}
+  classification_cache_ttl: ${RAG_CLASSIFICATION_CACHE_TTL:-3600}  # 1 hour
+
+  # Query classification keywords (for keyword-based routing)
+  # These keywords determine which RAG strategy to use for a given query
+  # COMMENTED OUT: Using comprehensive defaults from query_classifier.py instead
+  # Uncomment and customize only if you need to override the defaults
+  # graph_keywords:
+  #   - "relationship"
+  #   - "connection"
+  #   - "entity"
+  # vector_keywords:
+  #   - "what is"
+  #   - "define"
+  # hybrid_keywords:
+  #   - "both"
+  #   - "comprehensive"
+
+  # Result Reranking (improves relevance at cost of latency)
+  reranking:
+    enabled: ${RAG_RERANKING_ENABLED:-false}  # Disabled by default
+    model_name: ${RAG_RERANKING_MODEL:-BAAI/bge-reranker-v2-m3}
+    model_type: ${RAG_RERANKING_MODEL_TYPE:-normal}  # normal, llm, layerwise
+    use_fp16: ${RAG_RERANKING_USE_FP16:-true}
+
+    # Strategy - which results to rerank
+    rerank_vector_results: ${RAG_RERANK_VECTOR:-true}
+    rerank_graph_results: ${RAG_RERANK_GRAPH:-true}
+    rerank_hybrid_results: ${RAG_RERANK_HYBRID:-true}
+
+    # Retrieval strategy (retrieve more, rerank to fewer)
+    initial_retrieval_k: ${RAG_RERANKING_INITIAL_K:-20}  # Retrieve more initially
+    final_top_k: ${RAG_RERANKING_FINAL_K:-5}  # Return fewer after reranking
+
+    # Performance tuning
+    batch_size: ${RAG_RERANKING_BATCH_SIZE:-32}
+    normalize_scores: ${RAG_RERANKING_NORMALIZE:-true}
+    device: ${RAG_RERANKING_DEVICE:-auto}  # auto, cuda, cpu
+    cache_model: ${RAG_RERANKING_CACHE_MODEL:-true}
+
+    # Optional filtering
+    min_score_threshold: ${RAG_RERANKING_MIN_SCORE:-null}  # e.g., 0.3 to filter low-relevance
 
 graphrag:
   # Microsoft GraphRAG settings - uses same chunks as Vector RAG
-  llm_model: "gemma3-12b-awq"  # Match main LLM model
-  embedding_model: "bge-large-en"  # Match embedding model
+  llm_model: ${GRAPHRAG_LLM_MODEL:-gemma3-12b-awq}  # Match main LLM model
+  embedding_model: ${GRAPHRAG_EMBEDDING_MODEL:-bge-large-en}  # Match embedding model
   # NOTE: GraphRAG uses existing Vector RAG chunks, no separate chunking needed
-  community_levels: 3  # Good for hierarchical community detection
-  max_tokens: 12000  #characters, Sufficient for complex analysis
+  community_levels: ${GRAPHRAG_COMMUNITY_LEVELS:-3}  # Good for hierarchical community detection
+  max_tokens: ${GRAPHRAG_MAX_TOKENS:-12000}  #characters, Sufficient for complex analysis
   # Index storage
-  index_base_path: "./graphrag_indices"
+  index_base_path: ${GRAPHRAG_INDEX_PATH:-./graphrag_indices}
   cache:
-    enabled: true
-    ttl_seconds: 3600
-    max_size_mb: 500
-    redis_host: "redis"
-    redis_port: 6379
-    redis_db: 0
-  # Automatic indexing after vector RAG completion
-  auto_index_after_upload: true  # NEW: Enable background GraphRAG indexing
-  auto_index_delay_seconds: 30   # NEW: Wait time after vector indexing completes
+    enabled: ${GRAPHRAG_CACHE_ENABLED:-true}
+    ttl_seconds: ${GRAPHRAG_CACHE_TTL:-3600}
+    max_size_mb: ${GRAPHRAG_CACHE_MAX_SIZE_MB:-500}
+    redis_host: ${REDIS_HOST:-redis}
+    redis_port: ${REDIS_PORT:-6379}
+    redis_db: ${REDIS_DB:-0}
   # Query routing
-  query_classification_model: "gemma3-12b-awq"
-  hybrid_query_threshold: 0.7
-  # Fallback keyword classification
-  graph_keywords:
-    - "relationship"
-    - "connection"
-    - "entity"
-    - "community"
-    - "network"
-    - "how are"
-    - "related to"
-  vector_keywords:
-    - "what is"
-    - "define"
-    - "explain"
-    - "summarize"
-    - "list facts about"
+  query_classification_model: ${GRAPHRAG_CLASSIFICATION_MODEL:-gemma3-12b-awq}
   # Async processing for RTX 3090 24GB optimization
   async_processing:
-    enabled: true                    # ON/OFF switch (set to false to disable)
-    batch_size: 4                   # Concurrent requests per batch
-    max_concurrent_requests: 40     # Must match vLLM VLLM_MAX_NUM_SEQS (currently 16)
-    batch_timeout: 300              # 5 minutes timeout per batch (was 30)
-    fallback_to_sequential: true    # Fallback if batching fails
+    enabled: ${GRAPHRAG_ASYNC_ENABLED:-true}                    # ON/OFF switch (set to false to disable)
+    batch_size: ${GRAPHRAG_ASYNC_BATCH_SIZE:-4}                   # Concurrent requests per batch
+    max_concurrent_requests: ${GRAPHRAG_ASYNC_MAX_CONCURRENT:-50}     # Must match vLLM VLLM_MAX_NUM_SEQS (currently 16)
+    batch_timeout: ${GRAPHRAG_ASYNC_BATCH_TIMEOUT:-300}              # 5 minutes timeout per batch (was 30)
+    fallback_to_sequential: ${GRAPHRAG_ASYNC_FALLBACK:-true}    # Fallback if batching fails
   # Embedding configuration
-  embedding_batch_max_tokens: 450   # Max tokens per embedding request (optimal for 512 token model limit)
+  embedding_batch_max_tokens: ${GRAPHRAG_EMBEDDING_BATCH_MAX_TOKENS:-450}   # Max tokens per embedding request (optimal for 512 token model limit)
 
 document_processing:
-  chunk_size: 800  # ~200 tokens (matches RAG chunk size for consistency)
-  overlap: 80
-  max_file_size: "300MB"
+  chunk_size: ${DOC_CHUNK_SIZE:-800}  # ~200 tokens (matches RAG chunk size for consistency)
+  overlap: ${DOC_CHUNK_OVERLAP:-80}
+  max_file_size: ${DOC_MAX_FILE_SIZE:-300MB}
   supported_formats: ["pdf", "epub", "mobi"]
 
   # PDF processor selection: "mineru" or "traditional" (auto-fallback on failure)
-  primary_pdf_processor: "mineru"
+  primary_pdf_processor: ${DOC_PRIMARY_PDF_PROCESSOR:-mineru}
 
   # Type-aware chunking (Phase 1 - NEW)
   # When enabled: uses element-based chunking with corruption filtering, statistical heuristics, and specialized chunkers
   # When disabled: uses traditional text-based chunking (backward compatible)
   # Default: false (can enable after testing)
-  use_type_aware_chunking: true
+  use_type_aware_chunking: ${DOC_USE_TYPE_AWARE_CHUNKING:-true}
 
   # MinerU OCR settings
   mineru:
     # API type: "selfhosted" for FastAPI or "commercial" for async task API
-    api_type: "selfhosted"
+    api_type: ${MINERU_API_TYPE:-selfhosted}
 
     # Common settings for both API types
-    base_url: "http://192.168.0.136:8000"
-    timeout: null  # Disabled - no timeout for MinerU processing
-    enable_formula: false
-    enable_table: true
-    language: "en"
+    base_url: ${MINERU_BASE_URL:-http://192.168.0.136:8000}
+    timeout: ${MINERU_TIMEOUT:-null}  # Disabled - no timeout for MinerU processing
+    enable_formula: ${MINERU_ENABLE_FORMULA:-false}
+    enable_table: ${MINERU_ENABLE_TABLE:-true}
+    language: ${MINERU_LANGUAGE:-en}
 
     # Backend selection for selfhosted API / model version for commercial API
     # - "pipeline": OCR + Layout detection pipeline (faster, 2-10s per document)
@@ -119,47 +149,43 @@ document_processing:
     # Note: When using selfhosted API, ensure Docker Compose profile matches this setting:
     #   - model_version: "pipeline" → docker compose --profile pipeline up -d
     #   - model_version: "vlm" → docker compose --profile vlm up -d
-    model_version: "pipeline"
+    model_version: ${MINERU_MODEL_VERSION:-pipeline}
 
     # Debug output settings (for troubleshooting extraction issues)
     # When enabled, saves MinerU raw outputs (markdown, JSON, images) to disk
     # WARNING: Can consume significant disk space - only enable for debugging
-    save_outputs: true
-    output_directory: "/home/appuser/app/mineru_outputs"
+    save_outputs: ${MINERU_SAVE_OUTPUTS:-true}
+    output_directory: ${MINERU_OUTPUT_DIR:-/home/appuser/app/mineru_outputs}
 
     # Element-level type preservation (EXPERIMENTAL - Phase 1 of structure utilization)
     # When true: preserves MinerU element boundaries (one TextElement per content_list item)
     # When false: concatenates all elements per page (current behavior, backward compatible)
     # Default: false (safe, preserves existing behavior)
     # UPDATED: Enabled to support element filtering and semantic type detection
-    use_element_level_types: true
+    use_element_level_types: ${MINERU_USE_ELEMENT_LEVEL_TYPES:-true}
 
     # Element filtering (EXPERIMENTAL - Phase 2, requires use_element_level_types=true)
     # When true: filters out TOC/LOF elements before chunking (prevents oversized chunks)
     # When false: all elements pass through to chunking (backward compatible)
     # Default: false (safe, preserves existing behavior)
     # UPDATED: Enabled after improving detection to handle MinerU inline formats
-    enable_element_filtering: true
+    enable_element_filtering: ${MINERU_ENABLE_ELEMENT_FILTERING:-true}
 
     # Commercial API specific settings (used when api_type="commercial")
     api_token: ${MINERU_API_TOKEN:-}
-    poll_interval: 10
-    max_retries: 3
-    shared_folder_path: "/shared/uploads"
-    shared_folder_url_prefix: "file:///shared/uploads"
-
-ocr:
-  primary_engine: "pdf_extract_kit"
-  fallback_engines: ["tesseract", "google_vision"]
+    poll_interval: ${MINERU_POLL_INTERVAL:-10}
+    max_retries: ${MINERU_MAX_RETRIES:-3}
+    shared_folder_path: ${MINERU_SHARED_FOLDER_PATH:-/shared/uploads}
+    shared_folder_url_prefix: ${MINERU_SHARED_FOLDER_URL_PREFIX:-file:///shared/uploads}
 
 output:
-  default_format: "json"
-  output_directory: "./results"
-  include_metadata: true
-  max_concurrent_jobs: 5
+  default_format: ${OUTPUT_DEFAULT_FORMAT:-json}
+  output_directory: ${OUTPUT_DIRECTORY:-./results}
+  include_metadata: ${OUTPUT_INCLUDE_METADATA:-true}
+  max_concurrent_jobs: ${OUTPUT_MAX_CONCURRENT_JOBS:-5}
 
 logging:
-  level: "INFO"
+  level: ${LOG_LEVEL:-WARNING}
 
 paths:
   uploads: ${UPLOADS_DIR:-/home/appuser/app/uploads}
@@ -171,47 +197,47 @@ prompts:
   directory: "${PROMPTS_DIR:-/home/appuser/app/prompts}/templates"
 
 api:
-  host: "0.0.0.0"
-  port: 8000
+  host: ${API_HOST:-0.0.0.0}
+  port: ${API_PORT:-8000}
   cors_origins: ["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000", "http://127.0.0.1:8080"]  # Restrict to local development by default
   # cors_origins: ["*"]  # Uncomment this line and comment the above for unrestricted access
-  rate_limit: 9999
+  rate_limit: ${API_RATE_LIMIT:-9999}
   authentication:
-    enabled: false
+    enabled: ${API_AUTH_ENABLED:-false}
     api_key: ${API_KEY:-}
   # HTTP client timeout configuration for CLI
-  request_timeout_connect: 30      # Connection timeout in seconds
-  request_timeout_read: null       # Read timeout in seconds (null = no timeout)
+  request_timeout_connect: ${API_TIMEOUT_CONNECT:-30}      # Connection timeout in seconds
+  request_timeout_read: ${API_TIMEOUT_READ:-null}       # Read timeout in seconds (null = no timeout)
 
 storage:
-  type: "postgres"
+  type: ${STORAGE_TYPE:-postgres}
   connection_string: "postgresql://${DB_USER:-user}:${DB_PASSWORD:-password}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-fileintel}"
-  cache_ttl: 3600
-  redis_host: "localhost"
+  cache_ttl: ${STORAGE_CACHE_TTL:-3600}
+  redis_host: ${STORAGE_REDIS_HOST:-localhost}
   # Connection pool settings (prevents exhaustion)
-  pool_size: 50  # Increased from 20 to handle worker restarts
-  max_overflow: 50  # Increased from 30 to handle bursts
-  pool_timeout: 300  # Increased from 30 to allow more wait time
+  pool_size: ${STORAGE_POOL_SIZE:-50}  # Increased from 20 to handle worker restarts
+  max_overflow: ${STORAGE_MAX_OVERFLOW:-50}  # Increased from 30 to handle bursts
+  pool_timeout: ${STORAGE_POOL_TIMEOUT:-300}  # Increased from 30 to allow more wait time
 
 celery:
   # Task timeout limits - configurable for large batch processing
-  task_soft_time_limit: null  # Soft limit in seconds (null = no limit)
-  task_time_limit: null       # Hard limit in seconds (null = no limit)
+  task_soft_time_limit: ${CELERY_TASK_SOFT_TIME_LIMIT:-null}  # Soft limit in seconds (null = no limit)
+  task_time_limit: ${CELERY_TASK_TIME_LIMIT:-null}       # Hard limit in seconds (null = no limit)
 
   # Worker pool restart settings (prevents fork bomb)
-  worker_pool_restarts: true  # Allow pool restarts
-  worker_pool_restart_timeout: 120  # Timeout for worker to send UP message (seconds)
-  worker_max_tasks_per_child: 100  # Restart workers more frequently (was 1000)
+  worker_pool_restarts: ${CELERY_WORKER_POOL_RESTARTS:-true}  # Allow pool restarts
+  worker_pool_restart_timeout: ${CELERY_WORKER_POOL_RESTART_TIMEOUT:-120}  # Timeout for worker to send UP message (seconds)
+  worker_max_tasks_per_child: ${CELERY_WORKER_MAX_TASKS_PER_CHILD:-100}  # Restart workers more frequently (was 1000)
 
 cli:
   # CLI task wait timeout
-  task_wait_timeout: null  # Wait timeout in seconds (null = no limit)
+  task_wait_timeout: ${CLI_TASK_WAIT_TIMEOUT:-null}  # Wait timeout in seconds (null = no limit)
 
 batch_processing:
   directory_input: ${INPUT_DIR:-/home/appuser/app/input}
   directory_output: ${OUTPUT_DIR:-/home/appuser/app/output}
-  default_format: "json"
+  default_format: ${BATCH_DEFAULT_FORMAT:-json}
   # Batch size limits (security - prevent DoS)
-  max_upload_batch_size: 50  # Maximum files per batch upload
-  max_file_size_mb: 100       # Maximum individual file size in MB
-  max_processing_batch_size: 20  # Maximum collections per batch process
+  max_upload_batch_size: ${BATCH_MAX_UPLOAD_SIZE:-50}  # Maximum files per batch upload
+  max_file_size_mb: ${BATCH_MAX_FILE_SIZE_MB:-100}       # Maximum individual file size in MB
+  max_processing_batch_size: ${BATCH_MAX_PROCESSING_SIZE:-20}  # Maximum collections per batch process

@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 from fileintel.storage.postgresql_storage import PostgreSQLStorage
+from fileintel.rag.reranker_service import RerankerService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,15 @@ class VectorRAGService:
         from fileintel.llm_integration.unified_provider import UnifiedLLMProvider
 
         self.llm_provider = UnifiedLLMProvider(config, storage)
+
+        # Initialize reranker service if enabled
+        self.reranker = None
+        if config.rag.reranking.enabled and config.rag.reranking.rerank_vector_results:
+            try:
+                self.reranker = RerankerService(config)
+                logger.info("RerankerService initialized for VectorRAG")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RerankerService: {e}. Continuing without reranking.")
 
     def query(
         self,
@@ -83,13 +93,19 @@ class VectorRAGService:
                     },
                 }
 
+            # Determine retrieval limit (more if reranking enabled)
+            retrieval_limit = top_k
+            if self.reranker is not None:
+                retrieval_limit = self.config.rag.reranking.initial_retrieval_k
+                logger.debug(f"Reranking enabled: retrieving {retrieval_limit} chunks for reranking to {top_k}")
+
             # Retrieve similar chunks using enhanced storage methods
             if document_id:
                 # Search within specific document
                 similar_chunks = self.storage.find_relevant_chunks_in_document(
                     document_id=document_id,
                     query_embedding=query_embedding,
-                    limit=top_k,
+                    limit=retrieval_limit,
                     similarity_threshold=min_similarity,
                 )
             else:
@@ -97,9 +113,46 @@ class VectorRAGService:
                 similar_chunks = self.storage.find_relevant_chunks_in_collection(
                     collection_id=collection_id,
                     query_embedding=query_embedding,
-                    limit=top_k,
+                    limit=retrieval_limit,
                     similarity_threshold=min_similarity,
                 )
+
+            # Rerank results if reranker is enabled
+            if self.reranker is not None and similar_chunks:
+                try:
+                    # Convert chunks to format expected by reranker
+                    passages = []
+                    for chunk in similar_chunks:
+                        passages.append({
+                            "content": chunk["text"],
+                            "similarity_score": chunk["similarity"],
+                            **chunk  # Include all other fields
+                        })
+
+                    # Rerank passages
+                    reranked_passages = self.reranker.rerank(
+                        query=query,
+                        passages=passages,
+                        top_k=top_k,
+                        passage_text_key="content"
+                    )
+
+                    # Convert back to chunk format
+                    similar_chunks = []
+                    for passage in reranked_passages:
+                        chunk = passage.copy()
+                        chunk["text"] = chunk.pop("content")
+                        chunk["similarity"] = chunk["reranked_score"]
+                        similar_chunks.append(chunk)
+
+                    logger.info(f"Reranked {len(passages)} → {len(similar_chunks)} chunks for query")
+                except Exception as e:
+                    logger.error(f"Reranking failed: {e}. Using original vector search results.")
+                    # Keep original similar_chunks, just truncate to top_k
+                    similar_chunks = similar_chunks[:top_k]
+            elif similar_chunks and self.reranker is None:
+                # No reranking, just truncate to top_k
+                similar_chunks = similar_chunks[:top_k]
 
             if not similar_chunks:
                 return {

@@ -85,6 +85,84 @@ class ChunkingSettings(BaseModel):
     )
 
 
+class RerankerSettings(BaseModel):
+    """Reranker configuration for improving retrieval relevance."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable result reranking (improves relevance at cost of latency)"
+    )
+
+    model_name: str = Field(
+        default="BAAI/bge-reranker-v2-m3",
+        description="Reranker model (bge-reranker-v2-m3, bge-reranker-large, etc.)"
+    )
+
+    model_type: str = Field(
+        default="normal",
+        description="Model type: 'normal', 'llm', or 'layerwise'"
+    )
+
+    use_fp16: bool = Field(
+        default=True,
+        description="Use FP16 for faster inference with slight performance trade-off"
+    )
+
+    # Strategy settings
+    rerank_vector_results: bool = Field(
+        default=True,
+        description="Rerank vector search results"
+    )
+
+    rerank_graph_results: bool = Field(
+        default=True,
+        description="Rerank GraphRAG results"
+    )
+
+    rerank_hybrid_results: bool = Field(
+        default=True,
+        description="Rerank hybrid (combined) results"
+    )
+
+    # Performance settings
+    initial_retrieval_k: int = Field(
+        default=20,
+        description="Initial number of chunks to retrieve (before reranking)"
+    )
+
+    final_top_k: int = Field(
+        default=5,
+        description="Final number of chunks to return after reranking"
+    )
+
+    batch_size: int = Field(
+        default=32,
+        description="Batch size for reranking (affects GPU memory)"
+    )
+
+    normalize_scores: bool = Field(
+        default=True,
+        description="Normalize scores to 0-1 range using sigmoid"
+    )
+
+    # Device settings
+    device: str = Field(
+        default="auto",
+        description="Device for reranker: 'auto', 'cuda', 'cpu'"
+    )
+
+    cache_model: bool = Field(
+        default=True,
+        description="Cache loaded model in memory (singleton pattern)"
+    )
+
+    # Advanced settings
+    min_score_threshold: Optional[float] = Field(
+        default=None,
+        description="Minimum reranked score to include (filter low-relevance results)"
+    )
+
+
 class RAGSettings(BaseModel):
     """Unified RAG configuration consolidating vector and graph RAG settings."""
 
@@ -108,8 +186,43 @@ class RAGSettings(BaseModel):
     enable_hybrid_queries: bool = Field(
         default=True, description="Enable hybrid query routing"
     )
+
+    # LLM-based query classification settings
+    classification_method: str = Field(
+        default="hybrid",
+        description="Classification method: 'llm', 'keyword', or 'hybrid' (LLM with keyword fallback)"
+    )
     classification_model: str = Field(
-        default="gemma3-4B", description="Model for query classification"
+        default="gemma3-4B", description="LLM model for query classification (small/fast model recommended)"
+    )
+    classification_temperature: float = Field(
+        default=0.0, description="Temperature for classification (0.0 = deterministic)"
+    )
+    classification_max_tokens: int = Field(
+        default=150, description="Max tokens for classification response"
+    )
+    classification_timeout_seconds: int = Field(
+        default=5, description="Timeout for LLM classification before falling back to keywords"
+    )
+    classification_cache_enabled: bool = Field(
+        default=True, description="Enable caching of classification results"
+    )
+    classification_cache_ttl: int = Field(
+        default=3600, description="Cache TTL in seconds (1 hour default)"
+    )
+
+    # Query classification keywords (for keyword-based routing)
+    graph_keywords: Optional[List[str]] = Field(
+        default=None,
+        description="Keywords that trigger GraphRAG routing (relationship/entity queries)"
+    )
+    vector_keywords: Optional[List[str]] = Field(
+        default=None,
+        description="Keywords that trigger VectorRAG routing (factual/search queries)"
+    )
+    hybrid_keywords: Optional[List[str]] = Field(
+        default=None,
+        description="Keywords that trigger hybrid routing (complex multi-part queries)"
     )
 
     # GraphRAG-specific settings (moved here to eliminate duplication)
@@ -127,6 +240,12 @@ class RAGSettings(BaseModel):
     # Async processing
     async_processing: AsyncProcessingSettings = Field(
         default_factory=AsyncProcessingSettings
+    )
+
+    # Result reranking
+    reranking: RerankerSettings = Field(
+        default_factory=RerankerSettings,
+        description="Reranker settings for improving retrieval relevance"
     )
 
 
