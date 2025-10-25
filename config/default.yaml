@@ -65,10 +65,14 @@ rag:
 
   # Result Reranking (improves relevance at cost of latency)
   reranking:
-    enabled: ${RAG_RERANKING_ENABLED:-false}  # Disabled by default
-    model_name: ${RAG_RERANKING_MODEL:-BAAI/bge-reranker-v2-m3}
-    model_type: ${RAG_RERANKING_MODEL_TYPE:-normal}  # normal, llm, layerwise
-    use_fp16: ${RAG_RERANKING_USE_FP16:-true}
+    enabled: ${RAG_RERANKING_ENABLED:-true}  # Disabled by default
+
+    # API settings (vLLM or OpenAI-compatible server)
+    base_url: ${RAG_RERANKING_BASE_URL:-http://192.168.0.136:9003/v1}
+    api_key: ${RAG_RERANKING_API_KEY:-ollama}
+    timeout: ${RAG_RERANKING_TIMEOUT:-30}
+
+    model_name: ${RAG_RERANKING_MODEL:-bge-reranker-v2-m3}
 
     # Strategy - which results to rerank
     rerank_vector_results: ${RAG_RERANK_VECTOR:-true}
@@ -78,12 +82,6 @@ rag:
     # Retrieval strategy (retrieve more, rerank to fewer)
     initial_retrieval_k: ${RAG_RERANKING_INITIAL_K:-20}  # Retrieve more initially
     final_top_k: ${RAG_RERANKING_FINAL_K:-5}  # Return fewer after reranking
-
-    # Performance tuning
-    batch_size: ${RAG_RERANKING_BATCH_SIZE:-32}
-    normalize_scores: ${RAG_RERANKING_NORMALIZE:-true}
-    device: ${RAG_RERANKING_DEVICE:-auto}  # auto, cuda, cpu
-    cache_model: ${RAG_RERANKING_CACHE_MODEL:-true}
 
     # Optional filtering
     min_score_threshold: ${RAG_RERANKING_MIN_SCORE:-null}  # e.g., 0.3 to filter low-relevance

@@ -141,8 +141,10 @@ class VectorRAGService:
                     similar_chunks = []
                     for passage in reranked_passages:
                         chunk = passage.copy()
-                        chunk["text"] = chunk.pop("content")
-                        chunk["similarity"] = chunk["reranked_score"]
+                        # Safely handle content field (might not exist if error occurred)
+                        if "content" in chunk:
+                            chunk["text"] = chunk.pop("content")
+                        chunk["similarity"] = chunk.get("reranked_score", chunk.get("similarity", 0.0))
                         similar_chunks.append(chunk)
 
                     logger.info(f"Reranked {len(passages)} → {len(similar_chunks)} chunks for query")

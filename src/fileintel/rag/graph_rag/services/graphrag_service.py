@@ -41,6 +41,17 @@ class GraphRAGService:
             except Exception as e:
                 logger.warning(f"Failed to initialize RerankerService: {e}. Continuing without reranking.")
 
+    def _sync_graphrag_logger_level(self):
+        """
+        Synchronize the GraphRAG logger level with application logging configuration.
+
+        GraphRAG's init_loggers() always sets the logger to INFO level,
+        but we want to respect the application's logging configuration.
+        """
+        graphrag_logger = logging.getLogger("graphrag")
+        app_log_level = getattr(logging, self.settings.logging.level.upper(), logging.WARNING)
+        graphrag_logger.setLevel(app_log_level)
+
     async def _get_cached_config(self, collection_id: str):
         """Get cached GraphRAG config for collection, creating if not exists."""
         if collection_id not in self._config_cache:
@@ -133,6 +144,9 @@ class GraphRAGService:
 
         result = await build_index(config=graphrag_config, input_documents=documents_df)
 
+        # Sync GraphRAG logger level with application config (build_index calls init_loggers)
+        self._sync_graphrag_logger_level()
+
         elapsed = time.time() - start_time
         logger.info(f"GraphRAG index build completed in {elapsed:.1f} seconds")
 
@@ -219,6 +233,10 @@ class GraphRAGService:
             response_type="text",
             query=query,
         )
+
+        # Sync GraphRAG logger level with application config (global_search calls init_loggers)
+        self._sync_graphrag_logger_level()
+
         return self.data_adapter.convert_response(result, context)
 
     async def local_search(
@@ -257,6 +275,10 @@ class GraphRAGService:
             response_type="text",
             query=query,
         )
+
+        # Sync GraphRAG logger level with application config (local_search calls init_loggers)
+        self._sync_graphrag_logger_level()
+
         return self.data_adapter.convert_response(result, context)
 
     # Orchestrator interface methods
@@ -473,14 +495,25 @@ class GraphRAGService:
             # Convert GraphRAG sources to reranker format
             # GraphRAG sources may have various text fields - try common ones
             passages = []
+            source_field_map = []  # Track which field was used for each source
+
             for source in sources:
-                # Try to extract text from various possible fields
-                text = (
-                    source.get("content") or
-                    source.get("text") or
-                    source.get("description") or
-                    source.get("title", "")
-                )
+                # Try to extract text from various possible fields (in priority order)
+                text = None
+                text_field = None
+
+                if source.get("content"):
+                    text = source["content"]
+                    text_field = "content"
+                elif source.get("text"):
+                    text = source["text"]
+                    text_field = "text"
+                elif source.get("description"):
+                    text = source["description"]
+                    text_field = "description"
+                elif source.get("title"):
+                    text = source["title"]
+                    text_field = "title"
 
                 if text:
                     passages.append({
@@ -488,6 +521,7 @@ class GraphRAGService:
                         "relevance_score": source.get("score", source.get("weight", 0.0)),
                         **source  # Include all other fields
                     })
+                    source_field_map.append(text_field)
 
             if not passages:
                 logger.debug("No text content found in GraphRAG sources for reranking")
@@ -504,17 +538,17 @@ class GraphRAGService:
 
             # Convert back to source format
             reranked_sources = []
-            for passage in reranked_passages:
+            for idx, passage in enumerate(reranked_passages):
                 source = passage.copy()
-                # Restore original text field name if it wasn't "content"
-                if "content" in source:
-                    text = source.pop("content")
-                    # Update the appropriate field
-                    if "text" in sources[0]:
-                        source["text"] = text
-                    elif "description" in sources[0]:
-                        source["description"] = text
-                source["reranked_score"] = passage["reranked_score"]
+
+                # Restore original text field using tracked field name
+                if "content" in source and idx < len(source_field_map):
+                    text = source.pop("content", None)
+                    original_field = source_field_map[idx]
+                    if text and original_field:
+                        source[original_field] = text
+
+                source["reranked_score"] = passage.get("reranked_score", 0.0)
                 source["original_score"] = passage.get("original_score", 0.0)
                 reranked_sources.append(source)
 

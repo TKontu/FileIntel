@@ -264,13 +264,31 @@ RAG_CLASSIFICATION_METHOD=hybrid python test_llm_classifier.py
 
 ### Result Reranking (Advanced)
 
-FileIntel supports **reranking** to improve retrieval result quality by re-scoring initial results using semantic relevance models. This can significantly improve answer quality at the cost of 50-200ms additional latency.
+FileIntel supports **reranking** to improve retrieval result quality by re-scoring initial results using semantic relevance models hosted on your vLLM server. This can significantly improve answer quality at the cost of 50-200ms additional latency.
 
 #### How It Works
 
 1. **Retrieve More Initially**: Fetch 20 chunks (configurable) instead of final 5
-2. **Semantic Re-scoring**: Use BAAI/bge-reranker models to compute query-passage relevance
+2. **Semantic Re-scoring**: Call vLLM reranking API to compute query-passage relevance using BAAI/bge-reranker models
 3. **Return Top K**: Return only the most relevant chunks after reranking
+
+#### Setup vLLM Reranking Server
+
+First, start the reranker model on your vLLM server:
+
+```bash
+# On your vLLM server (e.g., 192.168.0.136)
+python -m vllm.entrypoints.openai.api_server \
+    --model BAAI/bge-reranker-v2-m3 \
+    --task rerank \
+    --port 9003
+
+# Or run on a separate port if you have LLM already running
+python -m vllm.entrypoints.openai.api_server \
+    --model BAAI/bge-reranker-v2-m3 \
+    --task rerank \
+    --port 9004
+```
 
 #### Configuration
 
@@ -278,8 +296,13 @@ FileIntel supports **reranking** to improve retrieval result quality by re-scori
 rag:
   reranking:
     enabled: false  # Enable to improve result quality
-    model_name: "BAAI/bge-reranker-v2-m3"  # Multilingual reranker
-    model_type: "normal"  # Options: normal, llm, layerwise
+
+    # API settings (vLLM or OpenAI-compatible server)
+    base_url: "http://192.168.0.136:9003/v1"
+    api_key: "ollama"
+    timeout: 30
+
+    model_name: "BAAI/bge-reranker-v2-m3"  # Model running on vLLM server
 
     # Strategy - which results to rerank
     rerank_vector_results: true
@@ -289,12 +312,6 @@ rag:
     # Retrieval strategy (over-retrieve, then rerank)
     initial_retrieval_k: 20  # Retrieve more initially
     final_top_k: 5  # Return fewer after reranking
-
-    # Performance tuning
-    batch_size: 32
-    normalize_scores: true
-    device: "auto"  # auto, cuda, cpu
-    cache_model: true  # Singleton model caching
 
     # Optional filtering
     min_score_threshold: null  # e.g., 0.3 to filter low-relevance
@@ -306,11 +323,15 @@ rag:
 # Enable reranking
 RAG_RERANKING_ENABLED=true
 
-# Choose reranker model
-RAG_RERANKING_MODEL=BAAI/bge-reranker-v2-m3
-RAG_RERANKING_MODEL_TYPE=normal  # normal, llm, layerwise
+# vLLM server configuration
+RAG_RERANKING_BASE_URL=http://192.168.0.136:9003/v1
+RAG_RERANKING_API_KEY=ollama
+RAG_RERANKING_TIMEOUT=30
 
-# Tune retrieval parameters
+# Model configuration
+RAG_RERANKING_MODEL=BAAI/bge-reranker-v2-m3
+
+# Retrieval strategy
 RAG_RERANKING_INITIAL_K=20  # Over-retrieve
 RAG_RERANKING_FINAL_K=5  # Final results
 
@@ -319,32 +340,27 @@ RAG_RERANK_VECTOR=true
 RAG_RERANK_GRAPH=true
 RAG_RERANK_HYBRID=true
 
-# Performance settings
-RAG_RERANKING_DEVICE=auto
-RAG_RERANKING_BATCH_SIZE=32
-RAG_RERANKING_USE_FP16=true
+# Optional filtering
+RAG_RERANKING_MIN_SCORE=null  # e.g., 0.3
 ```
 
 #### When to Use Reranking
 
 **Use reranking when:**
 - Answer quality is more important than speed
-- You have GPU available (faster inference)
+- You have a GPU-enabled vLLM server available
 - You're working with multilingual content (bge-reranker-v2-m3)
 - Initial retrieval returns noisy results
 
 **Skip reranking when:**
 - Latency is critical (<100ms responses required)
-- Running on CPU-only systems
+- You don't have access to a reranking server
 - Your retrieval already provides high-quality results
 - Processing very large batches
 
 #### Testing Reranking
 
 ```bash
-# Test reranking with sample data
-python test_reranker.py
-
 # Compare results with/without reranking
 RAG_RERANKING_ENABLED=false fileintel query ask collection-id "your query"
 RAG_RERANKING_ENABLED=true fileintel query ask collection-id "your query"
@@ -352,23 +368,16 @@ RAG_RERANKING_ENABLED=true fileintel query ask collection-id "your query"
 
 #### Performance Characteristics
 
-| Model Type | Latency (GPU) | Latency (CPU) | Accuracy | Use Case |
-|------------|---------------|---------------|----------|----------|
-| normal (bge-reranker-v2-m3) | 50-100ms | 200-500ms | High | General purpose, multilingual |
-| llm (bge-reranker-v2-gemma) | 100-200ms | 500-1000ms | Very High | Complex queries, best accuracy |
-| layerwise (bge-reranker-v2-minicpm) | 150-300ms | 800-1500ms | Very High | Research, maximum quality |
+| Setup | Latency | Accuracy | Use Case |
+|-------|---------|----------|----------|
+| vLLM + GPU | 50-100ms | High | Recommended for production |
+| vLLM + CPU | 200-500ms | High | Development/testing |
 
-#### Installation
+#### Recommended Models
 
-Reranking requires the FlagEmbedding library:
-
-```bash
-# Install FlagEmbedding
-pip install FlagEmbedding
-
-# Or if using Docker, rebuild containers after adding to requirements
-docker-compose build
-```
+- **BAAI/bge-reranker-v2-m3**: Multilingual, best general purpose (560MB)
+- **BAAI/bge-reranker-large**: English-focused, higher accuracy (1.3GB)
+- **BAAI/bge-reranker-base**: Lightweight, faster inference (278MB)
 
 ### Document Processing
 ```yaml

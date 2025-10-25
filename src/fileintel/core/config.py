@@ -93,19 +93,36 @@ class RerankerSettings(BaseModel):
         description="Enable result reranking (improves relevance at cost of latency)"
     )
 
+    # API settings (for remote vLLM/OpenAI servers)
+    base_url: str = Field(
+        default="http://192.168.0.136:9003/v1",
+        description="Base URL for reranking API (vLLM or OpenAI-compatible server)"
+    )
+
+    api_key: str = Field(
+        default="ollama",
+        description="API key for reranking server authentication"
+    )
+
+    timeout: Optional[int] = Field(
+        default=30,
+        description="HTTP timeout in seconds for reranking requests"
+    )
+
     model_name: str = Field(
         default="BAAI/bge-reranker-v2-m3",
         description="Reranker model (bge-reranker-v2-m3, bge-reranker-large, etc.)"
     )
 
+    # Legacy local model settings (DEPRECATED - unused in API mode, kept for backward compatibility)
     model_type: str = Field(
         default="normal",
-        description="Model type: 'normal', 'llm', or 'layerwise'"
+        description="[DEPRECATED - UNUSED] Was for local model type selection. Kept for config compatibility."
     )
 
     use_fp16: bool = Field(
         default=True,
-        description="Use FP16 for faster inference with slight performance trade-off"
+        description="[DEPRECATED - UNUSED] Was for local model FP16. Kept for config compatibility."
     )
 
     # Strategy settings
@@ -137,23 +154,23 @@ class RerankerSettings(BaseModel):
 
     batch_size: int = Field(
         default=32,
-        description="Batch size for reranking (affects GPU memory)"
+        description="[DEPRECATED - UNUSED] Was for local batching. Kept for config compatibility."
     )
 
     normalize_scores: bool = Field(
         default=True,
-        description="Normalize scores to 0-1 range using sigmoid"
+        description="[DEPRECATED - UNUSED] Was for score normalization. API handles this. Kept for config compatibility."
     )
 
-    # Device settings
+    # Device settings (DEPRECATED - unused in API mode, kept for backward compatibility)
     device: str = Field(
         default="auto",
-        description="Device for reranker: 'auto', 'cuda', 'cpu'"
+        description="[DEPRECATED - UNUSED] Was for device selection. Kept for config compatibility."
     )
 
     cache_model: bool = Field(
         default=True,
-        description="Cache loaded model in memory (singleton pattern)"
+        description="[DEPRECATED - UNUSED] Was for model caching. Server handles this. Kept for config compatibility."
     )
 
     # Advanced settings

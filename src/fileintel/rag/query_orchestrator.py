@@ -252,8 +252,10 @@ class QueryOrchestrator:
                     combined_sources = []
                     for passage in reranked_passages:
                         source = passage.copy()
-                        source["text"] = source.pop("content")
-                        source["rank_score"] = source["reranked_score"]
+                        # Safely handle content field (might not exist if error occurred)
+                        if "content" in source:
+                            source["text"] = source.pop("content")
+                        source["rank_score"] = source.get("reranked_score", source.get("rank_score", 0.0))
                         source["original_rank_score"] = source.get("original_score", 0.0)
                         combined_sources.append(source)
 

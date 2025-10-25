@@ -1,13 +1,14 @@
 """
 Reranker Service for improving RAG result relevance.
 
-Uses BAAI/bge-reranker-v2-m3 or similar models to rerank
-initial retrieval results based on semantic relevance.
+Uses remote vLLM/OpenAI-compatible API to rerank initial retrieval
+results based on semantic relevance using models like BAAI/bge-reranker-v2-m3.
 """
 
 from typing import List, Dict, Any, Optional
 import logging
 import time
+import requests
 from dataclasses import dataclass
 
 from fileintel.core.config import Settings
@@ -27,100 +28,39 @@ class RerankedResult:
 
 class RerankerService:
     """
-    Service for reranking RAG retrieval results.
+    Service for reranking RAG retrieval results using remote API.
 
-    Supports:
-    - Normal rerankers (bge-reranker-v2-m3, bge-reranker-large)
-    - LLM-based rerankers (bge-reranker-v2-gemma)
-    - Layerwise rerankers (bge-reranker-v2-minicpm-layerwise)
+    Connects to vLLM or OpenAI-compatible reranking API to rerank
+    initial retrieval results based on semantic relevance.
 
     Features:
-    - Singleton model caching
+    - HTTP API integration with vLLM/OpenAI servers
     - Batch processing
-    - GPU/CPU support
     - Score normalization
     - Performance tracking
+    - Graceful error handling
     """
 
-    _instance = None  # Singleton instance
-    _model = None  # Cached model
-    _model_name = None  # Track loaded model
-
-    def __new__(cls, config: Settings):
-        """Singleton pattern - one model instance per process."""
-        if not config.rag.reranking.cache_model:
-            # Don't use singleton if caching disabled
-            return super().__new__(cls)
-
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
     def __init__(self, config: Settings):
-        """Initialize reranker service."""
+        """Initialize reranker service with API settings."""
         self.config = config
         self.rerank_config = config.rag.reranking
+
+        # API configuration
+        self.base_url = self.rerank_config.base_url.rstrip('/')
+        self.api_key = self.rerank_config.api_key
+        self.timeout = self.rerank_config.timeout
+        self.model_name = self.rerank_config.model_name
 
         # Performance metrics
         self._total_reranks = 0
         self._total_latency_ms = 0
-        self._cache_hits = 0
+        self._api_errors = 0
 
-        # Load model if enabled
-        if self.rerank_config.enabled and self._should_load_model():
-            self._load_model()
-
-    def _should_load_model(self) -> bool:
-        """Check if model needs to be loaded."""
-        # If not caching, always load
-        if not self.rerank_config.cache_model:
-            return True
-
-        # If cached but different model, reload
-        if self._model_name != self.rerank_config.model_name:
-            return True
-
-        # If model not loaded yet
-        if self._model is None:
-            return True
-
-        return False
-
-    def _load_model(self):
-        """Load reranker model (lazy loading with caching)."""
-        try:
-            from FlagEmbedding import FlagReranker, FlagLLMReranker, LayerWiseFlagLLMReranker
-
-            model_name = self.rerank_config.model_name
-            model_type = self.rerank_config.model_type
-            use_fp16 = self.rerank_config.use_fp16
-
-            logger.info(f"Loading reranker model: {model_name} (type: {model_type})")
-            start_time = time.time()
-
-            if model_type == "normal":
-                self._model = FlagReranker(model_name, use_fp16=use_fp16)
-            elif model_type == "llm":
-                self._model = FlagLLMReranker(model_name, use_fp16=use_fp16)
-            elif model_type == "layerwise":
-                self._model = LayerWiseFlagLLMReranker(model_name, use_fp16=use_fp16)
-            else:
-                raise ValueError(f"Invalid model_type: {model_type}")
-
-            self._model_name = model_name
-
-            load_time_ms = int((time.time() - start_time) * 1000)
-            logger.info(f"Reranker model loaded in {load_time_ms}ms")
-
-        except ImportError as e:
-            logger.error(
-                f"Failed to import FlagEmbedding. Install with: pip install FlagEmbedding\n"
-                f"Error: {e}"
-            )
-            raise
-        except Exception as e:
-            logger.error(f"Failed to load reranker model: {e}")
-            raise
+        logger.info(
+            f"RerankerService initialized with API: {self.base_url}, "
+            f"model: {self.model_name}"
+        )
 
     def rerank(
         self,
@@ -130,7 +70,7 @@ class RerankerService:
         passage_text_key: str = "content"
     ) -> List[Dict[str, Any]]:
         """
-        Rerank passages by relevance to query.
+        Rerank passages by relevance to query using API.
 
         Args:
             query: User query
@@ -153,50 +93,40 @@ class RerankerService:
         start_time = time.time()
 
         try:
-            # Ensure model is loaded
-            if self._model is None:
-                self._load_model()
-
             # Extract text from passages
             passage_texts = []
+            valid_passages = []
             for p in passages:
                 text = p.get(passage_text_key, "")
                 if not text:
                     logger.warning(f"Passage missing '{passage_text_key}' field, skipping")
                     continue
                 passage_texts.append(text)
+                valid_passages.append(p)
 
             if not passage_texts:
                 logger.warning("No valid passages to rerank")
                 return passages[:top_k]
 
-            # Prepare query-passage pairs
-            pairs = [[query, text] for text in passage_texts]
+            logger.debug(f"Reranking {len(passage_texts)} passages for query: '{query[:50]}...'")
 
-            # Compute reranking scores
-            logger.debug(f"Reranking {len(pairs)} passages for query: '{query[:50]}...'")
+            # Call reranking API
+            scores = self._call_rerank_api(query, passage_texts)
 
-            if self.rerank_config.model_type == "layerwise":
-                # Layerwise models need cutoff_layers parameter
-                scores = self._model.compute_score(
-                    pairs,
-                    normalize=self.rerank_config.normalize_scores,
-                    cutoff_layers=[28]  # Can make this configurable
+            # Validate scores match passages
+            if len(scores) != len(valid_passages):
+                logger.warning(
+                    f"API returned {len(scores)} scores for {len(valid_passages)} documents. "
+                    f"Using min length."
                 )
-            else:
-                # Normal and LLM rerankers
-                scores = self._model.compute_score(
-                    pairs,
-                    normalize=self.rerank_config.normalize_scores
-                )
-
-            # Handle single score vs list of scores
-            if not isinstance(scores, list):
-                scores = [scores]
+                # Truncate to minimum length to avoid index errors
+                min_len = min(len(scores), len(valid_passages))
+                scores = scores[:min_len]
+                valid_passages = valid_passages[:min_len]
 
             # Create reranked results
             reranked = []
-            for idx, (passage, score) in enumerate(zip(passages[:len(scores)], scores)):
+            for idx, (passage, score) in enumerate(zip(valid_passages, scores)):
                 original_score = passage.get("similarity_score", 0.0) or passage.get("relevance_score", 0.0)
 
                 reranked.append(RerankedResult(
@@ -238,7 +168,7 @@ class RerankerService:
             avg_latency = self._total_latency_ms / self._total_reranks
 
             logger.info(
-                f"Reranked {len(passages)} → {len(result)} passages "
+                f"Reranked {len(valid_passages)} → {len(result)} passages "
                 f"(latency: {latency_ms}ms, avg: {avg_latency:.1f}ms)"
             )
 
@@ -249,7 +179,90 @@ class RerankerService:
 
         except Exception as e:
             logger.error(f"Reranking failed: {e}, returning original results")
+            self._api_errors += 1
             return passages[:top_k]
+
+    def _call_rerank_api(self, query: str, documents: List[str]) -> List[float]:
+        """
+        Call the reranking API to get relevance scores.
+
+        Args:
+            query: Search query
+            documents: List of document texts to rerank
+
+        Returns:
+            List of relevance scores (same order as documents)
+
+        Raises:
+            Exception: If API call fails
+        """
+        # Validate inputs
+        if not documents:
+            logger.warning("Empty documents list passed to reranker API")
+            return []
+
+        if not query or not query.strip():
+            logger.warning("Empty query passed to reranker API")
+            return [0.0] * len(documents)  # Return zero scores
+
+        url = f"{self.base_url}/rerank"
+
+        payload = {
+            "model": self.model_name,
+            "query": query,
+            "documents": documents,
+            "return_documents": False,  # We already have the documents
+            "top_n": len(documents),  # Return all scores
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            # Parse response - handle different API formats
+            # Standard format: {"results": [{"index": 0, "relevance_score": 0.95}, ...]}
+            if "results" in data:
+                # Sort by index to ensure correct order
+                results = sorted(data["results"], key=lambda x: x.get("index", 0))
+                scores = [r.get("relevance_score", r.get("score", 0.0)) for r in results]
+            # Alternative format: {"scores": [0.95, 0.82, ...]}
+            elif "scores" in data:
+                scores = data["scores"]
+            else:
+                raise ValueError(f"Unexpected API response format: {data.keys()}")
+
+            # Note: normalize_scores config is deprecated for API mode
+            # vLLM API returns already-normalized scores, so we don't apply
+            # sigmoid normalization here (would double-normalize)
+
+            if not scores:
+                logger.warning("API returned empty scores list")
+                return []
+
+            return scores
+
+        except requests.exceptions.Timeout:
+            logger.error(f"Reranking API timeout after {self.timeout}s")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Reranking API request failed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Reranking API error: {e}")
+            raise
 
     def _log_reordering_changes(self, reranked: List[RerankedResult]):
         """Log significant changes in result ordering."""
@@ -283,10 +296,10 @@ class RerankerService:
 
         return {
             "enabled": self.rerank_config.enabled,
-            "model_name": self._model_name,
-            "model_loaded": self._model is not None,
+            "api_url": self.base_url,
+            "model_name": self.model_name,
             "total_reranks": self._total_reranks,
             "total_latency_ms": self._total_latency_ms,
             "average_latency_ms": avg_latency,
-            "cache_hits": self._cache_hits,
+            "api_errors": self._api_errors,
         }

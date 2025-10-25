@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for Reranker Service.
+Test script for Reranker Service (API Mode).
 
 This script demonstrates the reranking functionality with sample documents and queries.
 Shows how reranking can improve result relevance by re-scoring retrieval results.
@@ -9,8 +9,10 @@ Usage:
     python test_reranker.py
 
 Requirements:
-    - FlagEmbedding installed (pip install FlagEmbedding)
-    - Reranking enabled in config (RAG_RERANKING_ENABLED=true)
+    - vLLM server running with reranker model (BAAI/bge-reranker-v2-m3)
+    - Reranking API configured in .env:
+      RAG_RERANKING_ENABLED=true
+      RAG_RERANKING_BASE_URL=http://192.168.0.136:9003/v1
 """
 
 import sys
@@ -43,8 +45,9 @@ def main():
         print("   ✓ Enabled for this test session")
         print()
 
+    print(f"API URL: {config.rag.reranking.base_url}")
     print(f"Model: {config.rag.reranking.model_name}")
-    print(f"Model Type: {config.rag.reranking.model_type}")
+    print(f"Timeout: {config.rag.reranking.timeout}s")
     print(f"Initial K: {config.rag.reranking.initial_retrieval_k}")
     print(f"Final K: {config.rag.reranking.final_top_k}")
     print()
@@ -55,14 +58,18 @@ def main():
         reranker = RerankerService(config)
         print("✓ RerankerService initialized successfully")
         print()
-    except ImportError as e:
-        print(f"✗ Failed to initialize: {e}")
-        print()
-        print("Install FlagEmbedding with:")
-        print("  pip install FlagEmbedding")
-        return 1
     except Exception as e:
         print(f"✗ Failed to initialize: {e}")
+        print()
+        print("Make sure:")
+        print("  1. vLLM server is running with reranker model")
+        print("  2. RAG_RERANKING_BASE_URL is correctly configured")
+        print()
+        print("Start vLLM reranker with:")
+        print("  python -m vllm.entrypoints.openai.api_server \\")
+        print("      --model BAAI/bge-reranker-v2-m3 \\")
+        print("      --task rerank \\")
+        print("      --port 9003")
         return 1
 
     # Test queries and sample passages
@@ -182,9 +189,10 @@ def main():
     print()
     print("Next Steps:")
     print("  1. Enable reranking in production: RAG_RERANKING_ENABLED=true")
-    print("  2. Adjust initial_k and final_k in config for your use case")
-    print("  3. Monitor latency impact and adjust batch_size if needed")
-    print("  4. Consider using min_score_threshold to filter low-relevance results")
+    print("  2. Configure your vLLM server URL: RAG_RERANKING_BASE_URL=...")
+    print("  3. Adjust initial_k and final_k in config for your use case")
+    print("  4. Monitor API latency and adjust batch_size if needed")
+    print("  5. Consider using min_score_threshold to filter low-relevance results")
     print()
 
     return 0
