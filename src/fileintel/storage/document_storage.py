@@ -289,19 +289,28 @@ class DocumentStorage:
             self.db.delete(document)
             self.base._safe_commit()
 
-    def update_document_metadata(self, document_id: str, metadata: Dict[str, Any]):
+    def update_document_metadata(self, document_id: str, metadata: Dict[str, Any], replace: bool = False):
         """Update document metadata by merging with existing metadata.
 
         This method merges new metadata with existing metadata, preserving
         any existing fields that are not being updated. This prevents data
         loss when updating metadata from different sources (e.g., file metadata
         and LLM-extracted metadata).
+
+        Args:
+            document_id: The document ID to update
+            metadata: New metadata to merge or replace
+            replace: If True, completely replace existing metadata instead of merging
         """
         document = self.get_document(document_id)
         if document:
-            # Merge new metadata with existing, preserving existing fields
-            existing = document.document_metadata or {}
-            document.document_metadata = {**existing, **metadata}
+            if replace:
+                # Complete replacement - use for force re-extraction
+                document.document_metadata = metadata
+            else:
+                # Merge new metadata with existing, preserving existing fields
+                existing = document.document_metadata or {}
+                document.document_metadata = {**existing, **metadata}
             self.base._safe_commit()
 
     # Chunk Operations

@@ -473,7 +473,12 @@ def summarize_content(
     default_retry_delay=120,
 )
 def extract_document_metadata(
-    self, document_id: str, text_chunks: List[str], file_metadata: Optional[Dict[str, Any]] = None, **kwargs
+    self,
+    document_id: str,
+    text_chunks: List[str],
+    file_metadata: Optional[Dict[str, Any]] = None,
+    max_chunks: int = 3,
+    **kwargs
 ) -> Dict[str, Any]:
     """
     Extract structured metadata from document chunks using LLM analysis.
@@ -482,6 +487,7 @@ def extract_document_metadata(
         document_id: Document ID to extract metadata for
         text_chunks: List of text chunks from the document
         file_metadata: Existing metadata from file properties (optional)
+        max_chunks: Maximum number of chunks to use for extraction (default: 3)
         **kwargs: Additional parameters
 
     Returns:
@@ -526,7 +532,7 @@ def extract_document_metadata(
                 llm_provider=llm_provider,
                 prompts_dir=prompts_dir,
                 max_length=config.llm.context_length,
-                max_chunks_for_extraction=3,
+                max_chunks_for_extraction=max_chunks,
             )
 
             self.update_progress(1, 3, "Extracting metadata with LLM")
@@ -540,8 +546,19 @@ def extract_document_metadata(
             if extracted_metadata:
                 document = storage.get_document(document_id)
                 if document:
-                    storage.update_document_metadata(document_id, extracted_metadata)
-                    logger.info(f"Updated document {document_id} with extracted metadata")
+                    # Check if this is a force re-extraction (indicated by existing llm_extracted metadata)
+                    existing_metadata = document.document_metadata or {}
+                    has_existing_llm_metadata = (
+                        existing_metadata.get("llm_extracted", False) or
+                        existing_metadata.get("extraction_method") == "llm_analysis"
+                    )
+
+                    # If force re-extracting, replace entirely. Otherwise merge.
+                    replace = has_existing_llm_metadata
+                    storage.update_document_metadata(document_id, extracted_metadata, replace=replace)
+
+                    action = "Replaced" if replace else "Updated"
+                    logger.info(f"{action} document {document_id} with extracted metadata")
                 else:
                     logger.warning(f"Document {document_id} not found, cannot store metadata")
 

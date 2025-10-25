@@ -136,8 +136,8 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
     base=BaseFileIntelTask,
     bind=True,
     queue="graphrag_indexing",
-    soft_time_limit=86400,  # 24 hours - GraphRAG indexing can be very slow for large collections
-    time_limit=90000,       # 25 hours hard limit
+    soft_time_limit=345600,  # 96 hours - GraphRAG indexing can be very slow for large collections
+    time_limit=349200,       # 97 hours hard limit
 )
 def build_graph_index(
     self, documents: List[Dict[str, Any]], collection_id: str, **kwargs
@@ -619,8 +619,8 @@ def get_graphrag_index_status(self, collection_id: str) -> Dict[str, Any]:
     base=BaseFileIntelTask,
     bind=True,
     queue="graphrag_indexing",
-    soft_time_limit=86400,  # 24 hours - GraphRAG indexing can be very slow for large collections
-    time_limit=90000,       # 25 hours hard limit
+    soft_time_limit=345600,  # 96 hours - GraphRAG indexing can be very slow for large collections
+    time_limit=349200,       # 97 hours hard limit
 )
 def build_graphrag_index_task(
     self, collection_id: str, force_rebuild: bool = False

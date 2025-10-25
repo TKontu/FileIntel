@@ -60,7 +60,31 @@ class CitationFormatter:
         try:
             document_metadata = chunk.get("document_metadata", {})
             chunk_metadata = chunk.get("metadata", chunk.get("chunk_metadata", {}))
+
+            # Try multiple field names for page number
+            # 1. page_number (legacy/individual)
+            # 2. page_range (string like "5" or "5-7")
+            # 3. pages (list of page numbers)
             page_number = chunk_metadata.get("page_number")
+            if not page_number:
+                page_range = chunk_metadata.get("page_range")
+                if page_range:
+                    page_number = page_range
+                else:
+                    pages = chunk_metadata.get("pages")
+                    if pages:
+                        if isinstance(pages, list) and pages:
+                            # Use page range format if multiple pages
+                            if len(pages) == 1:
+                                page_number = str(pages[0])
+                            else:
+                                # Format as range or list
+                                if pages == list(range(pages[0], pages[-1] + 1)):
+                                    # Consecutive pages
+                                    page_number = f"{pages[0]}-{pages[-1]}"
+                                else:
+                                    # Non-consecutive pages
+                                    page_number = ",".join(str(p) for p in pages)
 
             if self._has_citation_metadata(document_metadata):
                 author_surname = self._extract_author_surname(document_metadata)
@@ -68,7 +92,20 @@ class CitationFormatter:
 
                 # Build citation with page number if available
                 if author_surname and year and page_number:
-                    return f"({author_surname}, {year}, p. {page_number})"
+                    # Format page reference correctly
+                    if isinstance(page_number, str):
+                        if "-" in page_number:
+                            # Consecutive pages: (Author, Year, pp. X-Y)
+                            return f"({author_surname}, {year}, pp. {page_number})"
+                        elif "," in page_number:
+                            # Non-consecutive pages: (Author, Year, pp. X,Y,Z)
+                            return f"({author_surname}, {year}, pp. {page_number})"
+                        else:
+                            # Single page: (Author, Year, p. X)
+                            return f"({author_surname}, {year}, p. {page_number})"
+                    else:
+                        # Fallback for numeric page number
+                        return f"({author_surname}, {year}, p. {page_number})"
                 elif author_surname and year:
                     return f"({author_surname}, {year})"
                 elif author_surname:
