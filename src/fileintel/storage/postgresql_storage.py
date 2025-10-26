@@ -130,9 +130,9 @@ class PostgreSQLStorage(StorageInterface):
         """Delete a document."""
         return self.document_storage.delete_document(document_id)
 
-    def update_document_metadata(self, document_id: str, metadata: Dict[str, Any]):
+    def update_document_metadata(self, document_id: str, metadata: Dict[str, Any], replace: bool = False):
         """Update document metadata."""
-        return self.document_storage.update_document_metadata(document_id, metadata)
+        return self.document_storage.update_document_metadata(document_id, metadata, replace=replace)
 
     # Chunk Operations (delegate to DocumentStorage)
     def add_document_chunks(

@@ -48,7 +48,7 @@ class BaseFileIntelTask(Task):
 
     def on_success(self, retval: Any, task_id: str, args: tuple, kwargs: dict) -> None:
         """Called when the task succeeds."""
-        logger.info(f"Task {self.name}[{task_id}] completed successfully")
+        logger.debug(f"Task {self.name}[{task_id}] completed successfully")
 
     def on_failure(
         self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo
@@ -76,7 +76,7 @@ class BaseFileIntelTask(Task):
     def log_execution_time(self, start_time: float, operation: str) -> None:
         """Log execution time for performance monitoring."""
         execution_time = time.time() - start_time
-        logger.info(f"{operation} completed in {execution_time:.2f} seconds")
+        logger.debug(f"{operation} completed in {execution_time:.2f} seconds")
 
     def validate_input(self, required_fields: list, **kwargs) -> None:
         """Validate required input fields."""

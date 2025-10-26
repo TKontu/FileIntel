@@ -723,10 +723,21 @@ def build_graphrag_index_task(
         finally:
             storage.close()
 
+            # Force aggressive memory cleanup after GraphRAG processing
+            # GraphRAG loads large DataFrames (entities, communities, relationships)
+            # that can consume 2-6GB. Without cleanup, worker holds memory during
+            # fork(), causing OOM kills due to copy-on-write memory pressure.
+            import gc
+            gc.collect()  # Force garbage collection
+            logger.info("Completed memory cleanup after GraphRAG task")
+
     except Exception as e:
         logger.error(
             f"Error building GraphRAG index for collection {collection_id}: {e}"
         )
+        # Force cleanup even on failure to prevent memory leaks
+        import gc
+        gc.collect()
         return {"collection_id": collection_id, "error": str(e), "status": "failed"}
 
 

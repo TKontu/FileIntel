@@ -3,12 +3,13 @@ from ..storage.models import SessionLocal, Collection
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from ..core.config import get_config
+from typing import Optional, Generator
 import uuid
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-def get_api_key(api_key: str = Security(api_key_header)):
+def get_api_key(api_key: Optional[str] = Security(api_key_header)) -> Optional[str]:
     config = get_config()
     if config.api.authentication.enabled:
         if not api_key:
@@ -20,7 +21,7 @@ def get_api_key(api_key: str = Security(api_key_header)):
     return None
 
 
-def get_storage():
+def get_storage() -> Generator[PostgreSQLStorage, None, None]:
     db = SessionLocal()
     try:
         yield PostgreSQLStorage(db)

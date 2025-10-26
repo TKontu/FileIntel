@@ -4,12 +4,16 @@
 **Base URL**: `http://localhost:8000/api/v2`
 **Interactive Documentation**: `http://localhost:8000/docs` (Swagger UI)
 
-## Verified vs Removed
+## Verification Status
 
-**VERIFIED** - These endpoints exist and are documented from actual code
-**REMOVED** - These were in the original doc but don't actually exist:
-- Rate limiting (config exists but not implemented)
-- Some response format details were inferred
+All endpoints in this document have been verified against the actual source code (as of 2025-10-26).
+
+**Recent corrections:**
+- Response format corrected (removed non-existent "message" field, added "api_version")
+- Added 4 missing endpoints (task retry/logs, metadata export/bulk-update)
+- Added missing operation type (incremental_update)
+
+**Note:** API authentication is optional and disabled by default.
 
 ---
 
@@ -39,8 +43,8 @@ Standard response structure:
 {
   "success": true,
   "data": {},
-  "message": "Success message",
   "timestamp": "2025-10-24T12:34:56.789Z",
+  "api_version": "2.0",
   "error": null
 }
 ```
@@ -50,11 +54,13 @@ Error response:
 {
   "success": false,
   "data": null,
-  "message": "Error description",
   "timestamp": "2025-10-24T12:34:56.789Z",
-  "error": "Detailed error"
+  "api_version": "2.0",
+  "error": "Detailed error message"
 }
 ```
+
+**Note:** Some endpoints may include a `message` field within the `data` object, but it's not part of the standard wrapper.
 
 ---
 
@@ -175,6 +181,7 @@ Start collection processing (async).
 **operation_type options:**
 - `complete_analysis` - Full pipeline (processing + embeddings + GraphRAG)
 - `document_processing_only` - Extract and chunk only
+- `incremental_update` - Process only new/unprocessed documents
 
 **Response:**
 ```json
@@ -542,6 +549,70 @@ Check metadata extraction status for collection.
 
 ---
 
+### GET /metadata/collection/{collection_identifier}/export
+Export metadata for all documents in collection.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "collection_id": "uuid",
+    "collection_name": "research-papers",
+    "total_documents": 10,
+    "documents_with_metadata": 8,
+    "metadata": [
+      {
+        "document_id": "uuid",
+        "filename": "paper.pdf",
+        "title": "Paper Title",
+        "authors": ["Author 1"],
+        "year": 2023
+      }
+    ]
+  }
+}
+```
+
+---
+
+### POST /metadata/bulk-update
+Bulk update metadata for multiple documents.
+
+**Request:**
+```json
+{
+  "updates": [
+    {
+      "document_id": "uuid",
+      "metadata": {
+        "title": "Updated Title",
+        "authors": ["Author 1", "Author 2"]
+      }
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "updated_count": 5,
+    "failed_count": 0,
+    "results": [
+      {
+        "document_id": "uuid",
+        "status": "updated"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### GET /metadata/system-status
 Check metadata system health.
 
@@ -615,6 +686,45 @@ Cancel running task.
 
 ### GET /tasks/{task_id}/result
 Get result of completed task.
+
+---
+
+### GET /tasks/{task_id}/logs
+Get execution logs for a task.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "task_id": "uuid",
+    "logs": [
+      {
+        "timestamp": "2025-10-24T12:34:56Z",
+        "level": "INFO",
+        "message": "Processing document..."
+      }
+    ]
+  }
+}
+```
+
+---
+
+### POST /tasks/{task_id}/retry
+Retry a failed task.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "task_id": "uuid",
+    "status": "PENDING",
+    "message": "Task queued for retry"
+  }
+}
+```
 
 ---
 
@@ -875,6 +985,6 @@ curl -s -X POST $BASE/collections/$COLL_ID/query \
 
 ---
 
-**Last Updated**: 2025-10-24
+**Last Updated**: 2025-10-26
 **API Version**: 2.0
-**Status**: All endpoints verified from source code
+**Status**: All endpoints verified from source code (response format corrected, 4 missing endpoints added)

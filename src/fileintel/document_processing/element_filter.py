@@ -260,7 +260,7 @@ def filter_elements_for_rag(
     # Log filtering statistics
     if skipped_count:
         skipped_summary = ', '.join([f"{count} {stype}" for stype, count in skipped_count.items()])
-        logger.info(f"Filtered out {sum(skipped_count.values())} elements: {skipped_summary}")
+        logger.warning(f"Filtered out {sum(skipped_count.values())} elements: {skipped_summary}")
 
     # Log parsed structure counts
     toc_entries = len(extracted_structure['toc']['entries'])
@@ -268,11 +268,11 @@ def filter_elements_for_rag(
     lot_entries = len(extracted_structure['lot']['entries'])
     headers = len(extracted_structure['headers']['hierarchy'])
 
-    logger.info(f"Filter results: {len(filtered)} elements to embed, "
-                f"{toc_entries} TOC entries, "
-                f"{lof_entries} LOF entries, "
-                f"{lot_entries} LOT entries, "
-                f"{headers} headers extracted")
+    logger.debug(f"Filter results: {len(filtered)} elements to embed, "
+                 f"{toc_entries} TOC entries, "
+                 f"{lof_entries} LOF entries, "
+                 f"{lot_entries} LOT entries, "
+                 f"{headers} headers extracted")
 
     return filtered, extracted_structure
 

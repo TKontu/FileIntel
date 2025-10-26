@@ -47,15 +47,16 @@ result.md
 result.json
 fileintel-image.tar
 debug_similarity.py
-cheatsheet*
-#src/graphrag/*
-CLAUDE.md
+cheatsheets/*
 graphrag_indices/*
 *.tar
 /examples/*
 
 #Graphrag
-
+src/graphrag/*
 
 #Mineru
 /mineru_outputs/*
+
+#Claude
+.claude/*

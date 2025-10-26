@@ -310,7 +310,7 @@ def _chunk_bullet_list(element: TextElement, max_tokens: int, chunker) -> List[D
             }
         })
 
-    logger.info(f"Split bullet list into {len(chunks)} groups")
+    logger.debug(f"Split bullet list into {len(chunks)} groups")
     return chunks
 
 
@@ -340,7 +340,7 @@ def _chunk_citation_prose(element: TextElement, max_tokens: int, chunker) -> Lis
         if chunk['metadata'].get('chunk_strategy') != 'single_element':
             chunk['metadata']['chunk_strategy'] = 'citation_aware_sentence'
 
-    logger.info(f"Chunked citation-heavy prose into {len(chunks)} chunks")
+    logger.debug(f"Chunked citation-heavy prose into {len(chunks)} chunks")
     return chunks
 
 
@@ -527,7 +527,7 @@ def _chunk_text(element: TextElement, max_tokens: int, chunker = None) -> List[D
         # Check if this strategy worked (all chunks within overage allowance)
         max_chunk_tokens = max(c['metadata']['token_count'] for c in chunks)
         if max_chunk_tokens <= max_tokens * max_overage_factor:
-            logger.info(
+            logger.debug(
                 f"Split using {strategy_name} boundaries: "
                 f"{len(chunks)} chunks, max={max_chunk_tokens} tokens"
             )
@@ -569,6 +569,6 @@ def chunk_elements_by_type(
         element_chunks = chunk_element_by_type(element, max_tokens, chunker)
         all_chunks.extend(element_chunks)
 
-    logger.info(f"Chunked {len(elements)} elements into {len(all_chunks)} chunks using type-aware strategies")
+    logger.debug(f"Chunked {len(elements)} elements into {len(all_chunks)} chunks using type-aware strategies")
 
     return all_chunks

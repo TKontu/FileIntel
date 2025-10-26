@@ -51,7 +51,7 @@ class TextChunker:
         try:
             from transformers import AutoTokenizer
             self.bge_tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-large-en')
-            logger.info("BGE tokenizer loaded for embedding compatibility")
+            logger.debug("BGE tokenizer loaded for embedding compatibility")
         except Exception as e:
             logger.warning(f"Could not load BGE tokenizer: {e}. Using OpenAI tokenizer only.")
 
@@ -68,7 +68,7 @@ class TextChunker:
 
         tokenizer_info = "BGE+OpenAI" if self.bge_tokenizer else "OpenAI"
         chunking_mode = "Two-tier" if self.enable_two_tier else "Traditional"
-        logger.info(
+        logger.debug(
             f"TextChunker initialized - Mode: {chunking_mode}, Unified chunking: {self.max_chars} chars max, "
             f"Vector: {self.vector_max_tokens} tokens max, GraphRAG: {self.graphrag_max_tokens} tokens max, "
             f"Target sentences: {self.target_sentences}, Overlap: {self.overlap_sentences}, "
@@ -853,7 +853,7 @@ class TextChunker:
             document_id: Optional document identifier for error logging
         """
         doc_context = f" | document_id={document_id}" if document_id else ""
-        logger.info(
+        logger.debug(
             f"Chunking text: {len(text)} characters, token limit: {self.vector_max_tokens}{doc_context}"
         )
 
@@ -871,7 +871,7 @@ class TextChunker:
         max_tokens = max(token_counts) if token_counts else 0
         oversized = sum(1 for count in token_counts if count > self.vector_max_tokens)
 
-        logger.info(
+        logger.debug(
             f"Chunking complete: {len(chunks)} chunks, "
             f"token range: {min(token_counts) if token_counts else 0}-{max_tokens}, "
             f"limit: {self.vector_max_tokens}, oversized: {oversized}{doc_context}"

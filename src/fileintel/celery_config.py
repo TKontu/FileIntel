@@ -174,7 +174,7 @@ def configure_celery_app(config=None):
         task_inherit_parent_priority=True,
         task_default_priority=5,  # Medium priority
         # Memory and cleanup settings
-        worker_max_memory_per_child=1000000,  # 1GB per child process (increased to handle MinerU responses)
+        worker_max_memory_per_child=4000000,  # 4GB per child process (handles GraphRAG heavy operations)
         task_soft_time_limit=celery_settings.task_soft_time_limit,  # Configurable from YAML
         task_time_limit=celery_settings.task_time_limit,  # Configurable from YAML
         # Result backend optimizations

@@ -105,8 +105,8 @@ class RerankerSettings(BaseModel):
     )
 
     timeout: Optional[int] = Field(
-        default=30,
-        description="HTTP timeout in seconds for reranking requests"
+        default=120,
+        description="HTTP timeout in seconds for reranking requests (handles cold model loading)"
     )
 
     model_name: str = Field(

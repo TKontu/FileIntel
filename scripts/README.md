@@ -1,5 +1,48 @@
 # FileIntel Utility Scripts
 
+## Debug Scripts (`debug/`)
+
+Ad-hoc test and debugging scripts for manual testing and validation.
+
+**⚠️ Note**: These are NOT automated pytest tests. They are standalone scripts for debugging specific features.
+
+### Available Debug Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `test_reranker.py` | Test reranking API functionality | `python scripts/debug/test_reranker.py` |
+| `test_page_tracking.py` | Debug page number preservation | `python scripts/debug/test_page_tracking.py` |
+| `test_citation_fix.py` | Test citation extraction fixes | `python scripts/debug/test_citation_fix.py` |
+| `test_citation_optimization.py` | Citation extraction performance | `python scripts/debug/test_citation_optimization.py` |
+| `test_bibliography_filtering.py` | Bibliography filtering logic | `python scripts/debug/test_bibliography_filtering.py` |
+| `test_llm_classifier.py` | LLM-based query classification | `python scripts/debug/test_llm_classifier.py` |
+| `test_embedding_load.py` | Embedding generation load test | `python scripts/debug/test_embedding_load.py` |
+| `test_export_import_compatibility.py` | Metadata export/import testing | `python scripts/debug/test_export_import_compatibility.py` |
+| `test_improved_detection.py` | Improved content detection | `python scripts/debug/test_improved_detection.py` |
+| `test_pdf_metadata.py` | PDF metadata extraction | `python scripts/debug/test_pdf_metadata.py` |
+| `test_rag_prompt_debug.py` | RAG prompt debugging | `python scripts/debug/test_rag_prompt_debug.py` |
+| `test_standalone_alerting.py` | Alerting functionality | `python scripts/debug/test_standalone_alerting.py` |
+| `test_celery.py` | Celery configuration check | `python scripts/debug/test_celery.py` |
+| `test_imports.py` | Verify GraphRAG imports | `python scripts/debug/test_imports.py` |
+
+### Usage
+
+Run individual scripts as needed for debugging:
+
+```bash
+# Example: Test reranker functionality
+python scripts/debug/test_reranker.py
+
+# Example: Check page tracking
+python scripts/debug/test_page_tracking.py
+```
+
+### Note on Integration Tests
+
+For automated testing, see the `tests/` directory which contains proper pytest-based tests with fixtures and assertions.
+
+---
+
 ## Export Document Chunks (`export_document_chunks.py`)
 
 Export all chunks from a document into a single readable markdown file in correct order.

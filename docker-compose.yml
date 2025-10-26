@@ -27,7 +27,7 @@ services:
   api:
     build: .
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info", "--access-log"]
     ports:
       - "8000:8000"
     volumes:
@@ -83,7 +83,13 @@ services:
   celery-worker:
     build: .
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--concurrency=6", "--pool=prefork", "--max-tasks-per-child=1000"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--concurrency=6", "--pool=prefork", "--max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-10}"]
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_WORKER_MEMORY_LIMIT:-8G}
+        reservations:
+          memory: ${CELERY_WORKER_MEMORY_RESERVATION:-2G}
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config

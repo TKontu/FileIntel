@@ -13,6 +13,7 @@ from ..dependencies import get_storage
 from ..services import get_collection_by_identifier
 from ...core.config import get_config
 from ...tasks.llm_tasks import extract_document_metadata
+from ...storage.postgresql_storage import PostgreSQLStorage
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class MetadataExtractionResponse(BaseModel):
 async def extract_document_metadata_endpoint(
     request: MetadataExtractionRequest,
     background_tasks: BackgroundTasks,
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Extract metadata from a document using LLM analysis."""
     try:
@@ -127,7 +128,7 @@ async def extract_document_metadata_endpoint(
 @router.get("/document/{document_id}", response_model=ApiResponseV2)
 async def get_document_metadata(
     document_id: str,
-    storage=Depends(get_storage)
+    storage: PostgreSQLStorage = Depends(get_storage)
 ):
     """Get extracted metadata for a document."""
     try:
@@ -175,7 +176,7 @@ async def extract_collection_metadata(
     collection_identifier: str,
     force_reextract: bool = Query(False, description="Force re-extraction for all documents"),
     max_chunks: int = Query(3, description="Number of chunks to use for extraction (default: 3)"),
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Extract metadata for all documents in a collection."""
     try:
@@ -272,7 +273,7 @@ async def extract_collection_metadata(
 @router.get("/collection/{collection_identifier}/status", response_model=ApiResponseV2)
 async def get_collection_metadata_status(
     collection_identifier: str,
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Get metadata extraction status for all documents in a collection."""
     try:
@@ -345,7 +346,7 @@ async def get_collection_metadata_status(
 @router.get("/collection/{collection_identifier}/export", response_model=ApiResponseV2)
 async def export_collection_metadata(
     collection_identifier: str,
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Export all documents with metadata for a collection.
 
@@ -410,7 +411,7 @@ async def export_collection_metadata(
 @router.post("/bulk-update", response_model=ApiResponseV2)
 async def bulk_update_metadata(
     request: MetadataBulkUpdateRequest,
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Bulk update metadata for multiple documents.
 
@@ -501,7 +502,7 @@ async def bulk_update_metadata(
 
 
 @router.get("/system-status", response_model=ApiResponseV2)
-async def get_metadata_system_status(storage=Depends(get_storage)):
+async def get_metadata_system_status(storage: PostgreSQLStorage = Depends(get_storage)):
     """Get metadata extraction system status."""
     try:
         # Check if metadata extraction dependencies are available

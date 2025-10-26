@@ -4,8 +4,15 @@ Consolidated GraphRAG CLI commands.
 Streamlined GraphRAG operations using shared CLI utilities.
 """
 
-import typer
+# Suppress transformers library warnings about PyTorch/TensorFlow/Flax
 import os
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*PyTorch.*TensorFlow.*Flax.*')
+
+import typer
 import logging
 import time
 from typing import Optional, List
@@ -69,7 +76,7 @@ def query_with_graphrag(
     ),
     question: str = typer.Argument(..., help="The question to ask using GraphRAG."),
     show_sources: bool = typer.Option(
-        False, "--show-sources", "-s", help="Show source documents with page numbers."
+        True, "--show-sources/--no-sources", "-s", help="Show source documents with page numbers."
     ),
 ):
     """Query a collection using GraphRAG for graph-based reasoning."""
@@ -83,10 +90,12 @@ def query_with_graphrag(
     result = cli_handler.handle_api_call(_graphrag_query, "GraphRAG query")
     response_data = result.get("data", result)
 
-    cli_handler.console.print(f"[bold blue]GraphRAG Query:[/bold blue] {question}")
+    # Header (matching vector query format)
+    cli_handler.console.print(f"[bold blue]Query:[/bold blue] {question}")
     cli_handler.console.print(
         f"[bold blue]Collection:[/bold blue] {collection_identifier}"
     )
+    cli_handler.console.print(f"[bold blue]RAG Type:[/bold blue] graph")
     cli_handler.console.print()
 
     # Handle both "answer" (from service wrapper) and "response" (from direct GraphRAG)
@@ -96,18 +105,68 @@ def query_with_graphrag(
     if isinstance(answer, dict):
         answer = answer.get("response", str(answer))
 
-    # Convert citations if --show-sources flag is set
+    # Convert citations if show_sources is enabled
     display_answer = answer
+    sources = None
+    citation_ids = None
     if show_sources:
-        converted_answer, sources = _display_source_documents(answer, collection_identifier, cli_handler)
+        converted_answer, sources, citation_ids = _display_source_documents(answer, collection_identifier, cli_handler)
         if converted_answer:
             display_answer = converted_answer
 
-    cli_handler.console.print(f"[bold green]Answer:[/bold green]")
+    # 1. ANSWER FIRST (matching vector query format)
+    cli_handler.console.print(f"[bold green]Answer:[/bold green] {display_answer}")
 
-    # Display the answer (don't use Markdown renderer to avoid centered headers)
-    # Instead, just print with proper formatting preserved
-    cli_handler.console.print(display_answer)
+    # 2. SOURCES SECOND (matching vector query format)
+    if show_sources and sources:
+        cli_handler.console.print(f"\n[bold blue]Sources ({len(sources)}):[/bold blue]")
+        for i, source in enumerate(sources, 1):
+            doc = source.get("document", "Unknown")
+            metadata = source.get("metadata", {})
+            chunk_count = source.get("chunk_count", 0)
+
+            # Build in-text citation
+            authors = metadata.get("author_surnames", []) or metadata.get("authors", [])
+            year = metadata.get("publication_year") or metadata.get("year")
+
+            if authors and year:
+                if len(authors) == 1:
+                    in_text = f"({authors[0]}, {year})"
+                elif len(authors) == 2:
+                    in_text = f"({authors[0]} & {authors[1]}, {year})"
+                else:
+                    in_text = f"({authors[0]} et al., {year})"
+            elif year:
+                title = metadata.get("title", doc.replace('.pdf', ''))
+                in_text = f"({title}, {year})"
+            else:
+                in_text = f"({doc.replace('.pdf', '')})"
+
+            # Add page info if available
+            page_numbers = source.get("page_numbers", "")
+            if page_numbers:
+                in_text = f"{in_text[:-1]}, {page_numbers})"
+
+            # Build full citation (document name)
+            full_citation = doc
+
+            # Show chunk count as relevance indicator
+            max_chunk_count = max([s.get('chunk_count', 1) for s in sources])
+            relevance = chunk_count / max_chunk_count if max_chunk_count > 0 else 0.0
+            cli_handler.console.print(f"  {i}. {in_text} - {full_citation} (relevance: {relevance:.3f})")
+
+    # 3. ADDITIONAL CONTEXT AT THE END (GraphRAG-specific information)
+
+    # Show citation summary first (if available)
+    if show_sources and citation_ids:
+        if citation_ids["report_ids"] or citation_ids["entity_ids"] or citation_ids["relationship_ids"]:
+            cli_handler.console.print("\n[bold blue]GraphRAG Source References:[/bold blue]")
+            if citation_ids["report_ids"]:
+                cli_handler.console.print(f"  • Community Reports: {len(citation_ids['report_ids'])} referenced")
+            if citation_ids["entity_ids"]:
+                cli_handler.console.print(f"  • Entities: {len(citation_ids['entity_ids'])} referenced")
+            if citation_ids["relationship_ids"]:
+                cli_handler.console.print(f"  • Relationships: {len(citation_ids['relationship_ids'])} referenced")
 
     # Show context information if available (from GraphRAG response)
     context = response_data.get("context", {})
@@ -221,6 +280,9 @@ def list_communities(
     limit: Optional[int] = typer.Option(
         10, "--limit", "-l", help="Maximum number of communities to show."
     ),
+    export: Optional[str] = typer.Option(
+        None, "--export", "-e", help="Export communities to markdown file."
+    ),
 ):
     """List GraphRAG communities for a collection."""
 
@@ -235,27 +297,102 @@ def list_communities(
     )
     communities = communities_data.get("data", communities_data)
 
-    if isinstance(communities, list) and communities:
-        cli_handler.console.print(
-            f"[bold blue]GraphRAG Communities ({len(communities)}):[/bold blue]"
-        )
-        for community in communities:
-            title = community.get("title", "Unknown")
-            level = community.get("level", 0)
-            summary = community.get("summary", "")[:150]  # Truncate
-            size = community.get("size", 0)
-            community_id = community.get("community_id", "N/A")
-
-            cli_handler.console.print(
-                f"[bold]{title}[/bold] (ID: {community_id}, Level: {level}, Size: {size})"
-            )
-            if summary:
-                cli_handler.console.print(f"  {summary}...")
-            cli_handler.console.print()
-    else:
+    if not isinstance(communities, list) or not communities:
         cli_handler.console.print(
             f"[yellow]No communities found for collection '{collection_identifier}'[/yellow]"
         )
+        return
+
+    # Export to markdown if requested
+    if export:
+        _export_communities_to_markdown(communities, collection_identifier, export)
+        cli_handler.display_success(f"Exported {len(communities)} communities to {export}")
+        return
+
+    # Display to console
+    cli_handler.console.print(
+        f"[bold blue]GraphRAG Communities ({len(communities)}):[/bold blue]"
+    )
+    for community in communities:
+        title = community.get("title", "Unknown")
+        level = community.get("level", 0)
+        summary = community.get("summary", "")[:150]  # Truncate
+        size = community.get("size", 0)
+        community_id = community.get("community_id", "N/A")
+
+        cli_handler.console.print(
+            f"[bold]{title}[/bold] (ID: {community_id}, Level: {level}, Size: {size})"
+        )
+        if summary:
+            cli_handler.console.print(f"  {summary}...")
+        cli_handler.console.print()
+
+
+@app.command("community")
+def view_community(
+    collection_identifier: str = typer.Argument(
+        ..., help="The name or ID of the collection."
+    ),
+    community_id: str = typer.Argument(
+        ..., help="The ID of the community to view."
+    ),
+    export: Optional[str] = typer.Option(
+        None, "--export", "-e", help="Export community to markdown file."
+    ),
+):
+    """View details of a specific GraphRAG community."""
+
+    def _get_community(api):
+        return api._request(
+            "GET", f"graphrag/{collection_identifier}/communities/{community_id}"
+        )
+
+    community_result = cli_handler.handle_api_call(_get_community, "get GraphRAG community")
+    community_data = community_result.get("data", community_result)
+
+    if not community_data:
+        cli_handler.console.print(f"[yellow]Community '{community_id}' not found[/yellow]")
+        cli_handler.console.print(f"[dim]Tip: Use 'fileintel graphrag communities {collection_identifier}' to list available communities[/dim]")
+        return
+
+    # Extract community fields
+    title = community_data.get("title", "Unknown")
+    summary = community_data.get("summary", "No summary available")
+    level = community_data.get("level", 0)
+    rank = community_data.get("rank", 0.0)
+    size = community_data.get("size", 0)
+    full_content = community_data.get("full_content", "")
+    findings = community_data.get("findings", "")
+
+    # Export if requested
+    if export:
+        _export_single_community_to_markdown(community_data, collection_identifier, export)
+        cli_handler.display_success(f"Exported community '{title}' to {export}")
+        return
+
+    # Display to console
+    cli_handler.console.print(f"\n[bold blue]Community: {title}[/bold blue]")
+    cli_handler.console.print(f"[dim]ID: {community_id}[/dim]")
+    cli_handler.console.print(f"[dim]Collection: {collection_identifier}[/dim]\n")
+
+    # Metadata
+    cli_handler.console.print(f"[bold]Level:[/bold] {level}")
+    cli_handler.console.print(f"[bold]Rank:[/bold] {rank:.2f}")
+    cli_handler.console.print(f"[bold]Size:[/bold] {size} entities\n")
+
+    # Summary
+    cli_handler.console.print(f"[bold green]Summary:[/bold green]")
+    cli_handler.console.print(summary)
+
+    # Full content if available
+    if full_content and full_content != summary:
+        cli_handler.console.print(f"\n[bold green]Full Content:[/bold green]")
+        cli_handler.console.print(full_content)
+
+    # Findings if available
+    if findings:
+        cli_handler.console.print(f"\n[bold green]Findings:[/bold green]")
+        cli_handler.console.print(findings)
 
 
 @app.command("rebuild")
@@ -748,27 +885,18 @@ def _clear_session_cache():
 
 
 def _display_source_documents(answer_text, collection_identifier, cli_handler):
-    """Display source documents traced from GraphRAG answer.
+    """Trace source documents from GraphRAG answer and convert citations.
 
     Returns:
-        tuple: (converted_answer_text, sources) or (answer_text, None) if tracing fails
+        tuple: (converted_answer_text, sources, citation_ids) or (answer_text, None, None) if tracing fails
     """
 
     # Phase 1: Parse citation IDs
     citation_ids = _parse_citation_ids(answer_text)
 
     if not citation_ids["report_ids"] and not citation_ids["entity_ids"]:
-        cli_handler.console.print("\n[dim]Note: GraphRAG response contains no inline citations to trace[/dim]")
-        return answer_text, None
-
-    # Display citation summary
-    cli_handler.console.print("\n[bold blue]GraphRAG Source References:[/bold blue]")
-    if citation_ids["report_ids"]:
-        cli_handler.console.print(f"  • Community Reports: {len(citation_ids['report_ids'])} referenced")
-    if citation_ids["entity_ids"]:
-        cli_handler.console.print(f"  • Entities: {len(citation_ids['entity_ids'])} referenced")
-    if citation_ids["relationship_ids"]:
-        cli_handler.console.print(f"  • Relationships: {len(citation_ids['relationship_ids'])} referenced")
+        # No citations to trace, return original answer
+        return answer_text, None, None
 
     # Get workspace path
     def _get_index_info(api):
@@ -780,8 +908,8 @@ def _display_source_documents(answer_text, collection_identifier, cli_handler):
         workspace_path = index_data.get("index_path")
 
         if not workspace_path:
-            cli_handler.console.print("\n[yellow]No GraphRAG index found for source tracing[/yellow]")
-            return answer_text, None
+            logger.warning("No GraphRAG index found for source tracing")
+            return answer_text, None, None
 
         # Transform Docker path to local filesystem path
         # API runs in Docker (/data/graphrag_indices/...) but CLI runs locally (./graphrag_indices/...)
@@ -800,15 +928,11 @@ def _display_source_documents(answer_text, collection_identifier, cli_handler):
         # Convert to Harvard citations with vector similarity matching
         converted_answer = _convert_to_harvard_citations(answer_text, sources, collection_identifier, cli_handler)
 
-        # Display sources
-        _display_sources(sources, cli_handler)
-
-        return converted_answer, sources
+        return converted_answer, sources, citation_ids
 
     except Exception as e:
         logger.error(f"Source tracing failed: {e}", exc_info=True)
-        cli_handler.console.print(f"\n[yellow]Could not trace sources: {e}[/yellow]")
-        return answer_text, None
+        return answer_text, None, None
     finally:
         # Always cleanup cache, even on error
         _clear_session_cache()
@@ -837,3 +961,146 @@ def _display_sources(sources, cli_handler):
 
     if len(sources) > 10:
         cli_handler.console.print(f"\n  [dim]... and {len(sources) - 10} more documents[/dim]")
+
+
+def _export_communities_to_markdown(communities, collection_identifier, output_path):
+    """Export GraphRAG communities to a markdown file.
+
+    Args:
+        communities: List of community dicts with title, summary, level, etc.
+        collection_identifier: Collection name/ID
+        output_path: Path to output markdown file
+    """
+    from datetime import datetime
+
+    markdown_lines = []
+
+    # Title and metadata
+    markdown_lines.append(f"# GraphRAG Communities: {collection_identifier}")
+    markdown_lines.append("")
+    markdown_lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    markdown_lines.append(f"**Total Communities:** {len(communities)}")
+    markdown_lines.append("")
+    markdown_lines.append("---")
+    markdown_lines.append("")
+
+    # Sort communities by level (descending) and rank (descending)
+    sorted_communities = sorted(
+        communities,
+        key=lambda c: (c.get("level", 0), c.get("rank", 0)),
+        reverse=True
+    )
+
+    # Export each community
+    for i, community in enumerate(sorted_communities, 1):
+        title = community.get("title", "Unknown")
+        community_id = community.get("community_id", "N/A")
+        level = community.get("level", 0)
+        rank = community.get("rank", 0.0)
+        size = community.get("size", 0)
+        summary = community.get("summary", "No summary available")
+
+        # Community header
+        markdown_lines.append(f"## {i}. {title}")
+        markdown_lines.append("")
+
+        # Metadata table
+        markdown_lines.append("| Property | Value |")
+        markdown_lines.append("|----------|-------|")
+        markdown_lines.append(f"| **Community ID** | {community_id} |")
+        markdown_lines.append(f"| **Level** | {level} |")
+        markdown_lines.append(f"| **Rank** | {rank:.2f} |")
+        markdown_lines.append(f"| **Size** | {size} entities |")
+        markdown_lines.append("")
+
+        # Summary
+        markdown_lines.append("### Summary")
+        markdown_lines.append("")
+        markdown_lines.append(summary)
+        markdown_lines.append("")
+        markdown_lines.append("---")
+        markdown_lines.append("")
+
+    # Write to file
+    markdown_content = "\n".join(markdown_lines)
+
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+        logger.info(f"Exported {len(communities)} communities to {output_path}")
+    except Exception as e:
+        logger.error(f"Failed to export communities: {e}")
+        raise
+
+
+def _export_single_community_to_markdown(community_data, collection_identifier, output_path):
+    """Export a single GraphRAG community to a markdown file.
+
+    Args:
+        community_data: Dict with title, summary, level, etc. for one community
+        collection_identifier: Collection name/ID
+        output_path: Path to output markdown file
+    """
+    from datetime import datetime
+
+    markdown_lines = []
+
+    title = community_data.get("title", "Unknown")
+    community_id = community_data.get("community_id", "N/A")
+    level = community_data.get("level", 0)
+    rank = community_data.get("rank", 0.0)
+    size = community_data.get("size", 0)
+    summary = community_data.get("summary", "No summary available")
+    full_content = community_data.get("full_content", "")
+    findings = community_data.get("findings", "")
+
+    # Title
+    markdown_lines.append(f"# {title}")
+    markdown_lines.append("")
+    markdown_lines.append(f"**Collection:** {collection_identifier}")
+    markdown_lines.append(f"**Community ID:** {community_id}")
+    markdown_lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    markdown_lines.append("")
+    markdown_lines.append("---")
+    markdown_lines.append("")
+
+    # Metadata
+    markdown_lines.append("## Metadata")
+    markdown_lines.append("")
+    markdown_lines.append("| Property | Value |")
+    markdown_lines.append("|----------|-------|")
+    markdown_lines.append(f"| **Level** | {level} |")
+    markdown_lines.append(f"| **Rank** | {rank:.2f} |")
+    markdown_lines.append(f"| **Size** | {size} entities |")
+    markdown_lines.append("")
+
+    # Summary
+    markdown_lines.append("## Summary")
+    markdown_lines.append("")
+    markdown_lines.append(summary)
+    markdown_lines.append("")
+
+    # Full content if different from summary
+    if full_content and full_content != summary:
+        markdown_lines.append("## Full Content")
+        markdown_lines.append("")
+        markdown_lines.append(full_content)
+        markdown_lines.append("")
+
+    # Findings
+    if findings:
+        markdown_lines.append("## Findings")
+        markdown_lines.append("")
+        markdown_lines.append(findings)
+        markdown_lines.append("")
+
+    # Write to file
+    markdown_content = "\n".join(markdown_lines)
+
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+        logger.info(f"Exported community '{title}' to {output_path}")
+    except Exception as e:
+        logger.error(f"Failed to export community: {e}")
+        raise

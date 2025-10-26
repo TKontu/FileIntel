@@ -463,9 +463,7 @@ async def submit_collection_processing_task(
                 )
             else:
                 # Document needs processing
-                file_path = doc.metadata.get("file_path") if doc.metadata else None
-                if not file_path and doc.document_metadata:
-                    file_path = doc.document_metadata.get("file_path")
+                file_path = doc.document_metadata.get("file_path") if doc.document_metadata else None
 
                 if file_path:
                     file_paths.append(file_path)
@@ -684,12 +682,7 @@ async def submit_batch_processing_tasks(
                 # Extract file paths from document metadata
                 file_paths = []
                 for doc in documents:
-                    # Try both metadata and document_metadata fields
-                    file_path = (
-                        doc.metadata.get("file_path") if doc.metadata
-                        else doc.document_metadata.get("file_path") if doc.document_metadata
-                        else None
-                    )
+                    file_path = doc.document_metadata.get("file_path") if doc.document_metadata else None
                     if file_path:
                         file_paths.append(file_path)
 

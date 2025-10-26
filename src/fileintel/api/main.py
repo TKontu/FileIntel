@@ -1,9 +1,18 @@
+# Suppress transformers library warnings about PyTorch/TensorFlow/Flax
+import os
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*PyTorch.*TensorFlow.*Flax.*')
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from fileintel.core.logging import setup_logging
-from fileintel.core.config import get_config
+from fileintel.core.config import get_config, Settings
+from typing import Optional
 from fileintel.storage.models import create_tables
 from fileintel.api.routes import (
     collections_v2,
@@ -29,7 +38,7 @@ API_V1_PREFIX = "/api/v1"
 API_V2_PREFIX = "/api/v2"
 
 
-def configure_cors(app: FastAPI, config=None):
+def configure_cors(app: FastAPI, config: Optional[Settings] = None) -> None:
     """Configure CORS middleware with provided or default configuration."""
     if config is None:
         config = get_config()
@@ -150,6 +159,8 @@ async def on_startup():
     import os
     import asyncio
 
+    print("STARTUP: Beginning startup sequence...")
+
     # ============================================================================
     # CRITICAL FIX: fnllm v0.4.1 Concurrency Bottleneck
     # ============================================================================
@@ -171,6 +182,7 @@ async def on_startup():
     #
     # See: /docs/graphrag_concurrency_bottleneck_analysis.md for full analysis
     # ============================================================================
+    print("STARTUP: Applying fnllm concurrency fix...")
     try:
         from fnllm.limiting.base import LimitContext
 
@@ -180,36 +192,59 @@ async def on_startup():
 
         logger = logging.getLogger(__name__)
         logger.info("✓ Applied fnllm concurrency fix: LimitContext.acquire_semaphore = Semaphore(25)")
+        print("STARTUP: fnllm concurrency fix applied")
     except ImportError:
         # fnllm not installed - GraphRAG not available, skip fix
+        print("STARTUP: fnllm not installed, skipping concurrency fix")
         pass
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.warning(f"Failed to apply fnllm concurrency fix: {e}")
+        print(f"STARTUP: Failed to apply fnllm fix: {e}")
     # ============================================================================
 
+    print("STARTUP: Loading config...")
     config = get_config()
+    print("STARTUP: Config loaded, setting up logging...")
     setup_logging(config)
+    print("STARTUP: Logging setup complete")
 
     # Only run migrations if this service is designated to handle them
     should_run_migrations = os.environ.get('RUN_MIGRATIONS', 'false').lower() == 'true'
     logger = logging.getLogger(__name__)
 
     if should_run_migrations:
+        print("STARTUP: Running database migrations...")
         logger.info("Running database table creation and migrations...")
         create_tables()
+        print("STARTUP: Database migrations complete")
     else:
         logger.info("Skipping database migrations - not designated migration runner")
+        print("STARTUP: Skipping database migrations")
 
     # Test cache availability
+    print("STARTUP: Testing Redis cache availability...")
     cache = get_cache()
+    print("STARTUP: Cache instance created, pinging Redis...")
     if not cache.ping():
         logger.warning("Redis cache is not available")
+        print("STARTUP: Redis cache is NOT available")
+    else:
+        print("STARTUP: Redis cache is available")
 
+    print("STARTUP: Checking GraphRAG cache warmup settings...")
     if config.rag.cache.enabled and config.rag.cache.warmup_collections:
+        print(f"STARTUP: Starting GraphRAG cache warmup for {len(config.rag.cache.warmup_collections)} collections...")
+        logger.info("Starting GraphRAG cache warmup...")
         storage = get_storage()
         cache = GraphRAGDataFrameCache(config)
         await cache.warmup_cache(storage)
+        logger.info("GraphRAG cache warmup completed")
+        print("STARTUP: GraphRAG cache warmup completed")
+    else:
+        print("STARTUP: GraphRAG cache warmup not configured")
+
+    print("STARTUP: Startup sequence complete!")
 
 
 @app.on_event("shutdown")

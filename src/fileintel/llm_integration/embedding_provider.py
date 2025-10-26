@@ -47,7 +47,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             # Common BERT-style tokenizer used by many embedding models
             self.bert_tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
             logger = logging.getLogger(__name__)
-            logger.info("BERT tokenizer loaded for dual validation")
+            logger.debug("BERT tokenizer loaded for dual validation")
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.warning(f"Could not load BERT tokenizer: {e}. Using OpenAI tokenizer only.")
@@ -64,7 +64,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.max_tokens = min(self.max_tokens, safety_margin)
 
         logger = logging.getLogger(__name__)
-        logger.info(
+        logger.debug(
             f"Embedding provider initialized - Model: {self.model}, Base URL: {embedding_base_url}, Max tokens: {self.max_tokens}"
         )
 

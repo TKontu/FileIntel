@@ -70,7 +70,7 @@ rag:
     # API settings (vLLM or OpenAI-compatible server)
     base_url: ${RAG_RERANKING_BASE_URL:-http://192.168.0.136:9003/v1}
     api_key: ${RAG_RERANKING_API_KEY:-ollama}
-    timeout: ${RAG_RERANKING_TIMEOUT:-30}
+    timeout: ${RAG_RERANKING_TIMEOUT:-120}  # Handles cold model loading
 
     model_name: ${RAG_RERANKING_MODEL:-bge-reranker-v2-m3}
 
@@ -187,19 +187,63 @@ logging:
   # Component-specific log levels (overrides for specific loggers)
   # Useful for seeing progress at INFO while keeping root at WARNING
   component_levels:
-    # Application components (show progress when indexing/processing)
-    fileintel.rag.graph_rag.services: INFO
-    fileintel.tasks.graphrag_tasks: INFO
-    fileintel.tasks.workflow_tasks: INFO  # Vector RAG workflow progress
-    fileintel.document_processing: INFO
+    # High-level progress (INFO level - user-visible progress)
+    fileintel.tasks.workflow_tasks: INFO                          # Workflow progress tracking
+    fileintel.rag.graph_rag.services.progress_callback: INFO      # GraphRAG workflow progress
+    fileintel.rag.graph_rag.services: INFO                        # GraphRAG service operations
+    fileintel.tasks.graphrag_tasks: INFO                          # GraphRAG task operations
+
+    # Detailed operations (DEBUG level - enable for troubleshooting)
+    fileintel.document_processing.element_filter: DEBUG           # Element filtering details
+    fileintel.document_processing.chunking: DEBUG                 # Chunking operations
+    fileintel.document_processing.type_aware_chunking: DEBUG      # Type-aware chunking
+    fileintel.tasks.document_tasks: DEBUG                         # Document task operations
+
     # GraphRAG library (show workflow progress only)
     graphrag.index.workflows: INFO
+
     # Keep these quiet (too verbose - logs every chunk/batch)
     fileintel.tasks.llm_tasks: WARNING          # Logs every chunk embedding
-    fileintel.llm_integration: WARNING           # Logs every batch to API
-    graphrag.index.operations: WARNING
-    graphrag.index.text_splitting: WARNING
-    graphrag.query: WARNING
+    fileintel.llm_integration: WARNING          # Logs every batch to API
+
+    # GraphRAG library - suppress verbose operation logs
+    graphrag.index.operations: WARNING          # General operations
+    graphrag.index.text_splitting: WARNING      # Text splitting
+    graphrag.index.graph: WARNING               # All graph operations (extraction, etc.)
+    graphrag.index.graph.extractors: WARNING    # Graph extraction with "DEBUG" messages
+    graphrag.index.graph.extraction: WARNING    # Entity/relationship extraction
+    graphrag.index.operations.extract_graph: WARNING  # Extract graph progress logs
+    graphrag.index.operations.summarize_descriptions: WARNING  # Summarize progress logs
+    graphrag.query: WARNING                     # Query operations
+    fnllm: WARNING                              # GraphRAG's LLM library (achat, model calls)
+    fnllm.events: WARNING                       # FNLLM event logging
+    fnllm.openai: WARNING                       # FNLLM OpenAI integration
+    graphrag: WARNING                           # Catch-all for any other graphrag logs
+
+    # Celery task logging (all variants)
+    celery: WARNING                             # General Celery
+    celery.app: WARNING                         # Celery app
+    celery.app.trace: WARNING                   # Task execution traces
+    celery.worker: WARNING                      # Worker logs
+    celery.worker.strategy: WARNING             # Worker strategy
+    celery.worker.consumer: WARNING             # Task consumer
+    billiard: WARNING                           # Celery's process pool
+
+    # HTTP client libraries (all variants)
+    httpx: WARNING                              # HTTP client library
+    httpcore: WARNING                           # HTTP core
+    httpcore.connection: WARNING                # HTTP connections
+    httpcore.http11: WARNING                    # HTTP/1.1 protocol
+    urllib3: WARNING                            # Fallback HTTP library
+    urllib3.connectionpool: WARNING             # Connection pooling
+
+    # API server logging
+    uvicorn: INFO                               # Server lifecycle (startup, shutdown)
+    uvicorn.access: INFO                        # Access logs (HTTP requests/responses)
+    uvicorn.error: WARNING                      # Error logs
+
+    # NOTE: Important warnings (like filtered elements) will still appear
+    # since they use WARNING level, which is above DEBUG/INFO
 
 paths:
   uploads: ${UPLOADS_DIR:-/home/appuser/app/uploads}

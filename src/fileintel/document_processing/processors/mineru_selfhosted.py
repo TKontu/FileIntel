@@ -85,7 +85,7 @@ class MinerUSelfHostedProcessor:
                 f"Invalid model_version '{backend}'. Must be one of: {valid_backends}"
             )
 
-        logger.info(f"Configured for self-hosted MinerU API at {mineru_config.base_url} (backend: {backend})")
+        logger.debug(f"Configured for self-hosted MinerU API at {mineru_config.base_url} (backend: {backend})")
 
         if backend == 'vlm':
             logger.info(
@@ -105,7 +105,7 @@ class MinerUSelfHostedProcessor:
 
         try:
             # Process with self-hosted MinerU API
-            log.info(f"Processing {file_path.name} with self-hosted MinerU API")
+            log.debug(f"Processing {file_path.name} with self-hosted MinerU API")
 
             mineru_results = self._process_with_selfhosted_api(file_path, log)
 
@@ -181,7 +181,7 @@ class MinerUSelfHostedProcessor:
 
         # Use context manager for proper file handle management
         try:
-            log.info(f"Uploading {file_path.name} to self-hosted MinerU API (backend: {backend})")
+            log.debug(f"Uploading {file_path.name} to self-hosted MinerU API (backend: {backend})")
 
             with open(file_path, 'rb') as file_handle:
                 files = {
@@ -202,7 +202,7 @@ class MinerUSelfHostedProcessor:
 
             if content_type == 'application/zip':
                 # ZIP file response
-                log.info("Received ZIP file response from self-hosted API")
+                log.debug("Received ZIP file response from self-hosted API")
                 return {
                     'response_type': 'zip',
                     'zip_content': response.content,
@@ -210,7 +210,7 @@ class MinerUSelfHostedProcessor:
                 }
             else:
                 # JSON response - validate before processing
-                log.info("Received JSON response from self-hosted API")
+                log.debug("Received JSON response from self-hosted API")
                 try:
                     json_response = response.json()
                     if not isinstance(json_response, dict):
@@ -248,7 +248,7 @@ class MinerUSelfHostedProcessor:
 
         try:
             doc_output_dir.mkdir(parents=True, exist_ok=True)
-            log.info(f"Saving MinerU outputs to {doc_output_dir}")
+            log.debug(f"Saving MinerU outputs to {doc_output_dir}")
 
             if mineru_results['response_type'] == 'zip':
                 # Extract and save ZIP contents
@@ -258,13 +258,13 @@ class MinerUSelfHostedProcessor:
                 zip_path = doc_output_dir / f"{doc_name}.zip"
                 with open(zip_path, 'wb') as f:
                     f.write(zip_content)
-                log.info(f"Saved raw ZIP: {zip_path}")
+                log.debug(f"Saved raw ZIP: {zip_path}")
 
                 # Extract ZIP contents
                 with zipfile.ZipFile(io.BytesIO(zip_content)) as zip_file:
                     zip_file.extractall(doc_output_dir)
                     extracted_files = zip_file.namelist()
-                    log.info(f"Extracted {len(extracted_files)} files from ZIP")
+                    log.debug(f"Extracted {len(extracted_files)} files from ZIP")
 
             else:
                 # JSON response - save the JSON data
@@ -272,7 +272,7 @@ class MinerUSelfHostedProcessor:
                 json_path = doc_output_dir / f"{doc_name}_response.json"
                 with open(json_path, 'w', encoding='utf-8') as f:
                     json.dump(json_response, f, indent=2, ensure_ascii=False)
-                log.info(f"Saved JSON response: {json_path}")
+                log.debug(f"Saved JSON response: {json_path}")
 
                 # Extract and save individual components if available
                 if 'results' in json_response:
@@ -286,7 +286,7 @@ class MinerUSelfHostedProcessor:
                             md_path = doc_output_dir / f"{doc_name}.md"
                             with open(md_path, 'w', encoding='utf-8') as f:
                                 f.write(doc_data['md_content'])
-                            log.info(f"Saved markdown: {md_path}")
+                            log.debug(f"Saved markdown: {md_path}")
 
                         # Save content_list JSON
                         if doc_data.get('content_list'):
@@ -296,7 +296,7 @@ class MinerUSelfHostedProcessor:
                             cl_path = doc_output_dir / f"{doc_name}_content_list.json"
                             with open(cl_path, 'w', encoding='utf-8') as f:
                                 json.dump(content_list, f, indent=2, ensure_ascii=False)
-                            log.info(f"Saved content_list: {cl_path}")
+                            log.debug(f"Saved content_list: {cl_path}")
 
                         # Save model_output JSON
                         if doc_data.get('model_output'):
@@ -306,7 +306,7 @@ class MinerUSelfHostedProcessor:
                             mo_path = doc_output_dir / f"{doc_name}_model.json"
                             with open(mo_path, 'w', encoding='utf-8') as f:
                                 json.dump(model_output, f, indent=2, ensure_ascii=False)
-                            log.info(f"Saved model_output: {mo_path}")
+                            log.debug(f"Saved model_output: {mo_path}")
 
                         # Save middle_json
                         if doc_data.get('middle_json'):
@@ -316,9 +316,9 @@ class MinerUSelfHostedProcessor:
                             mj_path = doc_output_dir / f"{doc_name}_middle.json"
                             with open(mj_path, 'w', encoding='utf-8') as f:
                                 json.dump(middle_json, f, indent=2, ensure_ascii=False)
-                            log.info(f"Saved middle_json: {mj_path}")
+                            log.debug(f"Saved middle_json: {mj_path}")
 
-            log.info(f"Successfully saved MinerU outputs for {file_path.name}")
+            log.debug(f"Successfully saved MinerU outputs for {file_path.name}")
 
         except Exception as e:
             # Don't fail processing if output saving fails
@@ -577,7 +577,7 @@ class MinerUSelfHostedProcessor:
 
         # Check feature flag for element-level vs page-level processing
         if mineru_config.use_element_level_types:
-            log.info("Using element-level type preservation (EXPERIMENTAL)")
+            log.debug("Using element-level type preservation")
             return self._create_elements_element_level(json_data, markdown_content, file_path, log)
         else:
             return self._create_elements_page_level(json_data, markdown_content, file_path, log)
@@ -602,7 +602,7 @@ class MinerUSelfHostedProcessor:
         # Extract markdown headers and map to pages for enhanced metadata
         markdown_headers = self._extract_markdown_headers(markdown_content)
         headers_by_page = self._map_headers_to_pages(markdown_headers, markdown_content, content_list)
-        log.info(f"Extracted {len(markdown_headers)} markdown headers across {len(headers_by_page)} pages")
+        log.debug(f"Extracted {len(markdown_headers)} markdown headers across {len(headers_by_page)} pages")
 
         # Group elements by actual page_idx from JSON
         elements_by_page = {}

@@ -46,10 +46,10 @@ except ImportError as e:
     def get_celery_app():
         return None
 
-    def get_task_status(task_id):
+    def get_task_status(task_id: str):
         raise HTTPException(503, "Celery not available")
 
-    def cancel_task(task_id, terminate=False):
+    def cancel_task(task_id: str, terminate: bool = False):
         raise HTTPException(503, "Celery not available")
 
     def get_active_tasks():

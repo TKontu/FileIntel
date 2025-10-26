@@ -14,8 +14,122 @@ from .base import BaseFileIntelTask
 from .document_tasks import process_document, extract_document_metadata
 from .llm_tasks import generate_and_store_chunk_embedding
 from .graphrag_tasks import build_graph_index
+from .progress_tracker import WorkflowProgressTracker
 
 logger = logging.getLogger(__name__)
+
+
+@app.task(queue="default")
+def track_task_completion(workflow_id: str, task_name: str) -> None:
+    """
+    Track completion of a single task in a workflow for progress logging.
+
+    Called automatically as a link callback after each task completes.
+    Logs progress at intervals (every 10 tasks or 10% progress).
+
+    NOTE: This task must NEVER raise exceptions, as it's a non-critical
+    logging operation that shouldn't break workflows.
+
+    Args:
+        workflow_id: Unique workflow identifier (parent task ID)
+        task_name: Human-readable task type (e.g., "document", "embedding")
+    """
+    try:
+        import time
+        tracker = WorkflowProgressTracker()
+        current, total, should_log = tracker.increment(workflow_id)
+
+        if should_log and total > 0:
+            percentage = (current / total) * 100
+            if current == total:
+                logger.info(f"Completed: {current}/{total} {task_name}s (100%)")
+                # Cleanup Redis keys when workflow completes
+                tracker.cleanup(workflow_id)
+            else:
+                logger.info(f"Progress: {current}/{total} {task_name}s ({percentage:.0f}%)")
+
+        # Mark workflow as active (for orphan detection) - 2 hour TTL
+        try:
+            tracker.redis.setex(f"workflow:{workflow_id}:last_active", 7200, int(time.time()))
+        except Exception as timestamp_error:
+            # Non-critical, just log and continue
+            logger.debug(f"Failed to update workflow timestamp: {timestamp_error}")
+    except Exception as e:
+        # CRITICAL: Never let progress tracking errors break workflows
+        logger.error(f"Progress tracking failed for workflow {workflow_id}: {e}", exc_info=True)
+
+
+@app.task(queue="default")
+def cleanup_orphaned_progress_keys() -> Dict[str, Any]:
+    """
+    Periodic task to clean up abandoned workflow progress keys.
+
+    Finds workflows that haven't been active for >2 hours and removes their Redis keys.
+    Should be scheduled to run periodically (e.g., every hour via Celery beat).
+
+    Returns:
+        Dict with cleanup statistics
+    """
+    try:
+        import time
+        tracker = WorkflowProgressTracker()
+        redis = tracker.redis
+
+        # Find all workflow keys
+        workflow_pattern = "workflow:*:total"
+        workflow_keys = redis.keys(workflow_pattern)
+
+        cleaned = 0
+        active = 0
+        current_time = int(time.time())
+        inactive_threshold = 7200  # 2 hours
+
+        for total_key in workflow_keys:
+            try:
+                # Extract workflow_id from key (format: "workflow:ID:total")
+                workflow_id = total_key.split(":")[1]
+
+                # Check last active timestamp
+                last_active_key = f"workflow:{workflow_id}:last_active"
+                last_active = redis.get(last_active_key)
+
+                if last_active is None:
+                    # No timestamp means very old or completed workflow - clean it up
+                    tracker.cleanup(workflow_id)
+                    cleaned += 1
+                    logger.debug(f"Cleaned up workflow {workflow_id} (no timestamp)")
+                else:
+                    # Check if inactive for too long
+                    last_active_time = int(last_active)
+                    inactive_duration = current_time - last_active_time
+
+                    if inactive_duration > inactive_threshold:
+                        tracker.cleanup(workflow_id)
+                        cleaned += 1
+                        logger.info(
+                            f"Cleaned up orphaned workflow {workflow_id} "
+                            f"(inactive for {inactive_duration // 60} minutes)"
+                        )
+                    else:
+                        active += 1
+            except Exception as key_error:
+                logger.warning(f"Error processing workflow key {total_key}: {key_error}")
+                continue
+
+        result = {
+            "cleaned": cleaned,
+            "active": active,
+            "status": "completed"
+        }
+
+        if cleaned > 0:
+            logger.info(f"Cleaned up {cleaned} orphaned workflows, {active} still active")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Orphaned key cleanup failed: {e}", exc_info=True)
+        return {"error": str(e), "status": "failed"}
 
 
 @app.task(base=BaseFileIntelTask, bind=True, queue="document_processing")
@@ -67,14 +181,20 @@ def complete_collection_analysis(
             # Phase 1: Parallel document processing (GROUP)
             self.update_progress(1, 6, "Starting parallel document processing")
 
-            # Create signatures for document processing tasks
+            # Initialize progress tracking
+            workflow_id = self.request.id
+            tracker = WorkflowProgressTracker()
+            tracker.initialize(workflow_id, len(file_paths))
+            logger.info(f"Starting processing of {len(file_paths)} documents")
+
+            # Create signatures for document processing tasks with progress tracking
             document_signatures = [
                 process_document.s(
                     file_path=file_path,
                     document_id=f"{collection_id}_doc_{i}",
                     collection_id=collection_id,
                     **kwargs,
-                )
+                ).set(link=track_task_completion.si(workflow_id, "document"))
                 for i, file_path in enumerate(file_paths)
             ]
 
@@ -101,10 +221,6 @@ def complete_collection_analysis(
                     )
                 )
 
-                logger.info(
-                    f"Started full workflow with {len(document_signatures)} document tasks for collection {collection_id}"
-                )
-
                 return {
                     "collection_id": collection_id,
                     "workflow_task_id": workflow_result.id,
@@ -117,10 +233,6 @@ def complete_collection_analysis(
                     generate_collection_metadata.s(
                         collection_id=collection_id,
                     )
-                )
-
-                logger.info(
-                    f"Started metadata workflow with {len(document_signatures)} document tasks for collection {collection_id}"
                 )
 
                 return {
@@ -137,10 +249,6 @@ def complete_collection_analysis(
                     )
                 )
 
-                logger.info(
-                    f"Started embeddings workflow with {len(document_signatures)} document tasks for collection {collection_id}"
-                )
-
                 return {
                     "collection_id": collection_id,
                     "workflow_task_id": workflow_result.id,
@@ -151,10 +259,6 @@ def complete_collection_analysis(
                 # Simple document processing only - use chord with completion callback
                 workflow_result = chord(document_signatures)(
                     completion_callback
-                )
-
-                logger.info(
-                    f"Started simple workflow with {len(document_signatures)} document tasks and completion callback for collection {collection_id}"
                 )
 
                 return {
@@ -343,16 +447,21 @@ def generate_collection_embeddings_simple(
                     "completion_task_id": completion_task.id,
                 }
 
-            logger.info(
-                f"Found {len(chunks)} chunks to process for collection {collection_id}"
-            )
+            logger.info(f"Starting generation of {len(chunks)} embeddings")
             self.update_progress(
                 1, 3, f"Generating embeddings for {len(chunks)} chunks"
             )
 
-            # Create embedding jobs for all chunks
+            # Initialize progress tracking
+            workflow_id = self.request.id
+            tracker = WorkflowProgressTracker()
+            tracker.initialize(workflow_id, len(chunks))
+
+            # Create embedding jobs for all chunks with progress tracking
             embedding_jobs = group(
-                generate_and_store_chunk_embedding.s(chunk.id, chunk.chunk_text)
+                generate_and_store_chunk_embedding.s(chunk.id, chunk.chunk_text).set(
+                    link=track_task_completion.si(workflow_id, "embedding")
+                )
                 for chunk in chunks
             )
 
@@ -368,10 +477,6 @@ def generate_collection_embeddings_simple(
             workflow_result = chord(embedding_jobs)(completion_callback)
 
             self.update_progress(3, 3, "Collection processing workflow initiated")
-
-            logger.info(
-                f"Started chord workflow: {len(chunks)} embeddings → completion callback for collection {collection_id}"
-            )
 
             return {
                 "collection_id": collection_id,
@@ -707,15 +812,17 @@ def generate_collection_metadata(
                     "completion_task_id": completion_task.id,
                 }
 
-            logger.info(
-                f"Found {len(successful_docs)} documents to extract metadata for in collection {collection_id}"
-            )
+            logger.info(f"Starting metadata extraction for {len(successful_docs)} documents")
             self.update_progress(
                 1, 3, f"Extracting metadata for {len(successful_docs)} documents"
             )
 
-            # Create metadata extraction jobs for all documents
-            metadata_jobs = []
+            # Initialize progress tracking
+            workflow_id = self.request.id
+            tracker = WorkflowProgressTracker()
+
+            # First pass: collect job parameters and count
+            job_params = []
             for doc_result in successful_docs:
                 document_id = doc_result.get("document_id")
                 if document_id:
@@ -726,14 +833,26 @@ def generate_collection_metadata(
                         if chunks:
                             text_chunks = [chunk.chunk_text for chunk in chunks[:3]]
                             file_metadata = document.document_metadata if document.document_metadata else None
+                            job_params.append({
+                                "document_id": document_id,
+                                "text_chunks": text_chunks,
+                                "file_metadata": file_metadata
+                            })
 
-                            metadata_jobs.append(
-                                extract_document_metadata.s(
-                                    document_id=document_id,
-                                    text_chunks=text_chunks,
-                                    file_metadata=file_metadata
-                                )
-                            )
+            # Initialize tracker BEFORE creating jobs with callbacks
+            if job_params:
+                tracker.initialize(workflow_id, len(job_params))
+
+            # Second pass: create jobs with progress tracking callbacks
+            metadata_jobs = []
+            for params in job_params:
+                metadata_jobs.append(
+                    extract_document_metadata.s(
+                        document_id=params["document_id"],
+                        text_chunks=params["text_chunks"],
+                        file_metadata=params["file_metadata"]
+                    ).set(link=track_task_completion.si(workflow_id, "metadata"))
+                )
 
             if metadata_jobs:
                 # Use chord to ensure completion callback runs AFTER all metadata jobs finish
@@ -744,10 +863,6 @@ def generate_collection_metadata(
                 task_group = group(metadata_jobs)  # Pass list directly
                 # Note: chord()(callback) already calls apply_async() in Celery 5.x
                 workflow_result = chord(task_group)(completion_callback)
-
-                logger.info(
-                    f"Started chord workflow: {len(metadata_jobs)} metadata jobs → completion callback for collection {collection_id}"
-                )
 
                 self.update_progress(3, 3, "Collection metadata extraction workflow initiated")
 

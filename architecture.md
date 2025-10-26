@@ -1,62 +1,212 @@
-# FileIntel Architecture Overview
+# FileIntel Architecture
 
-This document provides a high-level overview of the FileIntel application's architecture, its core components, and key workflows.
+High-level overview of FileIntel's distributed architecture, components, and key workflows.
 
-## Core Components
+## System Components
 
-The application is built on a distributed task processing architecture, orchestrated with Docker Compose. The main components are:
+### Services (Docker Compose)
 
-- **API Service (`api`):** A FastAPI application that serves as the primary entry point for all user interactions. It provides both v1 (legacy) and v2 (task-based) endpoints for managing collections, uploading documents, and submitting Celery tasks for processing.
+- **api** - FastAPI application serving v2 task-based endpoints
+- **celery-worker** - Distributed task processors (scalable horizontally)
+- **postgres** - PostgreSQL with pgvector extension for embeddings and relational data
+- **redis** - Celery message broker, result backend, and LLM response cache
+- **flower** - Celery monitoring dashboard (http://localhost:5555)
+- **backup** - Automated daily PostgreSQL backups (production)
 
-- **Celery Workers (`celery`):** Distributed task processors that handle all heavy, time-consuming operations asynchronously. Tasks are distributed across multiple workers and can be scaled horizontally. This includes document processing, RAG operations, GraphRAG indexing, and workflow orchestration.
+### External Integrations
 
-- **PostgreSQL Database (`postgres`):** The primary data store. It uses the `pgvector` extension to store and query vector embeddings. It also stores all relational data, such as collections, documents, and GraphRAG metadata.
+- **LLM Providers** - OpenAI, Anthropic, or local vLLM/Ollama
+- **MinerU** - Advanced PDF extraction with OCR and layout detection
+- **GraphRAG** - Microsoft's graph-based RAG (embedded library)
 
-- **Redis (`redis`):** Functions as the Celery message broker and result backend for distributed task coordination. Also serves as a cache for LLM responses.
+## Source Structure
 
-- **CLI (`fileintel`):** A command-line interface built with Typer that provides a user-friendly way to interact with both v1 and v2 API endpoints.
+```
+src/fileintel/
+├── api/                      # FastAPI application (v2 task-based endpoints)
+├── tasks/                    # Celery task definitions
+│   ├── document_tasks.py     # Document processing
+│   ├── graphrag_tasks.py     # GraphRAG indexing/querying
+│   ├── llm_tasks.py          # LLM/embedding generation
+│   └── workflow_tasks.py     # Multi-step orchestration
+├── cli/                      # Typer-based command-line interface
+├── storage/                  # PostgreSQL storage and SQLAlchemy models
+├── document_processing/      # Document parsing, chunking, metadata extraction
+├── rag/
+│   ├── vector_rag/          # Embedding-based semantic search
+│   └── graph_rag/           # GraphRAG integration layer
+├── llm_integration/         # LLM clients, rate limiting, circuit breakers
+├── citation/                # Citation extraction and formatting
+├── prompt_management/       # Prompt template management
+├── core/                    # Configuration, logging, exceptions
+└── celery_config.py         # Celery app configuration
+```
 
-## Directory Structure (`src/fileintel`)
+## Key Features
 
-The project's source code is organized into distinct domains:
+### Hybrid RAG System
 
-- `api/`: Contains the FastAPI application, including v1 (legacy) and v2 (task-based) routes and dependencies.
-- `tasks/`: Contains Celery task definitions organized by domain: document processing, GraphRAG operations, LLM tasks, and workflow orchestration.
-- `cli/`: Contains the Typer-based command-line interface for interacting with the task-based API.
-- `storage/`: Manages database interactions, defining SQLAlchemy models and PostgreSQL storage implementation.
-- `document_processing/`: Handles reading, chunking, and metadata extraction for various document formats.
-- `rag/`: Contains the Retrieval-Augmented Generation implementations.
-  - `vector_rag/`: Traditional embedding-based RAG.
-  - `graph_rag/`: Integration layer for Microsoft's GraphRAG, including services and data adapters.
-- `llm_integration/`: Manages connections to Large Language Models (e.g., OpenAI, Anthropic) and embedding providers. Includes resilience patterns like rate limiting and circuit breakers.
-- `core/`: Contains shared application infrastructure, such as configuration, custom exceptions, and logging.
-- `celery_config.py`: Celery application configuration and task discovery.
+**Query Classification:**
+- LLM-based semantic classification (90-95% accuracy)
+- Keyword-based fallback (fast, deterministic)
+- Hybrid mode with automatic fallback
 
-## Key Workflows
+**RAG Strategies:**
+- **Vector RAG** - Semantic similarity search via pgvector
+- **GraphRAG** - Relationship and entity-based queries
+- **Hybrid** - Combines both approaches
 
-### 1. Document Ingestion and Indexing
+**Result Reranking:**
+- Optional vLLM-based semantic reranking
+- Over-retrieve (20 chunks) → rerank → return top K
+- 50-200ms additional latency for improved relevance
 
-1.  A user uploads a document via the v2 API endpoint.
-2.  The **API Service** saves the file and creates a `Document` record in the PostgreSQL database.
-3.  The API submits a Celery task (e.g., `process_document`) to the distributed task queue.
-4.  A **Celery Worker** picks up the task, reads the document, extracts text and metadata, splits the text into chunks, and generates vector embeddings for each chunk.
-5.  The worker saves the chunks and embeddings to the **PostgreSQL** database and updates task progress via Celery's result backend.
+### Document Processing
 
-### 2. RAG Query (Vector and Graph)
+**Multi-Format Support:**
+- PDF, EPUB, MOBI via MinerU or traditional extractors
+- OCR and layout detection for scanned documents
+- Metadata extraction (titles, authors, citations)
 
-1.  A user submits a query via the v2 API, specifying a collection and query parameters.
-2.  The **API Service** creates a Celery task (e.g., `global_search_task` or vector RAG task) and submits it to the appropriate queue.
-3.  A **Celery Worker** picks up the task.
-4.  **For Vector RAG**: The worker generates an embedding for the query, finds relevant chunks in **PostgreSQL** via vector similarity search, and sends the context to an LLM.
-5.  **For GraphRAG**: The worker uses the `GraphRAGService` to perform a global or local search on the pre-built graph index and synthesizes a response.
-6.  The final result is returned via Celery's result backend and can be retrieved through the v2 API.
+**Type-Aware Chunking:**
+- Content-aware semantic chunking
+- Respects document structure (paragraphs, sections, tables)
+- Two-tier mode: graph chunks contain multiple vector chunks
 
-### 3. Workflow Orchestration
+**Citation Management:**
+- Automatic citation extraction from documents
+- Source tracking with page numbers
+- Multiple citation formats (Harvard, APA, etc.)
 
-The system supports complex multi-step workflows using Celery's advanced patterns:
+### Task Orchestration
 
-1.  **Groups**: Parallel execution of multiple tasks (e.g., processing multiple documents simultaneously)
-2.  **Chains**: Sequential execution where each task feeds into the next (e.g., document processing → embedding generation → index building)
-3.  **Chords**: Group execution followed by a callback (e.g., process all documents, then update collection index)
+**Celery Patterns:**
+- **Groups** - Parallel task execution
+- **Chains** - Sequential pipelines
+- **Chords** - Parallel execution + callback
 
-These patterns are implemented in `tasks/workflow_tasks.py` and enable sophisticated document processing pipelines.
+**Workflow Examples:**
+- Upload → Process → Chunk → Embed → Index
+- Upload → Process → Auto-index GraphRAG (if enabled)
+- Batch document processing with progress tracking
+
+## Core Workflows
+
+### 1. Document Ingestion
+
+```
+User Upload → API creates Document record
+           → Celery task submitted to queue
+           → Worker processes document
+              - Extract text/metadata (MinerU)
+              - Type-aware chunking
+              - Generate embeddings
+              - Extract citations
+           → Store chunks in PostgreSQL
+           → Auto-index GraphRAG (optional)
+```
+
+### 2. Query Processing
+
+```
+User Query → API submits query task
+          → Query classifier determines strategy
+             - Vector: Find similar chunks via pgvector
+             - Graph: Use GraphRAG global/local search
+             - Hybrid: Combine both results
+          → Optional reranking (vLLM)
+          → Generate answer with LLM
+          → Return with citations and sources
+```
+
+### 3. GraphRAG Indexing
+
+```
+Collection ready → User triggers indexing
+                → Celery task extracts entities/relationships
+                → Build community graph
+                → Generate community reports
+                → Store in GraphRAG index directory
+```
+
+## Data Flow
+
+```
+┌─────────────┐
+│   CLI/API   │
+└──────┬──────┘
+       │
+   ┌───┴───┐
+   │ Redis │ (Message Broker)
+   └───┬───┘
+       │
+┌──────┴──────────┐
+│ Celery Workers  │
+│  - Process Docs │
+│  - Generate     │
+│    Embeddings   │
+│  - Query LLMs   │
+│  - Index Graph  │
+└──────┬──────────┘
+       │
+┌──────┴──────────┐
+│   PostgreSQL    │
+│   + pgvector    │
+│                 │
+│  - Documents    │
+│  - Chunks       │
+│  - Embeddings   │
+│  - Metadata     │
+└─────────────────┘
+```
+
+## Scaling Considerations
+
+**Horizontal Scaling:**
+- Multiple Celery workers (different queues: default, llm, graphrag)
+- Multiple API instances behind load balancer
+- PostgreSQL connection pooling
+
+**Performance Tuning:**
+- Async batch processing for embeddings
+- LLM response caching in Redis
+- Query classification caching (70%+ hit rate)
+- Configurable worker concurrency and timeouts
+
+**Resource Requirements:**
+- Minimum: 4 CPU, 16GB RAM, 100GB disk
+- Recommended: 8+ CPU, 32GB+ RAM, 500GB SSD
+- GPU optional (for local LLM inference)
+
+## Configuration
+
+All configuration in `config/default.yaml`:
+
+**Key sections:**
+- `llm` - LLM provider, models, API keys
+- `rag` - Strategy, chunking, classification, reranking
+- `graphrag` - Community levels, auto-indexing
+- `document_processing` - PDF processor, type-aware chunking
+- `celery` - Worker concurrency, timeouts
+- `logging` - Component-level log configuration
+
+Environment variables override YAML via `${VAR:-default}` syntax.
+
+## Monitoring
+
+- **Flower Dashboard** - http://localhost:5555 (Celery task monitoring)
+- **API Health** - http://localhost:8000/health
+- **Logs** - Configurable per-component logging (INFO for progress, DEBUG for details)
+- **Metrics** - Task success/failure rates via Flower
+
+## Security
+
+- Non-root container execution (UID 1000)
+- Internal Docker network (no external DB/Redis ports)
+- Environment-based secrets (or Docker secrets in production)
+- Configurable resource limits per service
+
+---
+
+For deployment details, see [deployment.md](deployment.md).
+For API reference, see [API_REFERENCE.md](API_REFERENCE.md).

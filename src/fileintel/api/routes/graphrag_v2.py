@@ -13,6 +13,7 @@ from ..dependencies import get_storage
 from ..services import get_collection_by_identifier
 from ...core.config import get_config
 from ...rag.graph_rag.services.graphrag_service import GraphRAGService
+from ...storage.postgresql_storage import PostgreSQLStorage
 from ...tasks.graphrag_tasks import build_graphrag_index_task
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class GraphRAGIndexResponse(BaseModel):
 async def create_graphrag_index(
     request: GraphRAGIndexRequest,
     background_tasks: BackgroundTasks,
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Create or rebuild GraphRAG index for a collection."""
     try:
@@ -112,7 +113,7 @@ async def create_graphrag_index(
 
 @router.get("/{collection_identifier}/status", response_model=ApiResponseV2)
 async def get_graphrag_status(
-    collection_identifier: str, storage=Depends(get_storage)
+    collection_identifier: str, storage: PostgreSQLStorage = Depends(get_storage)
 ):
     """Get GraphRAG index status for a collection."""
     try:
@@ -151,7 +152,7 @@ async def get_graphrag_entities(
     limit: Optional[int] = Query(
         20, description="Maximum number of entities to return"
     ),
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """
     Get GraphRAG entities for a collection.
@@ -249,7 +250,7 @@ async def get_graphrag_communities(
     limit: Optional[int] = Query(
         10, description="Maximum number of communities to return"
     ),
-    storage=Depends(get_storage),
+    storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """
     Get GraphRAG communities for a collection.
@@ -349,9 +350,114 @@ async def get_graphrag_communities(
         )
 
 
+@router.get("/{collection_identifier}/communities/{community_id}", response_model=ApiResponseV2)
+async def get_graphrag_community_by_id(
+    collection_identifier: str,
+    community_id: str,
+    storage: PostgreSQLStorage = Depends(get_storage),
+):
+    """
+    Get a specific GraphRAG community by ID.
+
+    Returns detailed community information including full summary, findings, and content.
+    """
+    try:
+        config = get_config()
+        # Get collection by identifier
+        collection = await get_collection_by_identifier(storage, collection_identifier)
+        if not collection:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{collection_identifier}' not found",
+            )
+
+        # Check if index exists
+        graphrag_service = GraphRAGService(storage, config)
+        status = await graphrag_service.get_index_status(collection.id)
+        if status.get("status") != "indexed":
+            raise HTTPException(
+                status_code=404,
+                detail=f"No GraphRAG index found for collection '{collection_identifier}'. Please create index first.",
+            )
+
+        # Load community from parquet file
+        import os
+        import pandas as pd
+
+        workspace_path = status["index_path"]
+        communities_file = os.path.join(workspace_path, "communities.parquet")
+
+        if not os.path.exists(communities_file):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No communities file found for collection '{collection.name}'",
+            )
+
+        # Read communities and find the specific one
+        try:
+            communities_df = pd.read_parquet(communities_file)
+        except Exception as e:
+            logger.error(f"Failed to read communities parquet file: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load communities from index: {str(e)}"
+            )
+
+        # Find community by ID (match both human_readable_id and id columns)
+        community_row = None
+        for _, row in communities_df.iterrows():
+            human_id = str(row.get("human_readable_id", ""))
+            uuid_id = str(row.get("id", ""))
+            if human_id == community_id or uuid_id == community_id:
+                community_row = row
+                break
+
+        if community_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Community '{community_id}' not found in collection '{collection.name}'",
+            )
+
+        # Build community response with all available fields
+        title = community_row.get("title", "Unknown")
+        summary = community_row.get("summary", "")
+
+        # If title is just "Community N" and we have a summary, extract first sentence as title
+        if title.startswith("Community ") and summary:
+            first_sentence = summary.split('.')[0] if '.' in summary else summary.split('\n')[0]
+            if len(first_sentence) > 10 and len(first_sentence) < 100:
+                title = first_sentence.strip()
+
+        community_data = {
+            "title": title,
+            "community_id": community_row.get("human_readable_id", community_row.get("id", "N/A")),
+            "level": int(community_row.get("level", 0)),
+            "rank": float(community_row.get("rank", 0.0)),
+            "size": int(community_row.get("size", 0)),
+            "summary": summary,
+            "full_content": community_row.get("full_content", ""),
+            "findings": community_row.get("findings", ""),
+        }
+
+        return ApiResponseV2(
+            success=True,
+            message=f"Found community '{title}' in collection '{collection.name}'",
+            data=community_data,
+            timestamp=datetime.utcnow()
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get GraphRAG community: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get GraphRAG community: {str(e)}"
+        )
+
+
 @router.delete("/{collection_identifier}/index", response_model=ApiResponseV2)
 async def remove_graphrag_index(
-    collection_identifier: str, storage=Depends(get_storage)
+    collection_identifier: str, storage: PostgreSQLStorage = Depends(get_storage)
 ):
     """Remove GraphRAG index for a collection."""
     try:
@@ -393,7 +499,7 @@ async def remove_graphrag_index(
 
 
 @router.get("/status", response_model=ApiResponseV2)
-async def get_graphrag_system_status(storage=Depends(get_storage)):
+async def get_graphrag_system_status(storage: PostgreSQLStorage = Depends(get_storage)):
     """Get GraphRAG system status."""
     try:
         # Check if GraphRAG dependencies are available

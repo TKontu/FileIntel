@@ -26,7 +26,8 @@ class GraphRAGDataFrameCache:
         if settings.rag.cache.enabled and settings.rag.cache.redis_host:
             try:
                 self.redis_client = redis.from_url(
-                    f"redis://{settings.rag.cache.redis_host}:{settings.rag.cache.redis_port}/{settings.rag.cache.redis_db}"
+                    f"redis://{settings.rag.cache.redis_host}:{settings.rag.cache.redis_port}/{settings.rag.cache.redis_db}",
+                    decode_responses=True
                 )
             except Exception as e:
                 print(f"Could not connect to Redis: {e}")
@@ -89,6 +90,8 @@ class GraphRAGDataFrameCache:
 
     async def warmup_cache(self, storage, parquet_loader=None):
         """Pre-load frequently used collections into the cache."""
+        import asyncio
+
         if not self.settings.rag.cache.warmup_collections:
             return
 
@@ -100,7 +103,12 @@ class GraphRAGDataFrameCache:
 
         for collection_id in self.settings.rag.cache.warmup_collections:
             try:
-                index_info = storage.get_graphrag_index_info(collection_id)
+                # Run blocking storage call in thread pool to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                index_info = await loop.run_in_executor(
+                    None, storage.get_graphrag_index_info, collection_id
+                )
+
                 if not index_info or not index_info.get("index_path"):
                     print(
                         f"Could not warm up cache for collection {collection_id}: index not found"

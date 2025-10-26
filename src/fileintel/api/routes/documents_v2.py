@@ -57,7 +57,7 @@ class DocumentChunksResponse(BaseModel):
     response_model=DocumentChunksResponse,
     summary="Get document chunks as JSON"
 )
-@api_error_handler
+@api_error_handler("get document chunks")
 async def get_document_chunks(
     document_id: str,
     chunk_type: Optional[str] = Query(None, description="Filter by chunk type (vector, graph)"),
@@ -276,7 +276,7 @@ async def export_document_chunks_markdown(
     "/documents/{document_id}",
     summary="Get document information"
 )
-@api_error_handler
+@api_error_handler("get document info")
 async def get_document_info(
     document_id: str,
     storage: PostgreSQLStorage = Depends(get_storage)

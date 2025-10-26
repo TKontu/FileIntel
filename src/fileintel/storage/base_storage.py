@@ -68,7 +68,7 @@ class BaseStorageInfrastructure:
 
         try:
             self.db.execute(text("SELECT 1"))
-            logger.info("Database connection established successfully")
+            logger.debug("Database connection established successfully")
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
             raise

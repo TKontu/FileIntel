@@ -51,8 +51,16 @@ def setup_root_logger(settings) -> tuple[str, JsonFormatter]:
     log_level = settings.logging.level.upper()
     root_logger.setLevel(log_level)
 
-    # Remove any existing handlers
+    # Preserve uvicorn's handlers - only remove handlers we created previously
+    # This ensures uvicorn's startup/shutdown messages continue to appear
+    handlers_to_remove = []
     for handler in root_logger.handlers[:]:
+        # Only remove our own JsonFormatter handlers from previous setup calls
+        # Keep uvicorn's default handlers
+        if isinstance(getattr(handler, 'formatter', None), JsonFormatter):
+            handlers_to_remove.append(handler)
+
+    for handler in handlers_to_remove:
         root_logger.removeHandler(handler)
 
     # Create formatter
@@ -71,6 +79,12 @@ def setup_root_logger(settings) -> tuple[str, JsonFormatter]:
         log_file_path, formatter, max_bytes, backup_count
     )
     root_logger.addHandler(file_handler)
+
+    # Apply component-specific log levels
+    if hasattr(settings.logging, 'component_levels'):
+        for component, level in settings.logging.component_levels.items():
+            component_logger = logging.getLogger(component)
+            component_logger.setLevel(level.upper())
 
     return log_level, formatter
 

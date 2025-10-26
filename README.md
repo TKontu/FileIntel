@@ -675,6 +675,60 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
+## Deployment
+
+### Quick Start (Git-based)
+
+```bash
+git clone https://github.com/yourusername/fileintel.git
+cd fileintel
+cp .env.example .env  # Edit with production credentials
+mkdir -p logs uploads input output graphrag_indices
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+**Environment variables required:**
+```bash
+POSTGRES_USER=fileintel_user
+POSTGRES_PASSWORD=<secure-password>
+POSTGRES_DB=fileintel
+OPENAI_API_KEY=<your-key>
+```
+
+### Docker Image Transfer
+
+For air-gapped environments:
+```bash
+# Save and compress
+docker save fileintel-api:latest fileintel-celery-worker:latest fileintel-flower:latest -o fileintel.tar
+gzip fileintel.tar  # 14GB → ~5-7GB
+
+# Load on server
+docker load -i fileintel.tar
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+### Security Essentials
+
+- [ ] Change default passwords (20+ characters)
+- [ ] Set up SSL/TLS termination
+- [ ] Configure firewall (expose only port 8000)
+- [ ] Enable API authentication
+- [ ] Set up automated backups
+- [ ] Restrict Flower dashboard access
+
+### Backups
+
+```bash
+# Backup database
+docker-compose exec postgres pg_dump -U fileintel_user fileintel > backup.sql
+
+# Restore
+docker-compose exec -T postgres psql -U fileintel_user fileintel < backup.sql
+```
+
+See [deployment.md](deployment.md) for SSL setup, scaling, monitoring, and advanced configurations.
+
 ## Contributing
 
 Contributions welcome! Please:

@@ -43,15 +43,23 @@ class GraphRAGService:
 
     def _sync_graphrag_logger_level(self):
         """
-        Synchronize the GraphRAG logger level with application logging configuration.
+        Synchronize the GraphRAG and fnllm logger levels with application logging configuration.
 
-        This is a safety measure to ensure GraphRAG respects the application's log level
-        after init_loggers() is called. While init_loggers() now checks the root logger,
-        this provides an extra guarantee that the level is correct.
+        Respects component_levels from config to allow fine-grained control over different
+        GraphRAG subsystems (e.g., show workflow progress but hide verbose operation logs).
         """
-        graphrag_logger = logging.getLogger("graphrag")
-        app_log_level = getattr(logging, self.settings.logging.level.upper(), logging.WARNING)
-        graphrag_logger.setLevel(app_log_level)
+        # Apply component-specific log levels from config
+        if hasattr(self.settings.logging, 'component_levels'):
+            for component, level in self.settings.logging.component_levels.items():
+                if component.startswith('graphrag') or component.startswith('fnllm'):
+                    logger_obj = logging.getLogger(component)
+                    logger_obj.setLevel(level.upper())
+
+        # Fallback: if no component levels defined, use root level
+        else:
+            app_log_level = getattr(logging, self.settings.logging.level.upper(), logging.WARNING)
+            logging.getLogger("graphrag").setLevel(app_log_level)
+            logging.getLogger("fnllm").setLevel(app_log_level)
 
     async def _get_cached_config(self, collection_id: str):
         """Get cached GraphRAG config for collection, creating if not exists."""
@@ -110,6 +118,7 @@ class GraphRAGService:
         """Builds a GraphRAG index from a set of documents."""
         import logging
         import time
+        from .progress_callback import GraphRAGProgressCallback
 
         logger = logging.getLogger(__name__)
 
@@ -120,7 +129,7 @@ class GraphRAGService:
         logger.info(f"Converted to DataFrame with {len(documents_df)} rows")
 
         graphrag_config = await self._get_cached_config(collection_id)
-        logger.info(
+        logger.debug(
             f"GraphRAG config created, output dir: {graphrag_config.output.base_dir}"
         )
 
@@ -128,22 +137,26 @@ class GraphRAGService:
         chat_model = graphrag_config.models.get("default_chat_model")
         embedding_model = graphrag_config.models.get("default_embedding_model")
         if chat_model:
-            logger.info(f"GraphRAG Chat model: {chat_model.model}")
-            logger.info(
+            logger.debug(f"GraphRAG Chat model: {chat_model.model}")
+            logger.debug(
                 f"GraphRAG Chat model base_url: {getattr(chat_model, 'api_base', 'N/A')}"
             )
         if embedding_model:
-            logger.info(f"GraphRAG Embedding model: {embedding_model.model}")
-            logger.info(
+            logger.debug(f"GraphRAG Embedding model: {embedding_model.model}")
+            logger.debug(
                 f"GraphRAG Embedding model base_url: {getattr(embedding_model, 'api_base', 'N/A')}"
             )
 
         start_time = time.time()
-        logger.info(
-            "Starting GraphRAG index build (this may take several minutes for entity/relationship extraction)"
-        )
 
-        result = await build_index(config=graphrag_config, input_documents=documents_df)
+        # Create progress callback for clean workflow tracking
+        progress_callback = GraphRAGProgressCallback(collection_id)
+
+        result = await build_index(
+            config=graphrag_config,
+            input_documents=documents_df,
+            callbacks=[progress_callback]
+        )
 
         # Sync GraphRAG logger level with application config (build_index calls init_loggers)
         self._sync_graphrag_logger_level()

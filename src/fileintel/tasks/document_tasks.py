@@ -157,7 +157,8 @@ def _filter_elements(elements: List[TextElement]) -> Tuple[List[TextElement], Li
             if should_filter:
                 from fileintel.document_processing.type_aware_chunking import estimate_tokens
 
-                logger.warning(
+                # Log details at DEBUG level (summary warning is logged in element_filter.py)
+                logger.debug(
                     f"Filtering element {idx}: {reason} | "
                     f"{estimate_tokens(element.text)} tokens | "
                     f"preview: {element.text[:80]}..."
@@ -637,7 +638,7 @@ def process_document(
 
         # Read document content with page mappings, metadata, and elements for filtering
         content, page_mappings, doc_metadata, elements = read_document_with_elements(file_path)
-        logger.info(f"Extracted {len(content)} characters from {file_path} with {len(page_mappings)} page mappings")
+        logger.debug(f"Extracted {len(content)} characters from {file_path} with {len(page_mappings)} page mappings")
 
         # Filter corrupt/non-content elements before chunking
         clean_elements, filtered_metadata = _filter_elements(elements)
@@ -679,7 +680,7 @@ def process_document(
 
             content = " ".join(clean_text_parts)
             page_mappings = clean_page_mappings
-            logger.info(f"After filtering: {len(content)} characters with {len(clean_page_mappings)} page mappings")
+            logger.debug(f"After filtering: {len(content)} characters with {len(clean_page_mappings)} page mappings")
 
         # Update progress
         self.update_progress(1, 3, "Cleaning and chunking text")
@@ -690,13 +691,17 @@ def process_document(
         # CRITICAL FIX: Use local variable to avoid race condition with concurrent tasks
         use_type_aware = config.document_processing.use_type_aware_chunking
 
+        # Initialize variables to ensure clean state (prevents corruption on fallback)
+        chunks = None
+        full_chunking_result = None
+
         # Choose chunking strategy based on configuration
         if use_type_aware and clean_elements:
             # HIGH FIX: Add error boundary with fallback to traditional chunking
             try:
                 # Phase 1: Type-aware chunking using element metadata
                 from fileintel.document_processing.type_aware_chunking import chunk_elements_by_type
-                logger.info(f"Using type-aware chunking for {len(clean_elements)} elements")
+                logger.debug(f"Using type-aware chunking for {len(clean_elements)} elements")
 
                 chunker = TextChunker()
                 chunks_list = chunk_elements_by_type(
@@ -707,7 +712,7 @@ def process_document(
                 # Convert to format expected by downstream code
                 chunks = [chunk_dict for chunk_dict in chunks_list]
                 full_chunking_result = None
-                logger.info(f"Type-aware chunking created {len(chunks)} chunks")
+                logger.debug(f"Type-aware chunking created {len(chunks)} chunks")
             except Exception as e:
                 # If type-aware chunking fails, fall back to traditional
                 import traceback
@@ -715,10 +720,12 @@ def process_document(
                     f"Type-aware chunking failed, falling back to traditional chunking: {e}\n"
                     f"Traceback: {traceback.format_exc()}"
                 )
-                # Fall through to traditional path below
+                # CRITICAL: Reset state to prevent corruption from partial results
+                chunks = None
+                full_chunking_result = None
                 use_type_aware = False  # Only mutate local variable, not shared config
 
-        if not (use_type_aware and clean_elements):
+        if not (use_type_aware and clean_elements) or chunks is None:
             # Traditional text-based chunking (backwards compatible)
             chunker = TextChunker()
             if chunker.enable_two_tier:
@@ -728,10 +735,20 @@ def process_document(
                 # Traditional mode: only need chunks
                 chunks = clean_and_chunk_text(content, page_mappings=page_mappings)
                 full_chunking_result = None
-            logger.info(f"Traditional chunking created {len(chunks)} chunks")
+            logger.debug(f"Traditional chunking created {len(chunks)} chunks")
 
         # Update progress
         self.update_progress(2, 3, "Storing chunks in database")
+
+        # CRITICAL: Validate chunks BEFORE creating document records (prevent orphaned documents)
+        if not chunks:
+            error_msg = (
+                f"Chunking produced zero chunks for document {document_id}. "
+                f"Document has {len(clean_elements) if clean_elements else 0} elements after filtering. "
+                f"This indicates a critical chunking failure."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Store chunks in database
         if document_id and collection_id:
@@ -741,6 +758,8 @@ def process_document(
 
             config = get_config()
             storage = get_shared_storage()
+            # Initialize actual_document_id with default (ensures variable always exists)
+            actual_document_id = document_id
             try:
                 # Check if document already exists (from upload-and-process workflow)
                 existing_document = None
@@ -755,7 +774,7 @@ def process_document(
                             doc.filename == filename or
                             doc.original_filename == filename):
                             existing_document = doc
-                            logger.info(f"Found existing document {doc.id} for {filename}")
+                            logger.debug(f"Found existing document {doc.id} for {filename}")
                             break
                 else:
                     # Try to get document by provided ID
@@ -764,7 +783,7 @@ def process_document(
                 if existing_document:
                     # Use existing document
                     actual_document_id = existing_document.id
-                    logger.info(f"Using existing document record {actual_document_id}")
+                    logger.debug(f"Using existing document record {actual_document_id}")
                 else:
                     # Create new document record only if it doesn't exist
                     try:
@@ -804,16 +823,6 @@ def process_document(
                             f"Failed to create document record, using provided document_id {document_id}: {e}"
                         )
                         actual_document_id = document_id
-
-                # HIGH FIX: Validate that chunking produced at least one chunk
-                if not chunks:
-                    error_msg = (
-                        f"Chunking produced zero chunks for document {document_id}. "
-                        f"Document has {len(clean_elements)} elements after filtering. "
-                        f"This indicates a critical chunking failure."
-                    )
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
 
                 # Format chunks for storage
                 # Chunks now come as dictionaries with text and metadata
@@ -859,7 +868,7 @@ def process_document(
                     storage.add_document_chunks(
                         actual_document_id, collection_id, graph_chunk_data
                     )
-                logger.info(
+                logger.debug(
                     f"Stored {len(chunks)} chunks in database for document {actual_document_id}"
                 )
 
@@ -899,15 +908,14 @@ def process_document(
                                     logger.error(f"Failed to store {struct_type} structure: {struct_err}")
 
                     if structures_saved > 0:
-                        logger.info(f"Stored {structures_saved} document structures for {actual_document_id}")
+                        logger.debug(f"Stored {structures_saved} document structures for {actual_document_id}")
 
             finally:
                 storage.close()
 
+        # Use actual_document_id if we stored chunks, otherwise use provided document_id
         result = {
-            "document_id": actual_document_id
-            if "actual_document_id" in locals()
-            else document_id,
+            "document_id": actual_document_id if (document_id and collection_id) else document_id,
             "collection_id": collection_id,
             "file_path": file_path,
             "content_length": len(content),
