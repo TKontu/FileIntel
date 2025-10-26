@@ -1,7 +1,7 @@
 import re
 import os
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 import yaml
 
 
@@ -357,6 +357,12 @@ class LoggingSettings(BaseModel):
     max_file_size_mb: int = Field(default=5, description="Maximum log file size in MB")
     backup_count: int = Field(
         default=5, description="Number of backup log files to keep"
+    )
+    # Component-specific log levels (optional overrides)
+    # When root level is WARNING, these can be set to INFO to see progress
+    component_levels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-component log levels (e.g., {'graphrag_service': 'INFO'})"
     )
 
 

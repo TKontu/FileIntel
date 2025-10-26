@@ -131,10 +131,22 @@ def create_base_text_units(
     total_rows = len(aggregated)
     logger.info("Starting chunking process for %d documents", total_rows)
 
+    # Calculate progress reporting interval (every 5% or every 100 docs, whichever is larger)
+    progress_interval = max(100, total_rows // 20)  # Report every 5% or 100 docs minimum
+
     def chunker_with_logging(row: pd.Series, row_index: int) -> Any:
         """Add logging to chunker execution."""
         result = chunker(row)
-        logger.info("chunker progress:  %d/%d", row_index + 1, total_rows)
+        current = row_index + 1
+
+        # Log at INFO level periodically (every progress_interval)
+        if current % progress_interval == 0 or current == total_rows:
+            percent = (current / total_rows) * 100
+            logger.info("chunker progress: %d/%d (%.1f%%)", current, total_rows, percent)
+        # Log every chunk at DEBUG level for detailed tracking
+        else:
+            logger.debug("chunker progress: %d/%d", current, total_rows)
+
         return result
 
     aggregated = aggregated.apply(

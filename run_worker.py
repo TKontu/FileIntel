@@ -12,22 +12,29 @@ from pathlib import Path
 # Add the src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
+# Import config to get logging settings
+from fileintel.core.config import get_config
+
+# Get configured log level from application settings
+config = get_config()
+log_level_str = config.logging.level.upper()
+log_level = getattr(logging, log_level_str, logging.WARNING)
+
 # Set up logging before importing anything else
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger(__name__)
 
-# Configure logging levels
-logging.getLogger("fileintel.storage.postgresql_storage").setLevel(logging.INFO)
-logging.getLogger("fileintel.llm_integration").setLevel(logging.INFO)
-logging.getLogger("fileintel.rag.graph_rag.services.graphrag_service").setLevel(
-    logging.INFO
-)
-logging.getLogger("celery").setLevel(logging.INFO)
+# Apply component-specific log levels from configuration
+for logger_name, level_str in config.logging.component_levels.items():
+    component_level = getattr(logging, level_str.upper(), None)
+    if component_level is not None:
+        logging.getLogger(logger_name).setLevel(component_level)
+        logger.debug(f"Set {logger_name} to {level_str}")
 
-# Reduce noise from third-party libraries
+# Reduce noise from third-party libraries (these stay at WARNING regardless of app log level)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
@@ -41,11 +48,14 @@ def main():
         # Import Celery app after setting up logging
         from fileintel.celery_config import app
 
+        # Use already-loaded config
+        worker_loglevel = config.logging.level.lower()
+
         # Start the worker with appropriate settings
         app.worker_main(
             [
                 "worker",
-                "--loglevel=info",
+                f"--loglevel={worker_loglevel}",
                 "--concurrency=4",
                 "--max-tasks-per-child=50",
                 "--time-limit=600",

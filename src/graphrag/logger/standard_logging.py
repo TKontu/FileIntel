@@ -64,7 +64,21 @@ def init_loggers(
         Log filename on disk. If unset, will use a default name.
     """
     logger = logging.getLogger("graphrag")
-    log_level = logging.DEBUG if verbose else logging.INFO
+
+    # Respect the application's configured log level instead of defaulting to INFO
+    # Check the root logger's level first
+    root_logger = logging.getLogger()
+    root_level = root_logger.level
+
+    if verbose:
+        log_level = logging.DEBUG
+    elif root_level != logging.NOTSET:
+        # Use the root logger's configured level (e.g., WARNING from application config)
+        log_level = root_level
+    else:
+        # Fall back to INFO if no level is configured
+        log_level = logging.INFO
+
     logger.setLevel(log_level)
 
     # clear any existing handlers to avoid duplicate logs

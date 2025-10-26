@@ -55,32 +55,32 @@ class GraphRAGConfigAdapter:
         logger.info(
             f"Creating GraphRAG config - Embedding model: {settings.rag.embedding_model}"
         )
-        logger.info(f"GRAPHRAG DEBUG: Chat base URL: {chat_base_url}")
-        logger.info(f"GRAPHRAG DEBUG: Embedding base URL: {embedding_base_url}")
-        logger.info(
+        logger.debug(f"GRAPHRAG DEBUG: Chat base URL: {chat_base_url}")
+        logger.debug(f"GRAPHRAG DEBUG: Embedding base URL: {embedding_base_url}")
+        logger.debug(
             f"GRAPHRAG DEBUG: Original OPENAI_BASE_URL env: {original_openai_base_url}"
         )
-        logger.info(
+        logger.debug(
             f"GRAPHRAG DEBUG: Original OPENAI_API_BASE env: {original_openai_api_base}"
         )
-        logger.info(f"GRAPHRAG DEBUG: ModelType.OpenAIChat: {ModelType.OpenAIChat}")
-        logger.info(
+        logger.debug(f"GRAPHRAG DEBUG: ModelType.OpenAIChat: {ModelType.OpenAIChat}")
+        logger.debug(
             f"GRAPHRAG DEBUG: ModelType.OpenAIEmbedding: {ModelType.OpenAIEmbedding}"
         )
 
         # Log all current environment variables that could affect OpenAI
         env_vars = {k: v for k, v in os.environ.items() if "OPENAI" in k or "API" in k}
-        logger.info(f"GRAPHRAG DEBUG: All relevant environment variables: {env_vars}")
+        logger.debug(f"GRAPHRAG DEBUG: All relevant environment variables: {env_vars}")
 
         # CRITICAL DEBUG: Log the actual URLs being used
-        logger.info(f"GRAPHRAG DEBUG: CRITICAL - Config chat_base_url: {chat_base_url}")
-        logger.info(
+        logger.debug(f"GRAPHRAG DEBUG: CRITICAL - Config chat_base_url: {chat_base_url}")
+        logger.debug(
             f"GRAPHRAG DEBUG: CRITICAL - Config embedding_base_url: {embedding_base_url}"
         )
-        logger.info(
+        logger.debug(
             f"GRAPHRAG DEBUG: CRITICAL - Expected: http://192.168.0.247:9003/v1"
         )
-        logger.info(
+        logger.debug(
             f"GRAPHRAG DEBUG: CRITICAL - Error shows: http://172.19.0.4:8000/v1/embeddings"
         )
 
@@ -106,7 +106,7 @@ class GraphRAGConfigAdapter:
         ]
         for env_var in env_vars_to_clear:
             if env_var in os.environ:
-                logger.info(
+                logger.debug(
                     f"GRAPHRAG DEBUG: Clearing environment variable {env_var}={os.environ[env_var]}"
                 )
                 del os.environ[env_var]
@@ -115,7 +115,7 @@ class GraphRAGConfigAdapter:
         os.environ[
             "OPENAI_BASE_URL"
         ] = embedding_base_url  # Use embedding URL for consistency
-        logger.info(
+        logger.debug(
             f"GRAPHRAG DEBUG: Force set OPENAI_BASE_URL to: {embedding_base_url}"
         )
 
@@ -125,7 +125,7 @@ class GraphRAGConfigAdapter:
                 os.environ.get("GRAPHRAG_BYPASS_RATE_LIMITING", "true").lower()
                 == "true"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Rate limiting bypass enabled: {bypass_rate_limiting}"
             )
 
@@ -134,7 +134,7 @@ class GraphRAGConfigAdapter:
                 os.environ.get("GRAPHRAG_USE_DIRECT_EMBEDDINGS", "true").lower()
                 == "true"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Direct embeddings bypass enabled: {use_direct_embeddings}"
             )
 
@@ -172,22 +172,22 @@ class GraphRAGConfigAdapter:
             )
 
             # CRITICAL DEBUG: Log the exact api_base values before model creation
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Chat model config - model: {chat_model_config.model}, api_base: {chat_model_config.api_base}"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Chat model config - requests_per_minute: {chat_model_config.requests_per_minute}, tokens_per_minute: {chat_model_config.tokens_per_minute}, concurrent_requests: {chat_model_config.concurrent_requests}"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Embedding model config - model: {embedding_model_config.model}, api_base: {embedding_model_config.api_base}"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Embedding model config - requests_per_minute: {embedding_model_config.requests_per_minute}, tokens_per_minute: {embedding_model_config.tokens_per_minute}, concurrent_requests: {embedding_model_config.concurrent_requests}"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: CRITICAL - Embedding model should be 'bge-large-en', actual: '{embedding_model_config.model}'"
             )
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: CRITICAL - Embedding API base should be '{embedding_base_url}', actual: '{embedding_model_config.api_base}'"
             )
 
@@ -197,13 +197,13 @@ class GraphRAGConfigAdapter:
                     f"GRAPHRAG CRITICAL ERROR: api_base mismatch! Expected: '{embedding_base_url}', Got: '{embedding_model_config.api_base}'"
                 )
                 # Force correct the api_base if it's wrong
-                logger.info(
+                logger.debug(
                     f"GRAPHRAG DEBUG: Force correcting api_base from '{embedding_model_config.api_base}' to '{embedding_base_url}'"
                 )
                 embedding_model_config.api_base = embedding_base_url
 
             # Log the exact values being used to create the models dictionary
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: FINAL api_base values - Chat: '{chat_model_config.api_base}', Embedding: '{embedding_model_config.api_base}'"
             )
 
@@ -220,7 +220,7 @@ class GraphRAGConfigAdapter:
                 batch_max_tokens=settings.rag.embedding_batch_max_tokens
             )
 
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Setting embed_text batch_max_tokens to {settings.rag.embedding_batch_max_tokens}"
             )
 
@@ -234,49 +234,49 @@ class GraphRAGConfigAdapter:
             )
 
             # Debug log the final config
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG DEBUG: Final config models keys: {list(config.models.keys())}"
             )
             if "default_embedding_model" in config.models:
                 final_embedding_model = config.models["default_embedding_model"]
-                logger.info(
+                logger.debug(
                     f"GRAPHRAG DEBUG: Final embedding model api_base: {getattr(final_embedding_model, 'api_base', 'NOT_SET')}"
                 )
-                logger.info(
+                logger.debug(
                     f"GRAPHRAG DEBUG: Final embedding model type: {type(final_embedding_model)}"
                 )
-                logger.info(
+                logger.debug(
                     f"GRAPHRAG DEBUG: Final embedding model dict: {final_embedding_model.__dict__ if hasattr(final_embedding_model, '__dict__') else 'NO_DICT'}"
                 )
 
             # Check environment one more time before returning
             final_env_vars = {k: v for k, v in os.environ.items() if "OPENAI" in k}
-            logger.info(f"GRAPHRAG DEBUG: Final environment state: {final_env_vars}")
+            logger.debug(f"GRAPHRAG DEBUG: Final environment state: {final_env_vars}")
 
             # COMPREHENSIVE DEBUG: Log all environment variables that could affect GraphRAG
             all_openai_env = {
                 k: v for k, v in os.environ.items() if "OPENAI" in k or "API" in k
             }
-            logger.info(
+            logger.debug(
                 f"GRAPHRAG COMPREHENSIVE DEBUG: All API-related env vars: {all_openai_env}"
             )
 
             # COMPREHENSIVE DEBUG: Log the actual model configurations that will be used
-            logger.info("=== GRAPHRAG MODEL CONFIG COMPREHENSIVE DEBUG ===")
+            logger.debug("=== GRAPHRAG MODEL CONFIG COMPREHENSIVE DEBUG ===")
             for model_name, model_config in config.models.items():
-                logger.info(f"Model: {model_name}")
-                logger.info(f"  Type: {model_config.type}")
-                logger.info(f"  Model: {model_config.model}")
-                logger.info(f"  API Key: {'***' if model_config.api_key else 'NONE'}")
-                logger.info(f"  API Base: {model_config.api_base}")
-                logger.info(
+                logger.debug(f"Model: {model_name}")
+                logger.debug(f"  Type: {model_config.type}")
+                logger.debug(f"  Model: {model_config.model}")
+                logger.debug(f"  API Key: {'***' if model_config.api_key else 'NONE'}")
+                logger.debug(f"  API Base: {model_config.api_base}")
+                logger.debug(
                     f"  Requests per minute: {model_config.requests_per_minute}"
                 )
-                logger.info(f"  Tokens per minute: {model_config.tokens_per_minute}")
-                logger.info(f"  Max retries: {model_config.max_retries}")
-                logger.info(f"  Retry strategy: {model_config.retry_strategy}")
-                logger.info(f"  Request timeout: {model_config.request_timeout}")
-                logger.info(f"  All config dict: {model_config.__dict__}")
+                logger.debug(f"  Tokens per minute: {model_config.tokens_per_minute}")
+                logger.debug(f"  Max retries: {model_config.max_retries}")
+                logger.debug(f"  Retry strategy: {model_config.retry_strategy}")
+                logger.debug(f"  Request timeout: {model_config.request_timeout}")
+                logger.debug(f"  All config dict: {model_config.__dict__}")
 
             # COMPREHENSIVE DEBUG: Check if there are any other environment variables that could interfere
             suspicious_env_vars = [
@@ -292,10 +292,10 @@ class GraphRAGConfigAdapter:
             ]
             for env_var in suspicious_env_vars:
                 value = os.environ.get(env_var, "NOT_SET")
-                logger.info(f"GRAPHRAG ENV CHECK: {env_var} = {value}")
+                logger.debug(f"GRAPHRAG ENV CHECK: {env_var} = {value}")
 
-            logger.info("=== END GRAPHRAG CONFIG COMPREHENSIVE DEBUG ===")
-            logger.info(
+            logger.debug("=== END GRAPHRAG CONFIG COMPREHENSIVE DEBUG ===")
+            logger.debug(
                 "GRAPHRAG DEBUG: Config created successfully with explicit base URLs"
             )
             return config

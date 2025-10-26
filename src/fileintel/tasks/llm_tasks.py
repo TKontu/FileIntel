@@ -165,7 +165,7 @@ def generate_text_embedding(
 
         # Skip embedding if text is too poor quality
         if not prepared_text or len(prepared_text.strip()) < 5:
-            logger.info(f"Skipping embedding for low-quality text: '{text[:100]}...'")
+            logger.warning(f"Skipping embedding for low-quality text: '{text[:100]}...'")
             return {
                 "text": text,
                 "text_length": len(text),
@@ -261,7 +261,8 @@ def generate_and_store_chunk_embedding(
             success = storage.update_chunk_embedding(chunk_id, embedding)
 
             if success:
-                logger.info(f"Successfully stored embedding for chunk {chunk_id}")
+                # Log at DEBUG level for each chunk (visible only when debugging)
+                logger.debug(f"Successfully stored embedding for chunk {chunk_id}")
                 return {
                     "chunk_id": chunk_id,
                     "embedding_dimensions": len(embedding),
@@ -515,18 +516,18 @@ def extract_document_metadata(
             prompts_dir = Path(prompts_base) / "templates"
 
             # Debug logging
-            logger.info(f"Prompts base directory: {prompts_base}")
-            logger.info(f"Prompts templates directory: {prompts_dir}")
-            logger.info(f"Templates directory exists: {prompts_dir.exists()}")
+            logger.debug(f"Prompts base directory: {prompts_base}")
+            logger.debug(f"Prompts templates directory: {prompts_dir}")
+            logger.debug(f"Templates directory exists: {prompts_dir.exists()}")
 
             metadata_extraction_dir = prompts_dir / "metadata_extraction"
-            logger.info(f"Metadata extraction directory: {metadata_extraction_dir}")
-            logger.info(f"Metadata extraction directory exists: {metadata_extraction_dir.exists()}")
+            logger.debug(f"Metadata extraction directory: {metadata_extraction_dir}")
+            logger.debug(f"Metadata extraction directory exists: {metadata_extraction_dir.exists()}")
 
             if metadata_extraction_dir.exists():
                 prompt_file = metadata_extraction_dir / "prompt.md"
-                logger.info(f"Prompt file path: {prompt_file}")
-                logger.info(f"Prompt file exists: {prompt_file.exists()}")
+                logger.debug(f"Prompt file path: {prompt_file}")
+                logger.debug(f"Prompt file exists: {prompt_file.exists()}")
 
             metadata_extractor = MetadataExtractor(
                 llm_provider=llm_provider,

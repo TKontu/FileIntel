@@ -193,7 +193,8 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             openai_count, bert_count, analysis = self._count_tokens_dual(texts[0])
             dual_analysis = f", first_text_analysis: {analysis} (OpenAI:{openai_count}/BERT:{bert_count})"
 
-        logger.info(
+        # Log at DEBUG level for detailed token analysis
+        logger.debug(
             f"Embedding request: {len(texts)} texts, "
             f"token range: {min(token_counts) if token_counts else 0}-{max_tokens}, "
             f"avg: {avg_tokens:.1f}, limit: {self.max_tokens}{dual_analysis}"
@@ -249,7 +250,8 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         individual_tokens = [self._count_tokens(text) for text in texts]
         max_individual = max(individual_tokens) if individual_tokens else 0
 
-        logger.info(
+        # Log at DEBUG level for detailed API call tracking
+        logger.debug(
             f"Sending to vLLM: {len(texts)} texts, "
             f"total chars: {total_chars}, "
             f"max individual tokens: {max_individual}, "

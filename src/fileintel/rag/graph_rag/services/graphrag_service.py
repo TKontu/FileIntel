@@ -45,8 +45,9 @@ class GraphRAGService:
         """
         Synchronize the GraphRAG logger level with application logging configuration.
 
-        GraphRAG's init_loggers() always sets the logger to INFO level,
-        but we want to respect the application's logging configuration.
+        This is a safety measure to ensure GraphRAG respects the application's log level
+        after init_loggers() is called. While init_loggers() now checks the root logger,
+        this provides an extra guarantee that the level is correct.
         """
         graphrag_logger = logging.getLogger("graphrag")
         app_log_level = getattr(logging, self.settings.logging.level.upper(), logging.WARNING)
