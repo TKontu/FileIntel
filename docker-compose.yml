@@ -39,7 +39,6 @@ services:
       - ./input:/home/appuser/app/input
       - ./output:/home/appuser/app/output
       - ./migrations:/home/appuser/app/migrations
-      - ./alembic.ini:/home/appuser/app/alembic.ini
       - ./scripts:/home/appuser/app/scripts
       - ./tests:/home/appuser/app/tests
       - ./graphrag_indices:/data
