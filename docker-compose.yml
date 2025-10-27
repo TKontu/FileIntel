@@ -42,7 +42,6 @@ services:
       - ./alembic.ini:/home/appuser/app/alembic.ini
       - ./scripts:/home/appuser/app/scripts
       - ./tests:/home/appuser/app/tests
-      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
       - ./graphrag_indices:/data
     env_file:
       - .env
@@ -101,7 +100,6 @@ services:
       - ./mineru_outputs:/home/appuser/app/mineru_outputs
       - ./input:/home/appuser/app/input
       - ./output:/home/appuser/app/output
-      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
       - ./graphrag_indices:/data
     env_file:
       - .env
@@ -142,7 +140,6 @@ services:
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
-      - ./docker-entrypoint.sh:/home/appuser/app/docker-entrypoint.sh
     env_file:
       - .env
     environment:
