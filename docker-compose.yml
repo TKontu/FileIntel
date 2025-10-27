@@ -83,13 +83,15 @@ services:
   celery-worker:
     build: .
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--concurrency=6", "--pool=prefork", "--max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-10}"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}", "--max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-50}"]
     deploy:
       resources:
         limits:
+          # Hard limit - container killed if exceeded (triggers OOM)
           memory: ${CELERY_WORKER_MEMORY_LIMIT:-8G}
         reservations:
-          memory: ${CELERY_WORKER_MEMORY_RESERVATION:-2G}
+          # Soft guarantee - Docker tries to reserve this minimum (for scheduling)
+          memory: ${CELERY_WORKER_MEMORY_RESERVATION:-1G}
     volumes:
       - ./src:/home/appuser/app/src
       - ./config:/home/appuser/app/config
@@ -118,6 +120,11 @@ services:
       # Celery configuration
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Worker resource configuration (auto-calculates memory per worker)
+      # Concurrency: CPU cores × 1-2 for I/O tasks (embeddings), × 0.5-1 for CPU tasks (GraphRAG)
+      - CELERY_WORKER_CONCURRENCY=${CELERY_WORKER_CONCURRENCY:-4}
+      # Overhead: Redis/DB pools + system buffers (1GB min, 10-15% of container memory)
+      - CELERY_MEMORY_OVERHEAD_GB=${CELERY_MEMORY_OVERHEAD_GB:-1.0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

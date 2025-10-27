@@ -122,6 +122,9 @@ async def get_task_status_endpoint(task_id: str) -> ApiResponseV2:
     if not task_info:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
+    # Log status check request
+    logger.info(f"Task status requested: task_id={task_id} state={task_info.get('state', 'unknown')}")
+
     # Extract progress information
     progress = _extract_progress_info(task_info)
 
@@ -157,6 +160,9 @@ async def list_tasks(
     Note: This provides limited functionality compared to full task history storage.
     For complete task history, consider implementing a task result backend.
     """
+    # Log list request
+    logger.info(f"Task list requested: status_filter={status} limit={limit} offset={offset}")
+
     # Get active tasks from Celery
     active_tasks_data = get_active_tasks()
 
@@ -221,6 +227,12 @@ async def cancel_task_endpoint(
             detail=f"Task {task_id} is already completed ({task_info['state']}) and cannot be cancelled",
         )
 
+    # Log cancellation request
+    logger.info(
+        f"Task cancellation requested: task_id={task_id} terminate={request.terminate} "
+        f"current_state={task_info['state']}"
+    )
+
     # Cancel the task
     success = cancel_task(task_id)
 
@@ -228,6 +240,9 @@ async def cancel_task_endpoint(
         # For terminate, we need to use Celery's control API
         app = get_celery_app()
         app.control.revoke(task_id, terminate=True)
+
+    # Log cancellation result
+    logger.info(f"Task cancelled: task_id={task_id} terminate={request.terminate} success={success}")
 
     cancellation_response = TaskOperationResponse(
         task_id=task_id,
@@ -371,6 +386,9 @@ async def cancel_batch_tasks(
     Useful for cancelling all tasks in a workflow or batch operation.
     """
     try:
+        # Log batch cancel request
+        logger.info(f"Batch cancellation requested: tasks={len(request.task_ids)} terminate={request.terminate}")
+
         results = []
         successful_cancellations = 0
 
@@ -422,6 +440,12 @@ async def cancel_batch_tasks(
                 results.append(
                     {"task_id": task_id, "success": False, "message": str(e)}
                 )
+
+        # Log batch completion
+        logger.info(
+            f"Batch cancellation completed: total={len(request.task_ids)} "
+            f"cancelled={successful_cancellations} failed={len(request.task_ids) - successful_cancellations}"
+        )
 
         return ApiResponseV2(
             success=True,
@@ -514,6 +538,13 @@ async def submit_task(request: GenericTaskSubmissionRequest) -> ApiResponseV2:
         if request.eta:
             task_options["eta"] = request.eta
 
+        # Log task submission request
+        logger.info(
+            f"Received task submission: task_name={request.task_name} "
+            f"args_count={len(request.args) if request.args else 0} "
+            f"kwargs_count={len(request.kwargs) if request.kwargs else 0}"
+        )
+
         # Submit the task
         try:
             result = app.send_task(
@@ -522,6 +553,9 @@ async def submit_task(request: GenericTaskSubmissionRequest) -> ApiResponseV2:
                 kwargs=request.kwargs,
                 **task_options,
             )
+
+            # Log successful submission
+            logger.info(f"Submitted task: task_id={result.id} task_name={request.task_name}")
 
             task_response = TaskSubmissionResponse(
                 task_id=result.id,

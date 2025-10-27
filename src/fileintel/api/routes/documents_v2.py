@@ -80,6 +80,9 @@ async def get_document_chunks(
     GET /api/v2/documents/3b9e6ac7-2152-4133-bd87-2cd0ffc09863/chunks?chunk_type=vector
     ```
     """
+    # Log request
+    logger.info(f"Document chunks requested (JSON): document_id={document_id} chunk_type={chunk_type}")
+
     # Get document info
     doc = storage.get_document(document_id)
     if not doc:
@@ -150,6 +153,9 @@ async def export_document_chunks_markdown(
     GET /api/v2/documents/3b9e6ac7-2152-4133-bd87-2cd0ffc09863/export?chunk_type=graph
     ```
     """
+    # Log request
+    logger.info(f"Document export requested (markdown): document_id={document_id} chunk_type={chunk_type} include_metadata={include_metadata}")
+
     # Get document info
     doc = storage.get_document(document_id)
     if not doc:
@@ -296,6 +302,9 @@ async def get_document_info(
     GET /api/v2/documents/3b9e6ac7-2152-4133-bd87-2cd0ffc09863
     ```
     """
+    # Log request
+    logger.info(f"Document info requested: document_id={document_id}")
+
     doc = storage.get_document(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
@@ -337,6 +346,9 @@ async def get_chunk_by_id(
     storage: PostgreSQLStorage = Depends(get_storage)
 ):
     """Get a single chunk by its UUID for GraphRAG source tracing."""
+    # Log request
+    logger.info(f"Chunk requested: chunk_id={chunk_id}")
+
     chunk = storage.get_chunk_by_id(chunk_id)
 
     if not chunk:

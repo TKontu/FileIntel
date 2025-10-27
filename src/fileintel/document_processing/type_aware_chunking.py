@@ -569,6 +569,6 @@ def chunk_elements_by_type(
         element_chunks = chunk_element_by_type(element, max_tokens, chunker)
         all_chunks.extend(element_chunks)
 
-    logger.debug(f"Chunked {len(elements)} elements into {len(all_chunks)} chunks using type-aware strategies")
+    logger.info(f"Chunked {len(elements)} elements into {len(all_chunks)} chunks using type-aware strategies")
 
     return all_chunks

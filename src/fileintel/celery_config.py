@@ -5,6 +5,7 @@ This module provides optimal Celery configuration for multicore utilization
 and distributed processing of document analysis, RAG operations, and LLM tasks.
 """
 
+import os
 from celery import Celery
 from kombu import Queue
 from fileintel.core.config import get_config
@@ -107,6 +108,24 @@ def configure_celery_app(config=None):
 
     celery_settings = config.celery
 
+    # Calculate dynamic memory limit per worker based on container resources
+    # This ensures we never exceed container memory limits
+    # Read from same CELERY_WORKER_MEMORY_LIMIT used in docker-compose deploy.resources.limits.memory
+    container_memory_str = os.getenv("CELERY_WORKER_MEMORY_LIMIT", "8G")
+    container_memory_gb = float(container_memory_str.rstrip("GgMmKk").rstrip("B").rstrip("b"))
+    worker_concurrency = int(os.getenv("CELERY_WORKER_CONCURRENCY", "3"))
+    memory_overhead_gb = float(os.getenv("CELERY_MEMORY_OVERHEAD_GB", "1.0"))  # System + broker overhead
+
+    # Formula: (Container Memory - Overhead) / Workers * 1000000 KB
+    # Example: (8GB - 1GB) / 3 workers = 2.33GB per worker
+    max_memory_per_child = int((container_memory_gb - memory_overhead_gb) / worker_concurrency * 1000000)
+
+    logger.info(
+        f"Dynamic worker memory limits: "
+        f"container={container_memory_gb}GB, concurrency={worker_concurrency}, "
+        f"overhead={memory_overhead_gb}GB → max_per_worker={max_memory_per_child/1000000:.2f}GB"
+    )
+
     # Configure Celery with optimal settings for multicore utilization
     app.conf.update(
         # Broker and result backend configuration
@@ -173,8 +192,9 @@ def configure_celery_app(config=None):
         # Priority and routing optimizations
         task_inherit_parent_priority=True,
         task_default_priority=5,  # Medium priority
-        # Memory and cleanup settings
-        worker_max_memory_per_child=4000000,  # 4GB per child process (handles GraphRAG heavy operations)
+        # Memory and cleanup settings - dynamically calculated from environment
+        # Set to 0 to disable memory limits if causing worker respawn issues
+        worker_max_memory_per_child=max_memory_per_child if max_memory_per_child > 0 else 0,
         task_soft_time_limit=celery_settings.task_soft_time_limit,  # Configurable from YAML
         task_time_limit=celery_settings.task_time_limit,  # Configurable from YAML
         # Result backend optimizations

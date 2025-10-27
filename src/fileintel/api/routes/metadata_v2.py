@@ -94,12 +94,25 @@ async def extract_document_metadata_endpoint(
         # Get existing file metadata
         file_metadata = document.document_metadata if document.document_metadata else None
 
+        # Log metadata extraction request
+        logger.info(
+            f"Received metadata extraction request: document_id={request.document_id} "
+            f"filename='{document.original_filename}' max_chunks={request.max_chunks} "
+            f"force_reextract={request.force_reextract}"
+        )
+
         # Start background metadata extraction task with timeout
         config = get_config()
         task_result = extract_document_metadata.apply_async(
             args=[request.document_id, text_chunks, file_metadata, request.max_chunks],
             soft_time_limit=config.llm.task_timeout_seconds,
             time_limit=config.llm.task_hard_limit_seconds,
+        )
+
+        # Log task submission
+        logger.info(
+            f"Submitted metadata extraction task: task_id={task_result.id} "
+            f"document_id={request.document_id}"
         )
 
         response_data = MetadataExtractionResponse(
@@ -141,6 +154,9 @@ async def get_document_metadata(
             )
 
         metadata = document.document_metadata or {}
+
+        # Log metadata fetch request
+        logger.info(f"Document metadata requested: document_id={document_id} filename='{document.original_filename}'")
 
         # Check if document has LLM-extracted metadata
         has_extracted_metadata = (
@@ -191,6 +207,13 @@ async def extract_collection_metadata(
 
         # Get all documents in collection
         documents = storage.get_documents_by_collection(collection.id)
+
+        # Log collection extraction request
+        logger.info(
+            f"Received collection metadata extraction: collection='{collection.name}' ({collection.id}) "
+            f"documents={len(documents)} force_reextract={force_reextract} max_chunks={max_chunks}"
+        )
+
         if not documents:
             return ApiResponseV2(
                 success=True,
@@ -248,6 +271,12 @@ async def extract_collection_metadata(
                 sleep(1)  # 1 second pause every 10 tasks
             processed_count += 1
 
+        # Log batch completion
+        logger.info(
+            f"Collection metadata extraction started: collection='{collection.name}' "
+            f"tasks_started={len(tasks_started)} processed={processed_count}"
+        )
+
         return ApiResponseV2(
             success=True,
             message=f"Started metadata extraction for {processed_count} documents in collection '{collection.name}'",
@@ -287,6 +316,9 @@ async def get_collection_metadata_status(
 
         # Get all documents in collection
         documents = storage.get_documents_by_collection(collection.id)
+
+        # Log status request
+        logger.info(f"Collection metadata status requested: collection='{collection.name}' ({collection.id})")
 
         status_summary = {
             "total_documents": len(documents),
@@ -432,6 +464,9 @@ async def bulk_update_metadata(
                 detail="No updates provided"
             )
 
+        # Log bulk update request
+        logger.info(f"Received bulk metadata update: updates={len(request.updates)} replace={request.replace}")
+
         success_count = 0
         failed_updates = []
         updated_documents = []
@@ -477,6 +512,9 @@ async def bulk_update_metadata(
                     "document_id": document_id,
                     "error": str(e)
                 })
+
+        # Log update results
+        logger.info(f"Bulk metadata update completed: success={success_count} failed={len(failed_updates)}")
 
         return ApiResponseV2(
             success=True,

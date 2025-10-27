@@ -68,6 +68,12 @@ async def query_collection(
                 status_code=404, detail=f"Collection {collection_identifier} not found"
             )
 
+        # Log query request
+        logger.info(
+            f"Received query request: collection='{collection.name}' search_type={request.search_type} "
+            f"question_length={len(request.question)} max_results={request.max_results}"
+        )
+
         # Get configuration
         config = get_config()
 
@@ -96,6 +102,12 @@ async def query_collection(
 
         # Calculate processing time
         processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+
+        # Log query completion
+        logger.info(
+            f"Query completed: collection='{collection.name}' query_type={result.get('query_type')} "
+            f"processing_time={processing_time}ms"
+        )
 
         # Format response
         query_response = QueryResponse(
@@ -267,6 +279,12 @@ async def query_document(
                 detail=f"Document {document_identifier} not found in collection",
             )
 
+        # Log document query request
+        logger.info(
+            f"Received document query request: collection='{collection.name}' "
+            f"document='{document.original_filename}' question_length={len(request.question)}"
+        )
+
         # Get configuration
         config = get_config()
 
@@ -289,6 +307,12 @@ async def query_document(
 
             # Calculate processing time
             processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+
+            # Log query completion
+            logger.info(
+                f"Document query completed: document='{document.original_filename}' "
+                f"processing_time={processing_time}ms"
+            )
 
             # Format response
             query_response = QueryResponse(
@@ -381,6 +405,9 @@ async def get_query_status(
     Returns information about available collections, search methods, and system health.
     """
     try:
+        # Log status request
+        logger.info("Query system status requested")
+
         # Get collections with their document counts
         collections = storage.get_all_collections()
         collection_info = []

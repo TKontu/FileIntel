@@ -396,11 +396,11 @@ class UnifiedLLMProvider:
         prompt = self._build_rag_prompt(query, context, query_type)
 
         # LOG THE ACTUAL PROMPT
-        logger.info("="*80)
-        logger.info("FULL RAG PROMPT BEING SENT TO LLM:")
-        logger.info("="*80)
-        logger.info(prompt)
-        logger.info("="*80)
+        logger.debug("="*80)
+        logger.debug("FULL RAG PROMPT BEING SENT TO LLM:")
+        logger.debug("="*80)
+        logger.debug(prompt)
+        logger.debug("="*80)
 
         return self.generate_response(
             prompt=prompt,

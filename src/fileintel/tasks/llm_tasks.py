@@ -243,6 +243,7 @@ def generate_and_store_chunk_embedding(
         from fileintel.llm_integration.embedding_provider import OpenAIEmbeddingProvider
         from fileintel.celery_config import get_shared_storage
         from fileintel.core.config import get_config
+        import gc
 
         config = get_config()
 
@@ -263,15 +264,26 @@ def generate_and_store_chunk_embedding(
             if success:
                 # Log at DEBUG level for each chunk (visible only when debugging)
                 logger.debug(f"Successfully stored embedding for chunk {chunk_id}")
-                return {
+
+                result = {
                     "chunk_id": chunk_id,
                     "embedding_dimensions": len(embedding),
                     "status": "completed",
                 }
+
+                # Explicit memory cleanup to prevent accumulation
+                del embedding
+                del embeddings
+                del embedding_provider
+                gc.collect()
+
+                return result
             else:
                 raise ValueError(f"Failed to update chunk {chunk_id} in database")
         finally:
             storage.close()
+            # Force garbage collection after storage cleanup
+            gc.collect()
 
     except Exception as e:
         # Get chunk and document info for better error logging

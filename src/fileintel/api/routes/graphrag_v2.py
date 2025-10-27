@@ -83,10 +83,19 @@ async def create_graphrag_index(
                 detail=f"No processed chunks found in collection '{request.collection_id}'. Please process documents first.",
             )
 
+        # Log index creation request
+        logger.info(
+            f"Received GraphRAG index creation: collection='{collection.name}' ({collection.id}) "
+            f"documents={len(documents)} chunks={len(chunks)} force_rebuild={request.force_rebuild}"
+        )
+
         # Start background indexing task
         task_result = build_graphrag_index_task.delay(
             collection_id=str(collection.id), force_rebuild=request.force_rebuild
         )
+
+        # Log task submission
+        logger.info(f"Submitted GraphRAG indexing task: task_id={task_result.id} collection='{collection.name}'")
 
         response_data = GraphRAGIndexResponse(
             task_id=str(task_result.id),
@@ -125,6 +134,9 @@ async def get_graphrag_status(
                 status_code=404,
                 detail=f"Collection '{collection_identifier}' not found",
             )
+
+        # Log status request
+        logger.info(f"GraphRAG status requested: collection='{collection.name}' ({collection.id})")
 
         # Get index status
         graphrag_service = GraphRAGService(storage, config)
@@ -174,6 +186,9 @@ async def get_graphrag_entities(
                 status_code=404,
                 detail=f"Collection '{collection_identifier}' not found",
             )
+
+        # Log entities request
+        logger.info(f"GraphRAG entities requested: collection='{collection.name}' limit={limit}")
 
         # Check if index exists
         graphrag_service = GraphRAGService(storage, config)
@@ -267,6 +282,9 @@ async def get_graphrag_communities(
                 status_code=404,
                 detail=f"Collection '{collection_identifier}' not found",
             )
+
+        # Log communities request
+        logger.info(f"GraphRAG communities requested: collection='{collection.name}' limit={limit}")
 
         # Check if index exists
         graphrag_service = GraphRAGService(storage, config)
@@ -371,6 +389,9 @@ async def get_graphrag_community_by_id(
                 detail=f"Collection '{collection_identifier}' not found",
             )
 
+        # Log community request
+        logger.info(f"GraphRAG community requested: collection='{collection.name}' community_id={community_id}")
+
         # Check if index exists
         graphrag_service = GraphRAGService(storage, config)
         status = await graphrag_service.get_index_status(collection.id)
@@ -470,9 +491,15 @@ async def remove_graphrag_index(
                 detail=f"Collection '{collection_identifier}' not found",
             )
 
+        # Log index removal request
+        logger.info(f"GraphRAG index removal requested: collection='{collection.name}' ({collection.id})")
+
         # Remove index
         graphrag_service = GraphRAGService(storage, config)
         result = await graphrag_service.remove_index(collection.id)
+
+        # Log removal result
+        logger.info(f"GraphRAG index removed: collection='{collection.name}' status={result['status']}")
 
         if result["status"] == "no_index":
             return ApiResponseV2(

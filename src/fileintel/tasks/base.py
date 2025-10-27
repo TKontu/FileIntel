@@ -5,7 +5,7 @@ Provides a foundation for all FileIntel tasks with standardized:
 - Error handling and retry logic
 - Logging configuration
 - Progress tracking
-- Resource monitoring
+- Resource monitoring (including memory tracking)
 """
 
 import logging
@@ -45,16 +45,51 @@ class BaseFileIntelTask(Task):
 
     def __init__(self):
         self.config = get_config()
+        self._memory_monitor = None
+
+    def before_start(self, task_id: str, args: tuple, kwargs: dict) -> None:
+        """Called before task execution starts."""
+        # Initialize memory monitoring for this task
+        try:
+            from fileintel.utils.memory_monitor import MemoryMonitor
+
+            self._memory_monitor = MemoryMonitor(
+                task_name=self.name, enable_gc=True
+            )
+            self._memory_monitor.start_monitoring()
+        except Exception as e:
+            logger.warning(f"Failed to initialize memory monitoring: {e}")
 
     def on_success(self, retval: Any, task_id: str, args: tuple, kwargs: dict) -> None:
         """Called when the task succeeds."""
         logger.debug(f"Task {self.name}[{task_id}] completed successfully")
+
+        # Log final memory usage
+        if self._memory_monitor:
+            try:
+                summary = self._memory_monitor.finish_monitoring()
+                # Log warning if task used significant memory
+                if summary.get("peak_mb", 0) > 1000:
+                    logger.warning(
+                        f"Task {self.name}[{task_id}] used significant memory: "
+                        f"peak={summary['peak_mb']:.1f}MB, "
+                        f"delta={summary['delta_mb']:+.1f}MB"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to finalize memory monitoring: {e}")
 
     def on_failure(
         self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo
     ) -> None:
         """Called when the task fails."""
         logger.error(f"Task {self.name}[{task_id}] failed: {exc}")
+
+        # Log memory state on failure (may help identify memory-related failures)
+        if self._memory_monitor:
+            try:
+                self._memory_monitor.log_memory("FAILURE")
+            except Exception as e:
+                logger.warning(f"Failed to log memory on failure: {e}")
 
     def on_retry(
         self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo
@@ -83,6 +118,21 @@ class BaseFileIntelTask(Task):
         from fileintel.core.validation import validate_required_fields
 
         validate_required_fields(kwargs, required_fields)
+
+    def memory_checkpoint(self, label: str) -> None:
+        """
+        Log memory usage at a checkpoint.
+
+        Useful for tracking memory at different stages of task execution.
+
+        Args:
+            label: Descriptive label for this checkpoint
+        """
+        if self._memory_monitor:
+            try:
+                self._memory_monitor.checkpoint(label)
+            except Exception as e:
+                logger.warning(f"Failed to log memory checkpoint '{label}': {e}")
 
 
 # Bind the base task to the Celery app (only when Celery is available)

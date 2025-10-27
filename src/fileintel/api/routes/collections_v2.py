@@ -74,6 +74,10 @@ async def create_collection(
 ) -> ApiResponseV2:
     """Create a new collection."""
     collection = storage.create_collection(request.name, request.description)
+
+    # Log collection creation
+    logger.info(f"Collection created: name='{collection.name}' id={collection.id}")
+
     return create_success_response(
         {
             "id": collection.id,
@@ -90,6 +94,10 @@ async def list_collections(
 ) -> ApiResponseV2:
     """List all collections."""
     collections = storage.get_all_collections()
+
+    # Log collections list request
+    logger.info(f"Collections list requested: found {len(collections)} collections")
+
     collection_data = [
         {
             "id": c.id,
@@ -111,6 +119,10 @@ async def get_collection(
     collection = validate_collection_exists(
         collection_identifier, storage, "get collection"
     )
+
+    # Log collection retrieval
+    logger.info(f"Collection retrieved: name='{collection.name}' id={collection.id} documents={len(collection.documents)}")
+
     collection_data = {
         "id": collection.id,
         "name": collection.name,
@@ -138,6 +150,10 @@ async def delete_collection(
     collection = validate_collection_exists(
         collection_identifier, storage, "delete collection"
     )
+
+    # Log collection deletion
+    logger.info(f"Collection deleted: name='{collection.name}' id={collection.id}")
+
     storage.delete_collection(collection.id)
     return create_success_response(
         {"message": f"Collection '{collection.name}' deleted successfully"}
@@ -174,6 +190,9 @@ async def upload_document_to_collection(
             )
 
         config = get_config()
+
+        # Log document upload request
+        logger.info(f"Received document upload request: collection='{collection.name}' ({collection.id}) file='{file.filename}'")
 
         # Validate file upload
         from fileintel.core.validation import (
@@ -239,6 +258,12 @@ async def upload_document_to_collection(
             )
             duplicate_detected = False
 
+        # Log successful upload
+        logger.info(
+            f"Document uploaded successfully: document_id={document.id} filename='{document.original_filename}' "
+            f"size={document.file_size}B duplicate={duplicate_detected}"
+        )
+
         return ApiResponseV2(
             success=True,
             data={
@@ -268,6 +293,9 @@ async def get_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Get a specific document by ID or ID prefix."""
+    # Log document retrieval request
+    logger.info(f"Document retrieval requested: document_id={document_id}")
+
     # Try exact match first
     document = storage.get_document(document_id)
 
@@ -312,6 +340,9 @@ async def delete_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Delete a specific document by ID or ID prefix."""
+    # Log document deletion request
+    logger.info(f"Document deletion requested: document_id={document_id}")
+
     # Try exact match first
     document = storage.get_document(document_id)
 
@@ -336,6 +367,10 @@ async def delete_document(
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
     filename = document.original_filename or document.filename
+
+    # Log document deletion
+    logger.info(f"Document deleted: document_id={document_id} filename='{filename}'")
+
     storage.delete_document(document_id)
     return create_success_response(
         {"message": f"Document '{filename}' deleted successfully"}
@@ -351,6 +386,9 @@ async def get_document_chunks(
     storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Get chunks for a specific document by ID or ID prefix."""
+    # Log chunks retrieval request
+    logger.info(f"Document chunks requested: document_id={document_id} limit={limit} offset={offset}")
+
     # Try exact match first
     document = storage.get_document(document_id)
 
@@ -472,9 +510,10 @@ async def submit_collection_processing_task(
                         "filename": doc.original_filename or doc.filename
                     })
 
+        # Log processing plan
         logger.info(
-            f"Collection {collection.id}: {len(documents_with_chunks)} documents already processed, "
-            f"{len(file_paths)} documents need processing"
+            f"Processing plan: collection='{collection.name}' ({collection.id}) "
+            f"already_processed={len(documents_with_chunks)} need_processing={len(file_paths)}"
         )
 
         # Validate operation type first
@@ -551,6 +590,12 @@ async def submit_collection_processing_task(
             collection.id, "processing", task_id=task.id
         )
 
+        # Log task submission
+        logger.info(
+            f"Submitted processing task: task_id={task.id} type={request.operation_type} "
+            f"collection='{collection.name}' files={len(file_paths)}"
+        )
+
         # Create response
         response_data = TaskSubmissionResponse(
             task_id=task.id,
@@ -598,6 +643,12 @@ async def add_documents_to_collection(
         if not request.file_paths:
             raise HTTPException(status_code=400, detail="No file paths provided")
 
+        # Log incremental update request
+        logger.info(
+            f"Received incremental update task: collection='{collection.name}' ({collection.id}) "
+            f"new_files={len(request.file_paths)}"
+        )
+
         # Get existing embeddings for incremental update
         existing_documents = storage.get_documents_by_collection(collection.id)
         existing_embeddings = []
@@ -609,6 +660,12 @@ async def add_documents_to_collection(
             collection_identifier=collection.id,
             new_file_paths=request.file_paths,
             existing_embeddings=existing_embeddings,
+        )
+
+        # Log task submission
+        logger.info(
+            f"Submitted incremental update task: task_id={task.id} "
+            f"collection='{collection.name}' files={len(request.file_paths)}"
         )
 
         response_data = TaskSubmissionResponse(
@@ -661,6 +718,12 @@ async def submit_batch_processing_tasks(
         failed_submissions = []  # Track failures instead of silently skipping
         batch_id = str(uuid.uuid4())
 
+        # Log batch request
+        logger.info(
+            f"Received batch processing request: batch_id={batch_id} "
+            f"collections={len(request.tasks)} workflow={request.workflow_type}"
+        )
+
         for task_request in request.tasks:
             try:
                 # Validate collection exists
@@ -695,6 +758,12 @@ async def submit_batch_processing_tasks(
                         f"No documents found for collection {collection.id}"
                     )
                     continue
+
+                # Log batch item processing
+                logger.info(
+                    f"Processing batch item: batch_id={batch_id} collection='{collection.name}' ({collection.id}) "
+                    f"files={len(file_paths)}"
+                )
 
                 # Submit task based on workflow type
                 if request.workflow_type == "parallel":
@@ -749,6 +818,12 @@ async def submit_batch_processing_tasks(
                 detail=f"No valid tasks could be submitted. {len(failed_submissions)} tasks failed."
             )
 
+        # Log batch completion
+        logger.info(
+            f"Batch processing submitted: batch_id={batch_id} submitted={len(submitted_tasks)} "
+            f"failed={len(failed_submissions)} workflow={request.workflow_type}"
+        )
+
         response_data = BatchTaskSubmissionResponse(
             batch_id=batch_id,
             task_ids=submitted_tasks,
@@ -790,6 +865,9 @@ async def get_collection_processing_status(
             raise HTTPException(
                 status_code=404, detail=f"Collection {collection_identifier} not found"
             )
+
+        # Log status check request
+        logger.info(f"Status check requested: collection='{collection.name}' ({collection.id})")
 
         # Get collection status and related information
         documents = storage.get_documents_by_collection(collection.id)
@@ -920,6 +998,13 @@ async def upload_and_process_documents(
         uploaded_files = []
         duplicate_files = []
 
+        # Log upload and process request
+        logger.info(
+            f"Received upload and process request: collection='{collection.name}' ({collection.id}) "
+            f"files={len(files)} process_immediately={process_immediately} "
+            f"build_graph={build_graph} extract_metadata={extract_metadata} generate_embeddings={generate_embeddings}"
+        )
+
         # Upload files
         for file in files:
             if not file.filename:
@@ -988,6 +1073,12 @@ async def upload_and_process_documents(
         if not uploaded_files and not duplicate_files:
             raise HTTPException(status_code=400, detail="No files were uploaded")
 
+        # Log upload phase completion
+        logger.info(
+            f"Upload phase completed: collection='{collection.name}' ({collection.id}) "
+            f"uploaded={len(uploaded_files)} duplicates={len(duplicate_files)}"
+        )
+
         result_data = {
             "uploaded_files": len(uploaded_files),
             "duplicates_skipped": len(duplicate_files),
@@ -1003,6 +1094,12 @@ async def upload_and_process_documents(
                 build_graph=build_graph,
                 extract_metadata=extract_metadata,
                 generate_embeddings=generate_embeddings,
+            )
+
+            # Log processing task submission
+            logger.info(
+                f"Submitted processing task for uploaded files: task_id={task.id} "
+                f"collection='{collection.name}' files={len(uploaded_files)}"
             )
 
             result_data.update(
