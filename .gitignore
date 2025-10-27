@@ -34,7 +34,6 @@ build/
 *.pdf
 
 # Documentation
-git-cheat-sheet.md
 
 # Node modules
 node_modules/

@@ -183,7 +183,7 @@ output:
   max_concurrent_jobs: ${OUTPUT_MAX_CONCURRENT_JOBS:-5}
 
 logging:
-  level: ${LOG_LEVEL:-WARNING}
+  level: ${LOG_LEVEL:-INFO}
   # Component-specific log levels (overrides for specific loggers)
   # Useful for seeing progress at INFO while keeping root at WARNING
   component_levels:
@@ -193,54 +193,54 @@ logging:
     fileintel.rag.graph_rag.services: INFO                        # GraphRAG service operations
     fileintel.tasks.graphrag_tasks: INFO                          # GraphRAG task operations
 
-    # Detailed operations (DEBUG level - enable for troubleshooting)
-    fileintel.document_processing.element_filter: DEBUG           # Element filtering details
-    fileintel.document_processing.chunking: DEBUG                 # Chunking operations
-    fileintel.document_processing.type_aware_chunking: DEBUG      # Type-aware chunking
-    fileintel.tasks.document_tasks: DEBUG                         # Document task operations
+    # Detailed operations
+    fileintel.document_processing.element_filter: INFO           # Element filtering details
+    fileintel.document_processing.chunking: INFO                 # Chunking operations
+    fileintel.document_processing.type_aware_chunking: INFO      # Type-aware chunking
+    fileintel.tasks.document_tasks: INFO                         # Document task operations
 
     # GraphRAG library (show workflow progress only)
     graphrag.index.workflows: INFO
 
     # Keep these quiet (too verbose - logs every chunk/batch)
-    fileintel.tasks.llm_tasks: WARNING          # Logs every chunk embedding
-    fileintel.llm_integration: WARNING          # Logs every batch to API
+    fileintel.tasks.llm_tasks: INFO          # Logs every chunk embedding
+    fileintel.llm_integration: INFO          # Logs every batch to API
 
     # GraphRAG library - suppress verbose operation logs
-    graphrag.index.operations: WARNING          # General operations
-    graphrag.index.text_splitting: WARNING      # Text splitting
-    graphrag.index.graph: WARNING               # All graph operations (extraction, etc.)
-    graphrag.index.graph.extractors: WARNING    # Graph extraction with "DEBUG" messages
-    graphrag.index.graph.extraction: WARNING    # Entity/relationship extraction
-    graphrag.index.operations.extract_graph: WARNING  # Extract graph progress logs
-    graphrag.index.operations.summarize_descriptions: WARNING  # Summarize progress logs
-    graphrag.query: WARNING                     # Query operations
-    fnllm: WARNING                              # GraphRAG's LLM library (achat, model calls)
-    fnllm.events: WARNING                       # FNLLM event logging
-    fnllm.openai: WARNING                       # FNLLM OpenAI integration
-    graphrag: WARNING                           # Catch-all for any other graphrag logs
+    graphrag.index.operations: INFO          # General operations
+    graphrag.index.text_splitting: INFO      # Text splitting
+    graphrag.index.graph: INFO               # All graph operations (extraction, etc.)
+    graphrag.index.graph.extractors: INFO    # Graph extraction with "DEBUG" messages
+    graphrag.index.graph.extraction: INFO    # Entity/relationship extraction
+    graphrag.index.operations.extract_graph: INFO  # Extract graph progress logs
+    graphrag.index.operations.summarize_descriptions: INFO  # Summarize progress logs
+    graphrag.query: INFO                     # Query operations
+    fnllm: INFO                              # GraphRAG's LLM library (achat, model calls)
+    fnllm.events: INFO                       # FNLLM event logging
+    fnllm.openai: INFO                       # FNLLM OpenAI integration
+    graphrag: INFO                           # Catch-all for any other graphrag logs
 
     # Celery task logging (all variants)
-    celery: WARNING                             # General Celery
-    celery.app: WARNING                         # Celery app
-    celery.app.trace: WARNING                   # Task execution traces
-    celery.worker: WARNING                      # Worker logs
-    celery.worker.strategy: WARNING             # Worker strategy
-    celery.worker.consumer: WARNING             # Task consumer
-    billiard: WARNING                           # Celery's process pool
+    celery: INFO                             # General Celery
+    celery.app: INFO                         # Celery app
+    celery.app.trace: INFO                   # Task execution traces
+    celery.worker: INFO                      # Worker logs
+    celery.worker.strategy: INFO             # Worker strategy
+    celery.worker.consumer: INFO             # Task consumer
+    billiard: INFO                           # Celery's process pool
 
     # HTTP client libraries (all variants)
-    httpx: WARNING                              # HTTP client library
-    httpcore: WARNING                           # HTTP core
-    httpcore.connection: WARNING                # HTTP connections
-    httpcore.http11: WARNING                    # HTTP/1.1 protocol
-    urllib3: WARNING                            # Fallback HTTP library
-    urllib3.connectionpool: WARNING             # Connection pooling
+    httpx: INFO                              # HTTP client library
+    httpcore: INFO                           # HTTP core
+    httpcore.connection: INFO                # HTTP connections
+    httpcore.http11: INFO                    # HTTP/1.1 protocol
+    urllib3: INFO                            # Fallback HTTP library
+    urllib3.connectionpool: INFO             # Connection pooling
 
     # API server logging
     uvicorn: INFO                               # Server lifecycle (startup, shutdown)
     uvicorn.access: INFO                        # Access logs (HTTP requests/responses)
-    uvicorn.error: WARNING                      # Error logs
+    uvicorn.error: INFO                      # Error logs
 
     # NOTE: Important warnings (like filtered elements) will still appear
     # since they use WARNING level, which is above DEBUG/INFO

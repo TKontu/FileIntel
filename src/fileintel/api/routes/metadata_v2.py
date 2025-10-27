@@ -23,7 +23,7 @@ router = APIRouter(prefix="/metadata", tags=["Metadata"])
 class MetadataExtractionRequest(BaseModel):
     document_id: str = Field(..., description="Document ID to extract metadata for")
     force_reextract: bool = Field(False, description="Force re-extraction even if metadata exists")
-    max_chunks: int = Field(3, description="Number of chunks to use for extraction (default: 3)")
+    max_chunks: int = Field(6, description="Number of chunks to use for extraction (default: 3)")
 
 
 class MetadataBulkUpdateRequest(BaseModel):
