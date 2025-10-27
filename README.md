@@ -738,10 +738,6 @@ Contributions welcome! Please:
 4. Ensure all tests pass
 5. Submit a pull request
 
-## License
-
-[Your License Here]
-
 ## Acknowledgments
 
 - [Microsoft GraphRAG](https://github.com/microsoft/graphrag) - Graph-based RAG implementation
