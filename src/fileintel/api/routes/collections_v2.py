@@ -222,20 +222,23 @@ async def upload_document_to_collection(
 
         # Calculate file metadata
         import hashlib
+        from fileintel.utils.fingerprint import generate_content_fingerprint
 
         content_hash = hashlib.sha256(content).hexdigest()
+        content_fingerprint = generate_content_fingerprint(content)
         file_size = len(content)
         mime_type = file.content_type or "application/octet-stream"
 
-        # Check for duplicate in this collection
-        existing_document = storage.get_document_by_hash_and_collection(
-            content_hash, collection.id
-        )
+        logger.debug(f"File fingerprint: {content_fingerprint} (hash: {content_hash[:16]}...)")
+
+        # Check for duplicate by fingerprint (global deduplication)
+        # This finds the same content even if uploaded to different collections
+        existing_document = storage.get_document_by_fingerprint(content_fingerprint)
 
         if existing_document:
             logger.info(
-                f"Duplicate detected: {file.filename} (hash: {content_hash[:16]}...) "
-                f"already exists as document {existing_document.id}"
+                f"Duplicate detected: {file.filename} (fingerprint: {content_fingerprint}) "
+                f"already exists as document {existing_document.id} in collection {existing_document.collection_id}"
             )
 
             # Return existing document instead of creating duplicate
@@ -246,6 +249,7 @@ async def upload_document_to_collection(
             document = storage.create_document(
                 filename=unique_filename,
                 content_hash=content_hash,
+                content_fingerprint=content_fingerprint,
                 file_size=file_size,
                 mime_type=mime_type,
                 collection_id=collection.id,

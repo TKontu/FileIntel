@@ -81,6 +81,9 @@ class Document(Base):
     content_hash = Column(
         String, nullable=False, index=True
     )  # No longer unique across all collections
+    content_fingerprint = Column(
+        String(36), nullable=True, index=True
+    )  # Deterministic UUID v5 from content, enables deduplication and caching
     file_size = Column(Integer, nullable=False)
     mime_type = Column(String, nullable=False)
     document_metadata = Column(JSONB, nullable=True)

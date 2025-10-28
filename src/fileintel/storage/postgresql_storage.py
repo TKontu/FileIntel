@@ -77,6 +77,7 @@ class PostgreSQLStorage(StorageInterface):
         file_path: str = None,
         original_filename: str = None,
         metadata: Dict[str, Any] = None,
+        content_fingerprint: str = None,
     ):
         """Create a new document."""
         return self.document_storage.create_document(
@@ -88,6 +89,7 @@ class PostgreSQLStorage(StorageInterface):
             file_path,
             original_filename,
             metadata,
+            content_fingerprint,
         )
 
     def get_document(self, document_id: str):
@@ -121,6 +123,18 @@ class PostgreSQLStorage(StorageInterface):
         return self.document_storage.get_document_by_original_filename_and_collection(
             original_filename, collection_id
         )
+
+    def get_document_by_fingerprint(
+        self, fingerprint: str, collection_id: str = None
+    ):
+        """Get document by content fingerprint."""
+        return self.document_storage.get_document_by_fingerprint(
+            fingerprint, collection_id
+        )
+
+    def get_all_documents_by_fingerprint(self, fingerprint: str) -> List:
+        """Get all documents with this fingerprint across all collections."""
+        return self.document_storage.get_all_documents_by_fingerprint(fingerprint)
 
     def get_documents_by_collection(self, collection_id: str) -> List:
         """Get all documents in a collection."""

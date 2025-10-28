@@ -173,6 +173,7 @@ class DocumentStorage:
         file_path: str = None,
         original_filename: str = None,
         metadata: Dict[str, Any] = None,
+        content_fingerprint: str = None,
     ) -> Document:
         """Create a new document."""
         try:
@@ -203,6 +204,7 @@ class DocumentStorage:
                 id=document_id,
                 filename=filename,
                 content_hash=content_hash,
+                content_fingerprint=content_fingerprint,
                 file_size=file_size,
                 mime_type=mime_type,
                 collection_id=collection_id,
@@ -272,6 +274,62 @@ class DocumentStorage:
                 )
             )
             .first()
+        )
+
+    def get_document_by_fingerprint(
+        self, fingerprint: str, collection_id: str = None
+    ) -> Document:
+        """
+        Get document by content fingerprint.
+
+        Args:
+            fingerprint: Content fingerprint UUID (deterministic, content-based)
+            collection_id: Optional collection filter (for scoped lookup)
+
+        Returns:
+            Document if found, None otherwise
+
+        Examples:
+            # Global lookup (any collection)
+            doc = storage.get_document_by_fingerprint("8f3d2c1b-...")
+
+            # Scoped lookup (specific collection)
+            doc = storage.get_document_by_fingerprint("8f3d2c1b-...", collection_id="abc123")
+        """
+        query = self.db.query(Document).filter(
+            Document.content_fingerprint == fingerprint
+        )
+
+        if collection_id:
+            # Scoped to specific collection
+            query = query.filter(Document.collection_id == collection_id)
+
+        return query.first()
+
+    def get_all_documents_by_fingerprint(self, fingerprint: str) -> List[Document]:
+        """
+        Get all documents with this fingerprint across all collections.
+
+        Useful for:
+        - Checking if content exists anywhere in system
+        - Finding duplicate uploads in different collections
+        - Tracking content reuse
+
+        Args:
+            fingerprint: Content fingerprint UUID
+
+        Returns:
+            List of Documents (may be empty if not found)
+
+        Example:
+            docs = storage.get_all_documents_by_fingerprint("8f3d2c1b-...")
+            if docs:
+                print(f"This content exists in {len(docs)} collections")
+        """
+        return (
+            self.db.query(Document)
+            .filter(Document.content_fingerprint == fingerprint)
+            .all()
         )
 
     def get_documents_by_collection(self, collection_id: str) -> List[Document]:

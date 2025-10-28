@@ -31,16 +31,20 @@ services:
   api:
     image: fileintel:latest
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
     ports:
       - "${API_PORT:-8000}:8000"  # Only the API is exposed to the host network
     volumes:
-      - ./prompts:/home/appuser/app/prompts
-      - ./logs:/home/appuser/app/logs
-      - ./uploads:/home/appuser/app/uploads
-      - ./input:/home/appuser/app/input
-      - ./output:/home/appuser/app/output
-      - ./config:/home/appuser/app/config
+      # Data directories - can use TrueNAS dataset paths via env vars
+      - ${HOST_PROMPTS_PATH:-prompts}:/home/appuser/app/prompts
+      - ${HOST_LOGS_PATH:-logs}:/home/appuser/app/logs
+      - ${HOST_UPLOADS_PATH:-uploads}:/home/appuser/app/uploads
+      - ${HOST_INPUT_PATH:-input}:/home/appuser/app/input
+      - ${HOST_OUTPUT_PATH:-output}:/home/appuser/app/output
+      - ${HOST_CONFIG_PATH:-config}:/home/appuser/app/config
+      - ${HOST_GRAPHRAG_PATH:-graphrag_indices}:/data
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/home/appuser/app/src
       - PYTHONUNBUFFERED=1
@@ -49,13 +53,20 @@ services:
       - DB_HOST=postgres  # Uses internal Docker network hostname
       - DB_PORT=5432      # Uses default PostgreSQL port internally
       - DB_NAME=${POSTGRES_DB:-fileintel}
-      # OpenAI Configuration
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       # Configurable paths
       - UPLOADS_DIR=/home/appuser/app/uploads
       - PROMPTS_DIR=/home/appuser/app/prompts
       - INPUT_DIR=/home/appuser/app/input
       - OUTPUT_DIR=/home/appuser/app/output
+      # GraphRAG path - must match volume mount
+      - GRAPHRAG_INDEX_PATH=/data
+      # Celery configuration for task submission
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Database migration management
+      - RUN_MIGRATIONS=true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,18 +76,30 @@ services:
     networks:
       - fileintel
 
-  worker:
+  celery-worker:
     image: fileintel:latest
-    entrypoint: []
-    command: ["python", "run_worker.py"]
-    # No external port exposure - worker only communicates internally
+    entrypoint: ["./docker-entrypoint.sh"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}", "--max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-50}"]
+    deploy:
+      resources:
+        limits:
+          # Hard limit - container killed if exceeded (triggers OOM)
+          memory: ${CELERY_WORKER_MEMORY_LIMIT:-8G}
+        reservations:
+          # Soft guarantee - Docker tries to reserve this minimum (for scheduling)
+          memory: ${CELERY_WORKER_MEMORY_RESERVATION:-1G}
     volumes:
-      - ./prompts:/home/appuser/app/prompts
-      - ./logs:/home/appuser/app/logs
-      - ./uploads:/home/appuser/app/uploads
-      - ./input:/home/appuser/app/input
-      - ./output:/home/appuser/app/output
-      - ./config:/home/appuser/app/config
+      # Data directories - can use TrueNAS dataset paths via env vars
+      - ${HOST_PROMPTS_PATH:-prompts}:/home/appuser/app/prompts
+      - ${HOST_LOGS_PATH:-logs}:/home/appuser/app/logs
+      - ${HOST_UPLOADS_PATH:-uploads}:/home/appuser/app/uploads
+      - ${HOST_MINERU_OUTPUTS_PATH:-mineru_outputs}:/home/appuser/app/mineru_outputs
+      - ${HOST_INPUT_PATH:-input}:/home/appuser/app/input
+      - ${HOST_OUTPUT_PATH:-output}:/home/appuser/app/output
+      - ${HOST_CONFIG_PATH:-config}:/home/appuser/app/config
+      - ${HOST_GRAPHRAG_PATH:-graphrag_indices}:/data
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/home/appuser/app/src
       - PYTHONUNBUFFERED=1
@@ -85,21 +108,109 @@ services:
       - DB_HOST=postgres  # Uses internal Docker network hostname
       - DB_PORT=5432      # Uses default PostgreSQL port internally
       - DB_NAME=${POSTGRES_DB:-fileintel}
-      # OpenAI Configuration
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # Configurable paths
       - UPLOADS_DIR=/home/appuser/app/uploads
       - PROMPTS_DIR=/home/appuser/app/prompts
       - INPUT_DIR=/home/appuser/app/input
       - OUTPUT_DIR=/home/appuser/app/output
+      # GraphRAG path - must match volume mount
+      - GRAPHRAG_INDEX_PATH=/data
+      # Celery configuration
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Worker resource configuration (auto-calculates memory per worker)
+      # Concurrency: CPU cores × 1-2 for I/O tasks (embeddings), × 0.5-1 for CPU tasks (GraphRAG)
+      - CELERY_WORKER_CONCURRENCY=${CELERY_WORKER_CONCURRENCY:-4}
+      # Overhead: Redis/DB pools + system buffers (1GB min, 10-15% of container memory)
+      - CELERY_MEMORY_OVERHEAD_GB=${CELERY_MEMORY_OVERHEAD_GB:-1.0}
+      # Fork memory optimization - reduces COW memory spikes during worker creation
+      # Use exec() instead of fork() - creates fresh process (avoids memory duplication)
+      - CELERYD_FORCE_EXECV=${CELERYD_FORCE_EXECV:-true}
+      # Memory allocator tuning for better copy-on-write behavior
+      - MALLOC_MMAP_THRESHOLD_=65536
+      - MALLOC_TRIM_THRESHOLD_=131072
+      - MALLOC_MMAP_MAX_=65536
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+  flower:
+    image: fileintel:latest
+    entrypoint: ["./docker-entrypoint.sh"]
+    command: ["celery", "-A", "fileintel.flower_celery:app", "flower", "--port=5555"]
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    volumes:
+      # Only mount config - code is in the image
+      - ${HOST_CONFIG_PATH:-config}:/home/appuser/app/config
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/home/appuser/app/src
+      - PYTHONUNBUFFERED=1
+      # Set dummy database config to prevent connection attempts
+      - DB_USER=dummy
+      - DB_PASSWORD=dummy
+      - DB_HOST=dummy
+      - DB_PORT=5432
+      - DB_NAME=dummy
+      # Celery configuration for monitoring
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Disable database features for Flower
+      - DISABLE_DATABASE=true
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+  backup:
+    build:
+      context: ./docker/backup
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fileintel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-fileintel}
+      POSTGRES_HOST: postgres
+    volumes:
+      - backups:/backups
+    command: >
+      sh -c "while true; do
+        /usr/local/bin/backup.sh
+        sleep 86400
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - fileintel
 
 volumes:
   postgres_data:
+  backups:
+  # Named volumes below are used as defaults when HOST_*_PATH env vars are not set
+  # When deploying on TrueNAS, override with bind mounts to datasets in your .env:
+  # HOST_GRAPHRAG_PATH=/mnt/HDDs/docker/apps/fileintel/graphrag_indices
+  # HOST_UPLOADS_PATH=/mnt/HDDs/docker/apps/fileintel/uploads
+  # HOST_CONFIG_PATH=/mnt/HDDs/docker/apps/fileintel/config
+  # etc.
+  prompts:
+  logs:
+  uploads:
+  mineru_outputs:
+  input:
+  output:
+  config:
+  graphrag_indices:

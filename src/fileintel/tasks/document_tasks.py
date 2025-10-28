@@ -224,12 +224,16 @@ def _store_filtering_results(
         # Don't fail the whole process if metadata storage fails
 
 
-def read_document_with_elements(file_path: str) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], List[TextElement]]:
+def read_document_with_elements(
+    file_path: str,
+    content_fingerprint: str = None
+) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any], List[TextElement]]:
     """
     Read document preserving structured elements for filtering and processing.
 
     Args:
         file_path: Path to the document file
+        content_fingerprint: Optional content fingerprint for cache lookup
 
     Returns:
         Tuple of (combined_text, page_mappings, metadata, elements)
@@ -316,7 +320,18 @@ def read_document_with_elements(file_path: str) -> Tuple[str, List[Dict[str, Any
 
     # Process document and extract text with page mapping
     processor = processor_class()
-    elements, metadata = processor.read(path)
+
+    # Try to pass fingerprint to processor for cache lookup
+    # Fallback gracefully if processor doesn't support the parameter
+    try:
+        if content_fingerprint:
+            elements, metadata = processor.read(path, content_fingerprint=content_fingerprint)
+        else:
+            elements, metadata = processor.read(path)
+    except TypeError:
+        # Processor doesn't support content_fingerprint parameter
+        logger.debug(f"Processor {processor_class.__name__} doesn't support fingerprinting, using basic read()")
+        elements, metadata = processor.read(path)
 
     # Build text and page mapping
     text_parts = []
@@ -636,8 +651,21 @@ def process_document(
         # Update progress
         self.update_progress(0, 3, "Reading document content")
 
+        # Get document fingerprint for cache lookup (if available)
+        content_fingerprint = None
+        if document_id:
+            from fileintel.celery_config import get_storage_context
+            with get_storage_context() as storage:
+                document = storage.get_document(document_id)
+                if document:
+                    content_fingerprint = document.content_fingerprint
+                    if content_fingerprint:
+                        logger.debug(f"Document fingerprint: {content_fingerprint}")
+
         # Read document content with page mappings, metadata, and elements for filtering
-        content, page_mappings, doc_metadata, elements = read_document_with_elements(file_path)
+        content, page_mappings, doc_metadata, elements = read_document_with_elements(
+            file_path, content_fingerprint=content_fingerprint
+        )
         logger.debug(f"Extracted {len(content)} characters from {file_path} with {len(page_mappings)} page mappings")
 
         # Filter corrupt/non-content elements before chunking

@@ -93,27 +93,55 @@ class MinerUSelfHostedProcessor:
                 "Subsequent requests will be faster."
             )
 
-    def read(self, file_path: Path, adapter: logging.LoggerAdapter = None) -> Tuple[List[DocumentElement], Dict[str, Any]]:
+    def read(
+        self,
+        file_path: Path,
+        adapter: logging.LoggerAdapter = None,
+        content_fingerprint: str = None
+    ) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
-        Process PDF using self-hosted MinerU FastAPI.
+        Process PDF using self-hosted MinerU FastAPI with caching support.
 
         Returns DocumentElements with rich metadata preservation from JSON data.
         Falls back to traditional processor on any failure.
+
+        Args:
+            file_path: Path to PDF file
+            adapter: Optional logger adapter
+            content_fingerprint: Optional content fingerprint for cache lookup
         """
         log = adapter or logger
         validate_file_for_processing(file_path, ".pdf")
 
         try:
-            # Process with self-hosted MinerU API
-            log.debug(f"Processing {file_path.name} with self-hosted MinerU API")
+            # Initialize cache
+            from fileintel.document_processing.mineru_cache import MinerUCache
+            mineru_config = self.config.document_processing.mineru
+            cache = MinerUCache(mineru_config.output_directory)
 
-            mineru_results = self._process_with_selfhosted_api(file_path, log)
+            # Check cache first (if fingerprint provided)
+            mineru_results = None
+            if content_fingerprint and cache.has_cache(content_fingerprint):
+                log.info(f"Loading MinerU output from cache for fingerprint {content_fingerprint}")
+                mineru_results = cache.load_cached_output(content_fingerprint)
 
-            # Save outputs if enabled (for debugging)
-            self._save_mineru_outputs(mineru_results, file_path, log)
+            # Process with API if no cache hit
+            if not mineru_results:
+                log.debug(f"Processing {file_path.name} with self-hosted MinerU API")
+                mineru_results = self._process_with_selfhosted_api(file_path, log)
 
             # Extract data from response
             markdown_content, json_data = self._extract_results_from_response(mineru_results)
+
+            # Save to cache if fingerprint provided and not from cache
+            if content_fingerprint and not mineru_results.get('from_cache'):
+                log.debug(f"Saving MinerU output to cache for fingerprint {content_fingerprint}")
+                cache.save_to_cache(content_fingerprint, mineru_results, markdown_content, json_data)
+
+            # Save outputs if enabled (for debugging) - use legacy naming
+            if mineru_config.save_outputs and not content_fingerprint:
+                # Only use legacy file-based saving if no fingerprint (backward compat)
+                self._save_mineru_outputs(mineru_results, file_path, log)
 
             # Create elements using JSON-first approach
             elements = self._create_elements_from_json(

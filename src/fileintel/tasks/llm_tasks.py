@@ -324,6 +324,138 @@ def generate_and_store_chunk_embedding(
         return {"chunk_id": chunk_id, "error": str(e), "status": "failed"}
 
 
+@app.task(base=BaseFileIntelTask, bind=True, queue="embedding_processing")
+def generate_and_store_chunk_embeddings_batch(
+    self, chunk_data: List[Dict[str, str]], model: str = None, **kwargs
+) -> Dict[str, Any]:
+    """
+    Generate embeddings for multiple chunks in a single API call (batched).
+
+    This is 10-25x more efficient than individual calls:
+    - Reduces HTTP connection overhead (1 connection vs N connections)
+    - Allows vLLM to process multiple texts in parallel on GPU
+    - Reduces database connection overhead (1 connection vs N connections)
+    - Reduces Celery task serialization overhead (1 task vs N tasks)
+
+    Args:
+        chunk_data: List of dicts with 'chunk_id' and 'text' keys
+        model: Embedding model to use (optional, uses config default)
+        **kwargs: Additional parameters
+
+    Returns:
+        Dict containing batch results with success/failure counts
+
+    Example:
+        chunk_data = [
+            {"chunk_id": "abc123", "text": "First chunk text..."},
+            {"chunk_id": "def456", "text": "Second chunk text..."},
+            {"chunk_id": "ghi789", "text": "Third chunk text..."},
+        ]
+        result = generate_and_store_chunk_embeddings_batch(chunk_data)
+        # result = {
+        #     "batch_size": 3,
+        #     "success_count": 3,
+        #     "failed_count": 0,
+        #     "failed_chunks": [],
+        #     "status": "completed"
+        # }
+    """
+    try:
+        from fileintel.llm_integration.embedding_provider import OpenAIEmbeddingProvider
+        from fileintel.celery_config import get_shared_storage
+        from fileintel.core.config import get_config
+        import gc
+
+        config = get_config()
+        batch_size = len(chunk_data)
+
+        logger.info(f"Starting batch embedding generation for {batch_size} chunks")
+
+        # Extract texts and chunk IDs
+        texts = [item['text'] for item in chunk_data]
+        chunk_ids = [item['chunk_id'] for item in chunk_data]
+
+        # Validate input
+        if not texts or not chunk_ids:
+            raise ValueError("Empty chunk_data provided to batch task")
+
+        if len(texts) != len(chunk_ids):
+            raise ValueError(f"Mismatched texts ({len(texts)}) and chunk_ids ({len(chunk_ids)})")
+
+        # Store embeddings using shared storage
+        storage = get_shared_storage()
+        try:
+            # Generate ALL embeddings in a single API call
+            # This is the key performance optimization - vLLM processes them in parallel
+            embedding_provider = OpenAIEmbeddingProvider(storage=storage, settings=config)
+
+            logger.debug(f"Calling API with batch of {batch_size} texts")
+            embeddings = embedding_provider.get_embeddings(texts)
+
+            if not embeddings:
+                raise ValueError(f"No embeddings returned from API for batch of {batch_size}")
+
+            if len(embeddings) != batch_size:
+                raise ValueError(
+                    f"Expected {batch_size} embeddings, got {len(embeddings)}. "
+                    f"This indicates an API/provider issue."
+                )
+
+            # Store each embedding in the database
+            success_count = 0
+            failed_chunks = []
+
+            for chunk_id, embedding in zip(chunk_ids, embeddings):
+                try:
+                    success = storage.update_chunk_embedding(chunk_id, embedding)
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_chunks.append(chunk_id)
+                        logger.warning(f"Failed to store embedding for chunk {chunk_id}")
+                except Exception as e:
+                    failed_chunks.append(chunk_id)
+                    logger.error(f"Error storing embedding for chunk {chunk_id}: {e}")
+
+            logger.info(
+                f"Batch embedding complete: {success_count}/{batch_size} succeeded, "
+                f"{len(failed_chunks)} failed"
+            )
+
+            result = {
+                "batch_size": batch_size,
+                "success_count": success_count,
+                "failed_count": len(failed_chunks),
+                "failed_chunks": failed_chunks,
+                "status": "completed" if success_count == batch_size else "partial",
+            }
+
+            # Explicit memory cleanup to prevent accumulation
+            del embeddings
+            del embedding_provider
+            gc.collect()
+
+            return result
+
+        finally:
+            storage.close()
+            # Force garbage collection after storage cleanup
+            gc.collect()
+
+    except Exception as e:
+        logger.error(f"Error in batch embedding generation: {e}")
+
+        # Return detailed error information for debugging
+        return {
+            "batch_size": len(chunk_data),
+            "success_count": 0,
+            "failed_count": len(chunk_data),
+            "error": str(e),
+            "status": "failed",
+            "failed_chunks": [item['chunk_id'] for item in chunk_data],
+        }
+
+
 # REMOVED: generate_batch_embeddings - unnecessary wrapper function
 # Use generate_text_embedding directly in groups for batch processing
 

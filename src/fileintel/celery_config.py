@@ -572,7 +572,14 @@ def _do_stale_task_cleanup():
     logger.info("Background stale task cleanup starting...")
 
     try:
-        from fileintel.storage.models import CeleryTaskRegistry
+        from fileintel.storage.models import CeleryTaskRegistry, create_tables
+
+        # Ensure database tables exist before querying
+        # This handles the case where worker starts before API creates tables
+        try:
+            create_tables()
+        except Exception as e:
+            logger.warning(f"Failed to create tables (may already exist): {e}")
 
         # Get currently active workers
         inspect = app.control.inspect()

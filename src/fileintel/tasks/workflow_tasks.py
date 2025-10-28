@@ -455,20 +455,47 @@ def generate_collection_embeddings_simple(
             # Initialize progress tracking
             workflow_id = self.request.id
             tracker = WorkflowProgressTracker()
-            tracker.initialize(workflow_id, len(chunks))
 
-            # Create embedding jobs for all chunks with progress tracking
+            # Get batch configuration
+            from fileintel.core.config import get_config
+            config = get_config()
+            batch_size = config.rag.embedding_processing.batch_size
+
+            # Group chunks into batches for efficient processing
+            # This dramatically reduces overhead (1 task per 25 chunks vs 1 task per chunk)
+            batches = []
+            for i in range(0, len(chunks), batch_size):
+                batch = chunks[i:i + batch_size]
+                batch_data = [
+                    {"chunk_id": chunk.id, "text": chunk.chunk_text}
+                    for chunk in batch
+                ]
+                batches.append(batch_data)
+
+            total_batches = len(batches)
+            logger.info(
+                f"Split {len(chunks)} chunks into {total_batches} batches "
+                f"(batch_size={batch_size}, batches={total_batches})"
+            )
+
+            # Track batches instead of individual chunks for efficiency
+            tracker.initialize(workflow_id, total_batches)
+
+            # Import the batch task
+            from .llm_tasks import generate_and_store_chunk_embeddings_batch
+
+            # Create embedding jobs - one task per batch (much fewer tasks)
             embedding_jobs = group(
-                generate_and_store_chunk_embedding.s(chunk.id, chunk.chunk_text).set(
+                generate_and_store_chunk_embeddings_batch.s(batch_data).set(
                     link=track_task_completion.si(workflow_id, "embedding")
                 )
-                for chunk in chunks
+                for batch_data in batches
             )
 
             # Use chord to ensure completion callback runs AFTER all embeddings finish
             # Fixed: Previously scheduled completion immediately, causing it to never run
             self.update_progress(
-                2, 3, "Starting embeddings with completion callback"
+                2, 3, f"Starting {total_batches} batch tasks (batch_size={batch_size})"
             )
 
             completion_callback = mark_collection_completed.s(collection_id)
@@ -476,14 +503,18 @@ def generate_collection_embeddings_simple(
             # Note: chord()(callback) already calls apply_async() in Celery 5.x
             workflow_result = chord(embedding_jobs)(completion_callback)
 
-            self.update_progress(3, 3, "Collection processing workflow initiated")
+            self.update_progress(
+                3, 3, f"Initiated: {len(chunks)} chunks → {total_batches} batches"
+            )
 
             return {
                 "collection_id": collection_id,
                 "total_chunks": len(chunks),
+                "total_batches": total_batches,
+                "batch_size": batch_size,
                 "workflow_task_id": workflow_result.id,
                 "status": "processing",
-                "message": f"Started embedding generation for {len(chunks)} chunks with completion callback",
+                "message": f"Started batch embedding generation for {len(chunks)} chunks ({total_batches} batches of {batch_size})",
             }
         finally:
             storage.close()
@@ -992,15 +1023,35 @@ def generate_collection_metadata_and_embeddings(
                 all_jobs.extend(metadata_jobs)
                 logger.info(f"Added {len(metadata_jobs)} metadata jobs to workflow")
 
-            # Add embedding generation jobs
+            # Add embedding generation jobs (using batch processing for efficiency)
             chunks = storage.get_all_chunks_for_collection(collection_id)
             if chunks:
+                # Import batch task and configuration
+                from .llm_tasks import generate_and_store_chunk_embeddings_batch
+                from fileintel.core.config import get_config
+                config = get_config()
+                batch_size = config.rag.embedding_processing.batch_size
+
+                # Group chunks into batches for efficient processing
+                batches = []
+                for i in range(0, len(chunks), batch_size):
+                    batch = chunks[i:i + batch_size]
+                    batch_data = [
+                        {"chunk_id": chunk.id, "text": chunk.chunk_text}
+                        for chunk in batch
+                    ]
+                    batches.append(batch_data)
+
+                # Create batch embedding jobs (much fewer tasks than individual chunks)
                 embedding_jobs = [
-                    generate_and_store_chunk_embedding.s(chunk.id, chunk.chunk_text)
-                    for chunk in chunks
+                    generate_and_store_chunk_embeddings_batch.s(batch_data)
+                    for batch_data in batches
                 ]
                 all_jobs.extend(embedding_jobs)
-                logger.info(f"Added {len(chunks)} embedding jobs to workflow")
+                logger.info(
+                    f"Added {len(chunks)} chunks as {len(batches)} batch jobs "
+                    f"(batch_size={batch_size}) to workflow"
+                )
 
             if all_jobs:
                 # Use chord to ensure completion callback runs AFTER ALL jobs finish

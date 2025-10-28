@@ -85,6 +85,27 @@ class ChunkingSettings(BaseModel):
     )
 
 
+class EmbeddingProcessingSettings(BaseModel):
+    """Batch processing configuration for embedding generation."""
+
+    batch_size: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description="Number of chunks to process per batch task (1=disable batching, 25=optimal for most workloads, 50-100=high throughput)"
+    )
+
+    fallback_to_single: bool = Field(
+        default=True,
+        description="Fall back to single-chunk processing if batch fails (recommended for reliability)"
+    )
+
+    retry_failed_individually: bool = Field(
+        default=True,
+        description="Retry failed chunks individually after batch completes (ensures no data loss)"
+    )
+
+
 class RerankerSettings(BaseModel):
     """Reranker configuration for improving retrieval relevance."""
 
@@ -192,6 +213,12 @@ class RAGSettings(BaseModel):
 
     # Unified chunking configuration
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
+
+    # Embedding batch processing configuration
+    embedding_processing: EmbeddingProcessingSettings = Field(
+        default_factory=EmbeddingProcessingSettings,
+        description="Batch processing settings for embedding generation (improves throughput 10-25x)"
+    )
 
     # Query routing and classification settings (previously QueryRoutingConfig)
     classification_threshold: float = Field(

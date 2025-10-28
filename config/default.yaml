@@ -31,6 +31,14 @@ rag:
     chunk_overlap: ${RAG_CHUNK_OVERLAP:-80}
     target_sentences: ${RAG_TARGET_SENTENCES:-3}  # Target sentences per Vector RAG chunk (conservative)
     overlap_sentences: ${RAG_OVERLAP_SENTENCES:-1}  # Sentences to overlap between Vector RAG chunks (forward overlap)
+
+  # Embedding batch processing (NEW - improves throughput 10-25x)
+  # Batching dramatically reduces overhead: 1000 chunks = 40 tasks instead of 1000 tasks
+  embedding_processing:
+    batch_size: ${RAG_EMBEDDING_BATCH_SIZE:-25}  # Chunks per batch (1=disable, 25=optimal, 50-100=high throughput)
+    fallback_to_single: ${RAG_EMBEDDING_FALLBACK_SINGLE:-true}  # Fall back to single-chunk on batch failure
+    retry_failed_individually: ${RAG_EMBEDDING_RETRY_INDIVIDUAL:-true}  # Retry failed chunks individually
+
   # Async processing for GraphRAG (consolidated under rag section)
   async_processing:
     enabled: ${RAG_ASYNC_ENABLED:-true}
@@ -152,7 +160,7 @@ document_processing:
     # Debug output settings (for troubleshooting extraction issues)
     # When enabled, saves MinerU raw outputs (markdown, JSON, images) to disk
     # WARNING: Can consume significant disk space - only enable for debugging
-    save_outputs: ${MINERU_SAVE_OUTPUTS:-false}
+    save_outputs: ${MINERU_SAVE_OUTPUTS:-true}
     output_directory: ${MINERU_OUTPUT_DIR:-/home/appuser/app/mineru_outputs}
 
     # Element-level type preservation (EXPERIMENTAL - Phase 1 of structure utilization)

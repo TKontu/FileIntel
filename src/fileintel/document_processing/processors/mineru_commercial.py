@@ -68,27 +68,66 @@ class MinerUEnhancedProcessor:
         except Exception as e:
             raise DocumentProcessingError(f"Shared folder validation failed: {e}")
 
-    def read(self, file_path: Path, adapter: logging.LoggerAdapter = None) -> Tuple[List[DocumentElement], Dict[str, Any]]:
+    def read(
+        self,
+        file_path: Path,
+        adapter: logging.LoggerAdapter = None,
+        content_fingerprint: str = None
+    ) -> Tuple[List[DocumentElement], Dict[str, Any]]:
         """
-        Process PDF using MinerU API with JSON-first approach.
+        Process PDF using MinerU API with caching support.
 
         Returns DocumentElements with rich metadata preservation and perfect page mapping.
         Falls back to traditional processor on any failure.
+
+        Args:
+            file_path: Path to PDF file
+            adapter: Optional logger adapter
+            content_fingerprint: Optional content fingerprint for cache lookup
         """
         log = adapter or logger
         validate_file_for_processing(file_path, ".pdf")
 
         shared_file_path = None
         try:
-            # Copy file to shared folder for MinerU access
-            file_url, shared_file_path = self._copy_to_shared_folder(file_path)
-            log.info(f"File copied to shared folder: {shared_file_path}")
+            # Initialize cache
+            from fileintel.document_processing.mineru_cache import MinerUCache
+            mineru_config = self.config.document_processing.mineru
+            cache = MinerUCache(mineru_config.output_directory)
 
-            # Process with MinerU API
-            mineru_results = self._process_with_mineru(file_url, file_path, log)
+            # Check cache first (if fingerprint provided)
+            mineru_results = None
+            markdown_content = None
+            json_data = None
 
-            # Extract ALL data from ZIP (markdown + JSON)
-            markdown_content, json_data = self._extract_all_results(mineru_results['zip_content'])
+            if content_fingerprint and cache.has_cache(content_fingerprint):
+                log.info(f"Loading MinerU output from cache for fingerprint {content_fingerprint}")
+                mineru_results = cache.load_cached_output(content_fingerprint)
+                if mineru_results:
+                    # Extract from cached results
+                    if mineru_results['response_type'] == 'zip':
+                        from .mineru_selfhosted import MinerUSelfHostedProcessor
+                        temp_processor = MinerUSelfHostedProcessor(self.config)
+                        markdown_content, json_data = temp_processor._extract_from_zip(mineru_results['zip_content'])
+                    else:
+                        markdown_content, json_data = mineru_results.get('markdown', ''), mineru_results.get('json_data', {})
+
+            # Process with API if no cache hit
+            if not mineru_results:
+                # Copy file to shared folder for MinerU access
+                file_url, shared_file_path = self._copy_to_shared_folder(file_path)
+                log.info(f"File copied to shared folder: {shared_file_path}")
+
+                # Process with MinerU API
+                mineru_results = self._process_with_mineru(file_url, file_path, log)
+
+                # Extract ALL data from ZIP (markdown + JSON)
+                markdown_content, json_data = self._extract_all_results(mineru_results['zip_content'])
+
+                # Save to cache if fingerprint provided
+                if content_fingerprint:
+                    log.debug(f"Saving MinerU output to cache for fingerprint {content_fingerprint}")
+                    cache.save_to_cache(content_fingerprint, mineru_results, markdown_content, json_data)
 
             # Create elements using JSON-first approach
             elements = self._create_elements_from_json(
