@@ -27,7 +27,7 @@ services:
   api:
     build: .
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info", "--access-log"]
+    command: ["uvicorn", "fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info", "--access-log"]
     ports:
       - "8001:8000"
     volumes:

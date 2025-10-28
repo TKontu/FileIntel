@@ -17,6 +17,9 @@ WORKDIR /home/appuser/app
 # Add the user's local bin directory to the PATH
 ENV PATH="/home/appuser/.local/bin:$PATH"
 
+# Set PYTHONPATH to include the src directory
+ENV PYTHONPATH="/home/appuser/app/src:${PYTHONPATH}"
+
 # Copy dependency files and install dependencies
 COPY --chown=appuser:appuser pyproject.toml ./
 RUN pip install "poetry==1.5.1"
@@ -32,4 +35,4 @@ RUN chmod +x docker-entrypoint.sh
 EXPOSE 8000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
-CMD ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
