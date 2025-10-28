@@ -687,3 +687,64 @@ def setup_worker_logging(sender=None, instance=None, **kwargs):
     logger.info("Task acks_late=True: Tasks will be requeued if worker dies")
     logger.info("Task reject_on_worker_lost=True: Tasks will fail if worker is lost")
     logger.info("Worker ready to process tasks")
+
+
+# Fork optimization: Clear parent state before forking
+from celery.signals import worker_process_init, worker_process_shutdown
+import gc
+
+
+@worker_process_init.connect
+def init_worker_process(sender=None, **kwargs):
+    """
+    Initialize worker process after fork.
+
+    This runs in the child process after fork, allowing us to:
+    1. Reset global state that was inherited from parent
+    2. Create fresh database connections
+    3. Initialize worker-specific resources
+    """
+    global _shared_engine, _shared_session_factory, _storage_lock
+    import os
+
+    logger.info(f"Worker process initializing (PID: {os.getpid()})")
+
+    # Reset shared storage state - force recreation in this process
+    _shared_engine = None
+    _shared_session_factory = None
+    _storage_lock = None
+
+    # Force garbage collection to clean up inherited objects
+    gc.collect()
+
+    logger.info(f"Worker process initialized with clean state (PID: {os.getpid()})")
+
+
+@worker_process_shutdown.connect
+def shutdown_worker_process(sender=None, **kwargs):
+    """
+    Clean up worker process before shutdown.
+
+    Ensures connections are properly closed and resources freed.
+    """
+    global _shared_engine, _shared_session_factory
+    import os
+
+    logger.info(f"Worker process shutting down (PID: {os.getpid()})")
+
+    # Close database connections
+    if _shared_engine:
+        try:
+            _shared_engine.dispose()
+            logger.info("Database connection pool disposed")
+        except Exception as e:
+            logger.error(f"Error disposing database pool: {e}")
+
+    # Clear global state
+    _shared_engine = None
+    _shared_session_factory = None
+
+    # Force garbage collection
+    gc.collect()
+
+    logger.info(f"Worker process cleanup complete (PID: {os.getpid()})")

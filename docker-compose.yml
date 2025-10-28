@@ -125,6 +125,13 @@ services:
       - CELERY_WORKER_CONCURRENCY=${CELERY_WORKER_CONCURRENCY:-4}
       # Overhead: Redis/DB pools + system buffers (1GB min, 10-15% of container memory)
       - CELERY_MEMORY_OVERHEAD_GB=${CELERY_MEMORY_OVERHEAD_GB:-1.0}
+      # Fork memory optimization - reduces COW memory spikes during worker creation
+      # Use exec() instead of fork() - creates fresh process (avoids memory duplication)
+      - CELERYD_FORCE_EXECV=${CELERYD_FORCE_EXECV:-true}
+      # Memory allocator tuning for better copy-on-write behavior
+      - MALLOC_MMAP_THRESHOLD_=65536
+      - MALLOC_TRIM_THRESHOLD_=131072
+      - MALLOC_MMAP_MAX_=65536
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
