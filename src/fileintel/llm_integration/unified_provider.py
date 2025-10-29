@@ -15,6 +15,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
+    Retrying,
 )
 
 from .base import LLMResponse, validate_response
@@ -172,9 +173,9 @@ class UnifiedLLMProvider:
         self.storage = storage
         self.provider_type = LLMProviderType(config.llm.provider)
 
-        # Initialize HTTP client with appropriate timeout
+        # Initialize HTTP client with configurable timeout (default 15 minutes for high queue depths)
         self.http_client = httpx.Client(
-            timeout=httpx.Timeout(300.0),  # Increased from 60s to 5 minutes
+            timeout=httpx.Timeout(float(config.llm.http_timeout_seconds)),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
 
@@ -182,7 +183,22 @@ class UnifiedLLMProvider:
         self._setup_provider_config()
         self._setup_strategy()
 
-        logger.info(f"Unified LLM Provider initialized for {self.provider_type.value}")
+        # Configure retry strategy from config (replaces hardcoded @retry decorator)
+        self.retry_strategy = Retrying(
+            wait=wait_exponential(
+                multiplier=1,
+                min=config.llm.retry_backoff_min,
+                max=config.llm.retry_backoff_max
+            ),
+            stop=stop_after_attempt(config.llm.max_retries),
+            retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException)),
+        )
+
+        logger.info(
+            f"Unified LLM Provider initialized for {self.provider_type.value} "
+            f"(timeout={config.llm.http_timeout_seconds}s, retries={config.llm.max_retries}, "
+            f"backoff={config.llm.retry_backoff_min}-{config.llm.retry_backoff_max}s)"
+        )
 
     def _setup_strategy(self) -> None:
         """Initialize the appropriate API strategy."""
@@ -221,11 +237,6 @@ class UnifiedLLMProvider:
                 f"No valid API key configured for {self.provider_type.value}"
             )
 
-    @retry(
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException)),
-    )
     def generate_response(
         self,
         prompt: str,
@@ -235,7 +246,7 @@ class UnifiedLLMProvider:
         **kwargs,
     ) -> LLMResponse:
         """
-        Generate response from LLM API.
+        Generate response from LLM API with configurable retry logic.
 
         Args:
             prompt: Input text prompt
@@ -264,9 +275,10 @@ class UnifiedLLMProvider:
                 logger.debug(f"Cache hit for {self.provider_type.value} request")
                 return cached_response
 
-        # Generate new response using strategy pattern
+        # Generate new response using strategy pattern with configurable retry
         try:
-            response = self.api_strategy.call_api(
+            response = self.retry_strategy(
+                self.api_strategy.call_api,
                 self.http_client,
                 self.api_key,
                 self.base_url,

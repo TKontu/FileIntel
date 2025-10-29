@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Integer,
     ForeignKey,
+    Table,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
@@ -16,6 +17,15 @@ from enum import Enum
 import os
 
 Base = declarative_base()
+
+# Association table for many-to-many relationship between collections and documents
+collection_documents = Table(
+    'collection_documents',
+    Base.metadata,
+    Column('collection_id', String, ForeignKey('collections.id', ondelete='CASCADE'), primary_key=True),
+    Column('document_id', String, ForeignKey('documents.id', ondelete='CASCADE'), primary_key=True),
+    Column('added_at', DateTime(timezone=True), server_default=func.now())
+)
 
 
 class CollectionStatus(str, Enum):
@@ -47,10 +57,9 @@ class Collection(Base):
     status_updated_at = Column(DateTime(timezone=True), nullable=True)  # When status last changed
 
     documents = relationship(
-        "Document", back_populates="collection", cascade="all, delete-orphan"
-    )
-    chunks = relationship(
-        "DocumentChunk", back_populates="collection", cascade="all, delete-orphan"
+        "Document",
+        secondary=collection_documents,
+        back_populates="collections"
     )
     graphrag_indices = relationship(
         "GraphRAGIndex", cascade="all, delete-orphan", overlaps="collection"
@@ -69,9 +78,6 @@ class Collection(Base):
 class Document(Base):
     __tablename__ = "documents"
     id = Column(String, primary_key=True)
-    collection_id = Column(
-        String, ForeignKey("collections.id"), nullable=False, index=True
-    )
     filename = Column(
         String, nullable=False
     )  # This will store the secure, UUID-based filename
@@ -86,11 +92,16 @@ class Document(Base):
     )  # Deterministic UUID v5 from content, enables deduplication and caching
     file_size = Column(Integer, nullable=False)
     mime_type = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)  # Path to the actual file on disk
     document_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    collection = relationship("Collection", back_populates="documents")
+    collections = relationship(
+        "Collection",
+        secondary=collection_documents,
+        back_populates="documents"
+    )
     chunks = relationship(
         "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
     )
@@ -102,10 +113,7 @@ class Document(Base):
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
-    collection_id = Column(
-        String, ForeignKey("collections.id"), nullable=False, index=True
-    )
+    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     chunk_text = Column(Text, nullable=False)
     embedding = Column(Vector())  # Assuming OpenAI's text-embedding-3-small
     chunk_metadata = Column(JSON)
@@ -115,7 +123,6 @@ class DocumentChunk(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     document = relationship("Document", back_populates="chunks")
-    collection = relationship("Collection", back_populates="chunks")
 
 
 class DocumentStructure(Base):
@@ -129,7 +136,7 @@ class DocumentStructure(Base):
     """
     __tablename__ = "document_structures"
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
+    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     structure_type = Column(String, nullable=False, index=True)  # 'toc', 'lof', 'lot', 'headers', 'filtered_content'
     data = Column(JSONB, nullable=False)  # Structured entries (format depends on type)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -261,8 +268,8 @@ DATABASE_URL = (
 
 engine = create_engine(
     DATABASE_URL,
-    pool_size=20,  # Increased for concurrent task tracking (default: 5)
-    max_overflow=40,  # Allow burst capacity (default: 10)
+    pool_size=10,  # Base pool per worker (with 6 workers = 60 total)
+    max_overflow=20,  # Burst capacity (6 workers × 30 max = 180 total)
     pool_pre_ping=True,  # Verify connections before use
     pool_recycle=3600,  # Recycle connections every hour
 )

@@ -155,8 +155,8 @@ async def process_collection(
     try:
         result = service.submit_collection_processing_task(
             collection_id=collection_id,
-            include_embeddings=request.include_embeddings,
-            task_options=request.options,
+            include_embeddings=request.generate_embeddings,
+            task_options=request.parameters,
         )
         return create_success_response(result)
     except ValueError as e:

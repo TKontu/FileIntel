@@ -7,6 +7,12 @@ llm:
   # Task timeout limits (prevents worker exhaustion)
   task_timeout_seconds: ${LLM_TASK_TIMEOUT:-7200}  # 2 hours soft timeout for LLM tasks (was 300)
   task_hard_limit_seconds: ${LLM_TASK_HARD_LIMIT:-7200}  # 2 hours hard kill timeout (was 360)
+  # HTTP client timeout and retry settings (critical for high server load / queue depths)
+  http_timeout_seconds: ${LLM_HTTP_TIMEOUT:-900}  # 15 minutes HTTP timeout (handles 95+ queued requests)
+  max_retries: ${LLM_MAX_RETRIES:-5}  # Retry attempts for failed requests
+  retry_backoff_min: ${LLM_RETRY_BACKOFF_MIN:-2}  # Min retry backoff (seconds)
+  retry_backoff_max: ${LLM_RETRY_BACKOFF_MAX:-60}  # Max retry backoff (seconds)
+  # Legacy circuit_breaker config (not currently used in code)
   circuit_breaker:
     failure_threshold: ${LLM_CIRCUIT_BREAKER_THRESHOLD:-5}
     failure_window: ${LLM_CIRCUIT_BREAKER_WINDOW:-60}
@@ -44,7 +50,7 @@ rag:
     enabled: ${RAG_ASYNC_ENABLED:-true}
     batch_size: ${RAG_ASYNC_BATCH_SIZE:-4}
     max_concurrent_requests: ${RAG_ASYNC_MAX_CONCURRENT:-25}
-    batch_timeout: ${RAG_ASYNC_BATCH_TIMEOUT:-300}  # 5 minutes timeout per batch (was 30)
+    batch_timeout: ${RAG_ASYNC_BATCH_TIMEOUT:-900}  # 15 minutes timeout per batch (handles high queue depths)
     fallback_to_sequential: ${RAG_ASYNC_FALLBACK:-true}
 
   # LLM-based query classification settings
@@ -117,7 +123,7 @@ graphrag:
     enabled: ${GRAPHRAG_ASYNC_ENABLED:-true}                    # ON/OFF switch (set to false to disable)
     batch_size: ${GRAPHRAG_ASYNC_BATCH_SIZE:-4}                   # Concurrent requests per batch
     max_concurrent_requests: ${GRAPHRAG_ASYNC_MAX_CONCURRENT:-50}     # Must match vLLM VLLM_MAX_NUM_SEQS (currently 16)
-    batch_timeout: ${GRAPHRAG_ASYNC_BATCH_TIMEOUT:-300}              # 5 minutes timeout per batch (was 30)
+    batch_timeout: ${GRAPHRAG_ASYNC_BATCH_TIMEOUT:-900}              # 15 minutes timeout per batch (handles high queue depths)
     fallback_to_sequential: ${GRAPHRAG_ASYNC_FALLBACK:-true}    # Fallback if batching fails
   # Embedding configuration
   embedding_batch_max_tokens: ${GRAPHRAG_EMBEDDING_BATCH_MAX_TOKENS:-450}   # Max tokens per embedding request (optimal for 512 token model limit)
@@ -280,9 +286,11 @@ storage:
   connection_string: "postgresql://${DB_USER:-user}:${DB_PASSWORD:-password}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-fileintel}"
   cache_ttl: ${STORAGE_CACHE_TTL:-3600}
   redis_host: ${STORAGE_REDIS_HOST:-localhost}
-  # Connection pool settings (prevents exhaustion)
-  pool_size: ${STORAGE_POOL_SIZE:-50}  # Increased from 20 to handle worker restarts
-  max_overflow: ${STORAGE_MAX_OVERFLOW:-50}  # Increased from 30 to handle bursts
+  # Connection pool settings (must fit within PostgreSQL max_connections)
+  # With concurrency=6: base pool = 6×10=60, max burst = 6×30=180
+  # PostgreSQL max_connections should be 200-300 to allow headroom
+  pool_size: ${STORAGE_POOL_SIZE:-10}  # Base connections per worker
+  max_overflow: ${STORAGE_MAX_OVERFLOW:-20}  # Additional burst capacity per worker
   pool_timeout: ${STORAGE_POOL_TIMEOUT:-300}  # Increased from 30 to allow more wait time
 
 celery:
@@ -293,7 +301,7 @@ celery:
   # Worker pool restart settings (prevents fork bomb)
   worker_pool_restarts: ${CELERY_WORKER_POOL_RESTARTS:-true}  # Allow pool restarts
   worker_pool_restart_timeout: ${CELERY_WORKER_POOL_RESTART_TIMEOUT:-120}  # Timeout for worker to send UP message (seconds)
-  worker_max_tasks_per_child: ${CELERY_WORKER_MAX_TASKS_PER_CHILD:-100}  # Restart workers more frequently (was 1000)
+  worker_max_tasks_per_child: null  # null = never restart workers (prevents SIGKILL death spiral)
 
 cli:
   # CLI task wait timeout

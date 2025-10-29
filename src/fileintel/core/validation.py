@@ -166,8 +166,11 @@ def validate_file_paths(documents: List[Any]) -> List[str]:
     """
     file_paths = []
     for doc in documents:
-        # File path is stored in document_metadata
-        if doc.document_metadata and doc.document_metadata.get("file_path"):
+        # File path is now a direct column on the document model
+        if hasattr(doc, 'file_path') and doc.file_path:
+            file_paths.append(doc.file_path)
+        # Fallback to metadata for backward compatibility
+        elif doc.document_metadata and doc.document_metadata.get("file_path"):
             file_paths.append(doc.document_metadata["file_path"])
 
     if not file_paths:

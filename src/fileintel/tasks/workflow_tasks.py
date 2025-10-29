@@ -178,6 +178,22 @@ def complete_collection_analysis(
         with get_storage_context() as storage:
             storage.update_collection_status(collection_id, "processing")
 
+            # Get all documents in collection and build file_path -> document_id mapping
+            documents = storage.get_documents_by_collection(collection_id)
+            file_path_to_doc_id = {}
+
+            for doc in documents:
+                # Use the file_path field from the document model
+                doc_file_path = doc.file_path if hasattr(doc, 'file_path') else (
+                    doc.document_metadata.get("file_path") if doc.document_metadata else None
+                )
+                if doc_file_path:
+                    file_path_to_doc_id[doc_file_path] = doc.id
+
+            logger.info(
+                f"Mapped {len(file_path_to_doc_id)} documents to file paths in collection {collection_id}"
+            )
+
             # Phase 1: Parallel document processing (GROUP)
             self.update_progress(1, 6, "Starting parallel document processing")
 
@@ -187,16 +203,26 @@ def complete_collection_analysis(
             tracker.initialize(workflow_id, len(file_paths))
             logger.info(f"Starting processing of {len(file_paths)} documents")
 
-            # Create signatures for document processing tasks with progress tracking
-            document_signatures = [
-                process_document.s(
-                    file_path=file_path,
-                    document_id=f"{collection_id}_doc_{i}",
-                    collection_id=collection_id,
-                    **kwargs,
-                ).set(link=track_task_completion.si(workflow_id, "document"))
-                for i, file_path in enumerate(file_paths)
-            ]
+            # Create signatures for document processing tasks with REAL document IDs
+            document_signatures = []
+            for file_path in file_paths:
+                # Use real document ID from database, or None if not found
+                document_id = file_path_to_doc_id.get(file_path)
+
+                if not document_id:
+                    logger.warning(
+                        f"Document not found in collection for file_path: {file_path}. "
+                        f"Task will create a new document record."
+                    )
+
+                document_signatures.append(
+                    process_document.s(
+                        file_path=file_path,
+                        document_id=document_id,
+                        collection_id=collection_id,
+                        **kwargs,
+                    ).set(link=track_task_completion.si(workflow_id, "document"))
+                )
 
             # Validate we have documents to process
             if not document_signatures:
@@ -327,16 +353,71 @@ def mark_collection_completed(
 
         with get_storage_context() as storage:
             # Enhanced failure detection: count successes and failures explicitly
+            # Also track different task types for better reporting
             success_count = 0
             failure_count = 0
             unknown_count = 0
+
+            # Task type counters for detailed reporting
+            document_tasks = 0
+            metadata_tasks = 0
+            embedding_batches = 0
+            total_embeddings = 0
+            failed_embeddings = 0
+            other_tasks = 0
 
             if isinstance(workflow_results, list):
                 for result in workflow_results:
                     if isinstance(result, dict):
                         status = result.get("status", "unknown")
-                        # Accept both "success" and "completed" as success indicators
-                        if status in ("success", "completed"):
+
+                        # Classify task type based on result content
+                        # Use 'if' instead of 'elif' to allow counting in multiple categories
+                        task_classified = False
+
+                        if "document_id" in result and "chunks_count" in result:
+                            document_tasks += 1
+                            task_classified = True
+                        if "metadata_extracted" in result or ("document_id" in result and "metadata" in result):
+                            metadata_tasks += 1
+                            task_classified = True
+                        if "batch_size" in result:
+                            # Embedding batch task - count actual embeddings generated
+                            embedding_batches += 1
+                            task_classified = True
+                            success = result.get("success_count", 0)
+                            failed = result.get("failed_count", 0)
+                            batch_size = result.get("batch_size", 0)
+
+                            # Use success_count if available, otherwise fall back to batch_size
+                            # But warn if we had to fall back
+                            if "success_count" in result:
+                                total_embeddings += success
+                                failed_embeddings += failed
+
+                                # Log partial failures
+                                if failed > 0:
+                                    logger.warning(
+                                        f"Partial embedding batch failure: {failed}/{batch_size} embeddings failed"
+                                    )
+                            else:
+                                # Legacy result without success_count - assume all succeeded
+                                total_embeddings += batch_size
+                                logger.debug(
+                                    f"Embedding batch result missing success_count, assuming all {batch_size} succeeded"
+                                )
+                        if "embeddings_generated" in result:
+                            # Legacy or other embedding task
+                            embedding_batches += 1
+                            total_embeddings += result.get("embeddings_generated", 0)
+                            task_classified = True
+
+                        if not task_classified:
+                            other_tasks += 1
+
+                        # Accept "success", "completed", and "partial" as success indicators
+                        # "partial" means some embeddings failed but task completed
+                        if status in ("success", "completed", "partial"):
                             success_count += 1
                         elif status == "failed":
                             failure_count += 1
@@ -345,18 +426,43 @@ def mark_collection_completed(
                             unknown_count += 1
                             failure_count += 1
                             logger.warning(
-                                f"Document task returned unknown status '{status}' for collection {collection_id}"
+                                f"Task returned unknown status '{status}' for collection {collection_id}"
                             )
+
+            # Build detailed message based on task types
+            total_tasks = success_count + failure_count
+            task_breakdown = []
+
+            if document_tasks > 0:
+                task_breakdown.append(f"{document_tasks} document processing")
+            if metadata_tasks > 0:
+                task_breakdown.append(f"{metadata_tasks} metadata extraction")
+            if total_embeddings > 0:
+                # Show actual embeddings generated, not batch count
+                if embedding_batches > 1:
+                    task_breakdown.append(f"{total_embeddings} embeddings in {embedding_batches} batches")
+                else:
+                    task_breakdown.append(f"{total_embeddings} embeddings")
+            if other_tasks > 0:
+                task_breakdown.append(f"{other_tasks} other")
+
+            breakdown_str = ", ".join(task_breakdown) if task_breakdown else "tasks"
 
             # Determine final status and message
             if failure_count > 0:
                 final_status = "failed"
-                message = f"{failure_count} documents failed, {success_count} succeeded"
+                message = f"Completed {total_tasks} tasks ({breakdown_str}): {failure_count} failed, {success_count} succeeded"
                 if unknown_count > 0:
                     message += f" ({unknown_count} with unknown status)"
             else:
                 final_status = "completed"
-                message = f"All {success_count} documents processed successfully"
+                if total_tasks > 0:
+                    message = f"Successfully completed {total_tasks} tasks ({breakdown_str})"
+                    # Add warning about partial embedding failures if any
+                    if failed_embeddings > 0:
+                        message += f". Warning: {failed_embeddings} embeddings failed to generate"
+                else:
+                    message = "Collection processing completed"
 
             storage.update_collection_status(collection_id, final_status)
 
@@ -368,6 +474,15 @@ def mark_collection_completed(
             "message": message,
             "success_count": success_count,
             "failure_count": failure_count,
+            "total_tasks": success_count + failure_count,
+            "task_breakdown": {
+                "document_tasks": document_tasks,
+                "metadata_tasks": metadata_tasks,
+                "embedding_batches": embedding_batches,
+                "total_embeddings": total_embeddings,
+                "failed_embeddings": failed_embeddings,
+                "other_tasks": other_tasks,
+            },
             "workflow_results": workflow_results,
         }
 
@@ -529,10 +644,13 @@ def generate_collection_embeddings_simple(
             from fileintel.celery_config import get_shared_storage
 
             storage = get_shared_storage()
-            storage.update_collection_status(collection_id, "failed")
-            logger.info(
-                f"Updated collection {collection_id} status to failed due to embedding error"
-            )
+            try:
+                storage.update_collection_status(collection_id, "failed")
+                logger.info(
+                    f"Updated collection {collection_id} status to failed due to embedding error"
+                )
+            finally:
+                storage.close()
         except Exception as status_error:
             logger.error(
                 f"Failed to update collection status after embedding error: {status_error}"
@@ -574,11 +692,10 @@ def incremental_collection_update(
     try:
         self.update_progress(0, 3, "Starting incremental collection update")
 
-        # Update collection status to processing
-        from fileintel.celery_config import get_shared_storage
+        # Update collection status to processing (use context manager for safety)
+        from fileintel.celery_config import get_storage_context
 
-        storage = get_shared_storage()
-        try:
+        with get_storage_context() as storage:
             storage.update_collection_status(collection_id, "processing")
 
             # Validate we have new documents to process
@@ -591,16 +708,45 @@ def incremental_collection_update(
                     "message": "No new file paths provided for incremental update"
                 }
 
-            # Process new documents in parallel (GROUP)
-            new_doc_jobs = group(
-                process_document.s(
-                    file_path=file_path,
-                    document_id=f"{collection_id}_new_{i}",
-                    collection_id=collection_id,
-                    **kwargs,
+            # Get all documents in collection and build file_path -> document_id mapping
+            documents = storage.get_documents_by_collection(collection_id)
+            file_path_to_doc_id = {}
+
+            for doc in documents:
+                # Use the file_path field from the document model
+                doc_file_path = doc.file_path if hasattr(doc, 'file_path') else (
+                    doc.document_metadata.get("file_path") if doc.document_metadata else None
                 )
-                for i, file_path in enumerate(new_file_paths)
+                if doc_file_path:
+                    file_path_to_doc_id[doc_file_path] = doc.id
+
+            logger.info(
+                f"Incremental update: Mapped {len(file_path_to_doc_id)} existing documents to file paths"
             )
+
+            # Process new documents in parallel (GROUP) with REAL document IDs
+            new_doc_jobs = []
+            for file_path in new_file_paths:
+                # Use real document ID from database, or None if not found
+                document_id = file_path_to_doc_id.get(file_path)
+
+                if not document_id:
+                    logger.info(
+                        f"New document for incremental update: {file_path}. "
+                        f"Task will create a new document record."
+                    )
+
+                new_doc_jobs.append(
+                    process_document.s(
+                        file_path=file_path,
+                        document_id=document_id,
+                        collection_id=collection_id,
+                        **kwargs,
+                    )
+                )
+
+            # Create group from list of signatures (don't unpack with *)
+            new_doc_jobs = group(new_doc_jobs)
 
             # Execute with callback using CHORD
             callback = update_collection_index.s(
@@ -620,16 +766,15 @@ def incremental_collection_update(
                 "status": "processing",
                 "message": f"Started incremental update for {len(new_file_paths)} new documents",
             }
-        finally:
-            storage.close()
 
     except Exception as e:
         logger.error(f"Error in incremental collection update: {e}")
 
-        # Update collection status to failed
+        # Update collection status to failed (use context manager)
         try:
-            storage = get_shared_storage()
-            storage.update_collection_status(collection_id, "failed")
+            from fileintel.celery_config import get_storage_context
+            with get_storage_context() as storage:
+                storage.update_collection_status(collection_id, "failed")
         except:
             pass  # Don't fail the task if status update fails
 

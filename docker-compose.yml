@@ -23,6 +23,8 @@ services:
     image: "redis:alpine"
     ports:
       - "6379:6379"
+    sysctls:
+      - net.core.somaxconn=511
 
   api:
     build: .
@@ -81,7 +83,7 @@ services:
   celery-worker:
     build: .
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}", "--max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-50}"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}"]
     deploy:
       resources:
         limits:

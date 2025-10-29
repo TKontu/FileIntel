@@ -35,6 +35,19 @@ class LLMSettings(BaseModel):
     task_hard_limit_seconds: int = Field(
         default=360, ge=60, description="Hard kill timeout for LLM tasks (seconds)"
     )
+    # HTTP client timeout and retry settings (for handling high server load)
+    http_timeout_seconds: int = Field(
+        default=900, ge=60, description="HTTP request timeout in seconds (increased for high queue depths)"
+    )
+    max_retries: int = Field(
+        default=5, ge=1, le=10, description="Maximum retry attempts for failed requests"
+    )
+    retry_backoff_min: int = Field(
+        default=2, ge=1, description="Minimum retry backoff in seconds"
+    )
+    retry_backoff_max: int = Field(
+        default=60, ge=10, description="Maximum retry backoff in seconds"
+    )
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
 
@@ -462,7 +475,7 @@ class CelerySettings(BaseModel):
     worker_concurrency: int = Field(default=4)
     worker_prefetch_multiplier: int = Field(default=1)
     task_acks_late: bool = Field(default=True)
-    worker_max_tasks_per_child: int = Field(default=1000)
+    worker_max_tasks_per_child: Optional[int] = Field(default=None)  # None = never restart workers
     task_routes: dict = Field(
         default_factory=lambda: {
             "fileintel.tasks.document.*": {"queue": "document_processing"},

@@ -169,13 +169,12 @@ class DocumentStorage:
         content_hash: str,
         file_size: int,
         mime_type: str,
-        collection_id: str,
-        file_path: str = None,
+        file_path: str,
         original_filename: str = None,
         metadata: Dict[str, Any] = None,
         content_fingerprint: str = None,
     ) -> Document:
-        """Create a new document."""
+        """Create a new document (without collection association)."""
         try:
             # Validate inputs
             filename = self.base._validate_input_security(filename, "filename")
@@ -183,9 +182,8 @@ class DocumentStorage:
                 content_hash, "content_hash"
             )
             mime_type = self.base._validate_input_security(mime_type, "mime_type")
+            file_path = self.base._validate_input_security(file_path, "file_path")
 
-            if file_path:
-                file_path = self.base._validate_input_security(file_path, "file_path")
             if original_filename:
                 original_filename = self.base._validate_input_security(
                     original_filename, "original_filename"
@@ -195,11 +193,6 @@ class DocumentStorage:
 
             document_id = str(uuid.uuid4())
 
-            # Store file_path in metadata if provided
-            doc_metadata = metadata or {}
-            if file_path:
-                doc_metadata["file_path"] = file_path
-
             document = Document(
                 id=document_id,
                 filename=filename,
@@ -207,9 +200,9 @@ class DocumentStorage:
                 content_fingerprint=content_fingerprint,
                 file_size=file_size,
                 mime_type=mime_type,
-                collection_id=collection_id,
+                file_path=file_path,
                 original_filename=original_filename,
-                document_metadata=doc_metadata,
+                document_metadata=metadata or {},
             )
 
             self.db.add(document)
@@ -218,6 +211,32 @@ class DocumentStorage:
 
         except Exception as e:
             self.base._handle_session_error(e)
+
+    def add_document_to_collection(self, document_id: str, collection_id: str) -> bool:
+        """Add a document to a collection (many-to-many relationship)."""
+        try:
+            document = self.get_document(document_id)
+            collection = self.get_collection(collection_id)
+
+            if not document or not collection:
+                logger.warning(f"Document {document_id} or collection {collection_id} not found")
+                return False
+
+            # Check if association already exists
+            if collection in document.collections:
+                logger.debug(f"Document {document_id} already in collection {collection_id}")
+                return True
+
+            # Add collection to document's collections
+            document.collections.append(collection)
+            self.base._safe_commit()
+            logger.info(f"Added document {document_id} to collection {collection_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add document to collection: {e}")
+            self.base._handle_session_error(e)
+            return False
 
     def get_document(self, document_id: str) -> Document:
         """Get document by ID."""
@@ -234,13 +253,16 @@ class DocumentStorage:
     def get_document_by_hash_and_collection(
         self, content_hash: str, collection_id: str
     ) -> Document:
-        """Get document by hash within a specific collection."""
+        """Get document by hash within a specific collection (via many-to-many)."""
+        from .models import collection_documents
+
         return (
             self.db.query(Document)
+            .join(collection_documents, Document.id == collection_documents.c.document_id)
             .filter(
                 and_(
                     Document.content_hash == content_hash,
-                    Document.collection_id == collection_id,
+                    collection_documents.c.collection_id == collection_id,
                 )
             )
             .first()
@@ -249,13 +271,16 @@ class DocumentStorage:
     def get_document_by_filename_and_collection(
         self, filename: str, collection_id: str
     ) -> Document:
-        """Get document by filename within a collection."""
+        """Get document by filename within a collection (via many-to-many)."""
+        from .models import collection_documents
+
         return (
             self.db.query(Document)
+            .join(collection_documents, Document.id == collection_documents.c.document_id)
             .filter(
                 and_(
                     Document.filename == filename,
-                    Document.collection_id == collection_id,
+                    collection_documents.c.collection_id == collection_id,
                 )
             )
             .first()
@@ -264,13 +289,16 @@ class DocumentStorage:
     def get_document_by_original_filename_and_collection(
         self, original_filename: str, collection_id: str
     ) -> Document:
-        """Get document by original filename within a collection."""
+        """Get document by original filename within a collection (via many-to-many)."""
+        from .models import collection_documents
+
         return (
             self.db.query(Document)
+            .join(collection_documents, Document.id == collection_documents.c.document_id)
             .filter(
                 and_(
                     Document.original_filename == original_filename,
-                    Document.collection_id == collection_id,
+                    collection_documents.c.collection_id == collection_id,
                 )
             )
             .first()
@@ -301,8 +329,11 @@ class DocumentStorage:
         )
 
         if collection_id:
-            # Scoped to specific collection
-            query = query.filter(Document.collection_id == collection_id)
+            # Scoped to specific collection (via many-to-many)
+            from .models import collection_documents
+            query = query.join(collection_documents, Document.id == collection_documents.c.document_id).filter(
+                collection_documents.c.collection_id == collection_id
+            )
 
         return query.first()
 
@@ -333,10 +364,13 @@ class DocumentStorage:
         )
 
     def get_documents_by_collection(self, collection_id: str) -> List[Document]:
-        """Get all documents in a collection."""
+        """Get all documents in a collection (via many-to-many relationship)."""
+        from .models import collection_documents
+
         return (
             self.db.query(Document)
-            .filter(Document.collection_id == collection_id)
+            .join(collection_documents, Document.id == collection_documents.c.document_id)
+            .filter(collection_documents.c.collection_id == collection_id)
             .all()
         )
 
@@ -373,24 +407,9 @@ class DocumentStorage:
 
     # Chunk Operations
     def add_document_chunks(
-        self, document_id: str, chunks_or_collection_id, chunk_metadata_or_chunks=None
+        self, document_id: str, chunks: List[Dict], chunk_metadata: Dict = None
     ) -> List[DocumentChunk]:
-        """Add chunks for a document."""
-        # Handle backward compatibility with old signature:
-        # add_document_chunks(document_id, collection_id, chunks)
-        # vs new signature:
-        # add_document_chunks(document_id, chunks, chunk_metadata)
-
-        if isinstance(chunks_or_collection_id, str):
-            # Old signature: chunks_or_collection_id is collection_id
-            collection_id = chunks_or_collection_id
-            chunks = chunk_metadata_or_chunks
-            chunk_metadata = None
-        else:
-            # New signature: chunks_or_collection_id is chunks
-            chunks = chunks_or_collection_id
-            chunk_metadata = chunk_metadata_or_chunks
-
+        """Add chunks for a document (global chunks, not per-collection)."""
         document = self.get_document(document_id)
         if not document:
             raise ValueError(f"Document {document_id} not found")
@@ -426,7 +445,6 @@ class DocumentStorage:
             chunk = DocumentChunk(
                 id=chunk_id,
                 document_id=document_id,
-                collection_id=collection_id,
                 position=i,
                 chunk_text=chunk_text,
                 chunk_metadata=metadata,
@@ -453,22 +471,28 @@ class DocumentStorage:
         return chunks
 
     def get_all_chunks_for_collection(self, collection_id: str):
-        """Get all chunks for a collection."""
+        """Get all chunks for documents in a collection (via many-to-many relationship)."""
+        from .models import collection_documents
+
         chunks = (
             self.db.query(DocumentChunk)
-            .join(Document)
-            .filter(Document.collection_id == collection_id)
+            .join(Document, DocumentChunk.document_id == Document.id)
+            .join(collection_documents, Document.id == collection_documents.c.document_id)
+            .filter(collection_documents.c.collection_id == collection_id)
             .order_by(DocumentChunk.document_id, DocumentChunk.position)
             .all()
         )
         return chunks
 
     def get_chunks_by_type_for_collection(self, collection_id: str, chunk_type: str = None):
-        """Get chunks for a collection filtered by chunk type."""
+        """Get chunks for documents in a collection, filtered by chunk type (via many-to-many relationship)."""
+        from .models import collection_documents
+
         query = (
             self.db.query(DocumentChunk)
-            .join(Document)
-            .filter(Document.collection_id == collection_id)
+            .join(Document, DocumentChunk.document_id == Document.id)
+            .join(collection_documents, Document.id == collection_documents.c.document_id)
+            .filter(collection_documents.c.collection_id == collection_id)
         )
 
         if chunk_type:

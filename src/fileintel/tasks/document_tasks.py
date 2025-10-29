@@ -789,24 +789,24 @@ def process_document(
             # Initialize actual_document_id with default (ensures variable always exists)
             actual_document_id = document_id
             try:
-                # Check if document already exists (from upload-and-process workflow)
+                # Check if document already exists (from upload workflow)
                 existing_document = None
-                if document_id.startswith(f"{collection_id}_doc_"):
-                    # This is a generated document_id from workflow task, find existing document by file path
+                if document_id:
+                    # Try to get document by provided ID
+                    existing_document = storage.get_document(document_id)
+                else:
+                    # No document_id provided, search by file path
                     documents = storage.get_documents_by_collection(collection_id)
                     filename = os.path.basename(file_path)
                     for doc in documents:
-                        # Check if document metadata contains this file path or has same filename
-                        doc_metadata = doc.document_metadata or {}
-                        if (doc_metadata.get("file_path") == file_path or
+                        # Check if document file_path matches or has same filename
+                        doc_file_path = doc.file_path if hasattr(doc, 'file_path') else doc.document_metadata.get("file_path") if doc.document_metadata else None
+                        if (doc_file_path == file_path or
                             doc.filename == filename or
                             doc.original_filename == filename):
                             existing_document = doc
                             logger.debug(f"Found existing document {doc.id} for {filename}")
                             break
-                else:
-                    # Try to get document by provided ID
-                    existing_document = storage.get_document(document_id)
 
                 if existing_document:
                     # Use existing document
@@ -829,21 +829,24 @@ def process_document(
                             else "text/plain"
                         )
 
-                        # Create the document record
+                        # Create the document record (without collection association)
                         document = storage.create_document(
                             filename=filename,
                             original_filename=filename,
                             content_hash=content_hash,
                             file_size=file_size,
                             mime_type=mime_type,
-                            collection_id=collection_id,
+                            file_path=file_path,
                             metadata={"processed_by": "celery_task"},
                         )
+
+                        # Link document to collection
+                        storage.add_document_to_collection(document.id, collection_id)
 
                         # Update the document_id to use the one from the created document
                         actual_document_id = document.id
                         logger.info(
-                            f"Created new document record {actual_document_id} for {filename}"
+                            f"Created new document record {actual_document_id} for {filename} and linked to collection {collection_id}"
                         )
 
                     except Exception as e:
@@ -872,8 +875,9 @@ def process_document(
                             "metadata": {"position": len(chunk_data), "chunk_type": "vector"}
                         })
 
+                # Store chunks (now global, not per-collection)
                 storage.add_document_chunks(
-                    actual_document_id, collection_id, chunk_data
+                    actual_document_id, chunk_data
                 )
 
                 # Store graph chunks separately if two-tier mode is enabled
@@ -892,9 +896,9 @@ def process_document(
                             }
                         })
 
-                    # Store graph chunks with a different method or flag
+                    # Store graph chunks (now global, not per-collection)
                     storage.add_document_chunks(
-                        actual_document_id, collection_id, graph_chunk_data
+                        actual_document_id, graph_chunk_data
                     )
                 logger.debug(
                     f"Stored {len(chunks)} chunks in database for document {actual_document_id}"

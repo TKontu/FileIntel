@@ -73,24 +73,26 @@ class PostgreSQLStorage(StorageInterface):
         content_hash: str,
         file_size: int,
         mime_type: str,
-        collection_id: str,
-        file_path: str = None,
+        file_path: str,
         original_filename: str = None,
         metadata: Dict[str, Any] = None,
         content_fingerprint: str = None,
     ):
-        """Create a new document."""
+        """Create a new document (without collection association)."""
         return self.document_storage.create_document(
             filename,
             content_hash,
             file_size,
             mime_type,
-            collection_id,
             file_path,
             original_filename,
             metadata,
             content_fingerprint,
         )
+
+    def add_document_to_collection(self, document_id: str, collection_id: str) -> bool:
+        """Add a document to a collection (many-to-many relationship)."""
+        return self.document_storage.add_document_to_collection(document_id, collection_id)
 
     def get_document(self, document_id: str):
         """Get document by ID."""

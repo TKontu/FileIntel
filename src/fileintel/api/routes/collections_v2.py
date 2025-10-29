@@ -206,21 +206,9 @@ async def upload_document_to_collection(
         except FileValidationError as e:
             raise to_http_exception(e)
 
-        # Create unique filename
-        file_id = str(uuid.uuid4())
-        file_extension = Path(file.filename).suffix
-        unique_filename = f"{file_id}{file_extension}"
-        file_path = Path(config.paths.uploads) / unique_filename
+        # Read file content and calculate metadata BEFORE saving to disk
+        content = await file.read()
 
-        # Ensure upload directory exists
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Save file and calculate metadata
-        async with aiofiles.open(file_path, "wb") as f:
-            content = await file.read()
-            await f.write(content)
-
-        # Calculate file metadata
         import hashlib
         from fileintel.utils.fingerprint import generate_content_fingerprint
 
@@ -231,35 +219,57 @@ async def upload_document_to_collection(
 
         logger.debug(f"File fingerprint: {content_fingerprint} (hash: {content_hash[:16]}...)")
 
-        # Check for duplicate by fingerprint (global deduplication)
+        # Check for duplicate by fingerprint BEFORE saving to disk (global deduplication)
         # This finds the same content even if uploaded to different collections
         existing_document = storage.get_document_by_fingerprint(content_fingerprint)
 
         if existing_document:
+            # Get list of collections this document is already in
+            existing_collections = [c.name for c in existing_document.collections]
             logger.info(
                 f"Duplicate detected: {file.filename} (fingerprint: {content_fingerprint}) "
-                f"already exists as document {existing_document.id} in collection {existing_document.collection_id}"
+                f"already exists as document {existing_document.id} in collections: {existing_collections}"
             )
 
-            # Return existing document instead of creating duplicate
+            # Add existing document to the new collection (many-to-many)
+            storage.add_document_to_collection(existing_document.id, collection.id)
             document = existing_document
             duplicate_detected = True
+
+            # Use existing document's file path for response (not a new upload path)
+            file_path = Path(existing_document.file_path)
+            # NOTE: File is NOT saved to disk - we reuse existing file
         else:
-            # Store document in database (file_path is stored in metadata)
+            # Create unique filename and file path
+            file_id = str(uuid.uuid4())
+            file_extension = Path(file.filename).suffix
+            unique_filename = f"{file_id}{file_extension}"
+            # Normalize to absolute path to ensure consistent matching in workflows
+            file_path = (Path(config.paths.uploads) / unique_filename).resolve()
+
+            # Ensure upload directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Save file to disk (only for new documents)
+            async with aiofiles.open(file_path, "wb") as f:
+                await f.write(content)
+
+            # Store document in database with normalized absolute file_path
             document = storage.create_document(
                 filename=unique_filename,
                 content_hash=content_hash,
                 content_fingerprint=content_fingerprint,
                 file_size=file_size,
                 mime_type=mime_type,
-                collection_id=collection.id,
+                file_path=str(file_path),  # Already normalized and absolute
                 original_filename=file.filename,
                 metadata={
                     "uploaded_via": "api_v2",
                     "original_filename": file.filename,
-                    "file_path": str(file_path),
                 },
             )
+            # Add the new document to the collection
+            storage.add_document_to_collection(document.id, collection.id)
             duplicate_detected = False
 
         # Log successful upload
@@ -331,7 +341,9 @@ async def get_document(
         "content_hash": document.content_hash,
         "file_size": document.file_size,
         "mime_type": document.mime_type,
-        "collection_id": document.collection_id,
+        "file_path": document.file_path,
+        "collection_ids": [c.id for c in document.collections],
+        "collections": [{"id": c.id, "name": c.name} for c in document.collections],
         "created_at": document.created_at.isoformat() if document.created_at else None,
         "document_metadata": document.document_metadata or {},
     }
@@ -497,15 +509,15 @@ async def submit_collection_processing_task(
                 documents_with_chunks.append({
                     "document_id": str(doc.id),
                     "filename": doc.original_filename or doc.filename,
-                    "chunk_count": len(doc_chunks)
+                    "chunks_count": len(doc_chunks)  # Use chunks_count (plural) to match classification logic
                 })
                 logger.info(
                     f"Skipping document {doc.id} ({doc.original_filename}) - "
                     f"already has {len(doc_chunks)} chunks"
                 )
             else:
-                # Document needs processing
-                file_path = doc.document_metadata.get("file_path") if doc.document_metadata else None
+                # Document needs processing - get file path from direct field or fallback to metadata
+                file_path = doc.file_path if hasattr(doc, 'file_path') else (doc.document_metadata.get("file_path") if doc.document_metadata else None)
 
                 if file_path:
                     file_paths.append(file_path)
@@ -540,10 +552,23 @@ async def submit_collection_processing_task(
                 f"Skipping MinerU processing, proceeding directly to embeddings/GraphRAG."
             )
 
+            # Generate synthetic results for skipped documents to show in completion message
+            # This ensures the completion callback receives accurate information
+            document_results = [
+                {
+                    "status": "completed",
+                    "document_id": doc["document_id"],
+                    "filename": doc["filename"],
+                    "chunks_count": doc["chunks_count"],  # Now consistent with line 512
+                    "message": "Skipped - already has chunks",
+                    "skipped": True
+                }
+                for doc in documents_with_chunks
+            ]
+
             # Go straight to embeddings (which will trigger GraphRAG automatically)
-            # Pass empty document_results since documents are already processed
             task = generate_collection_embeddings_simple.delay(
-                document_results=[],
+                document_results=document_results,
                 collection_id=str(collection.id)
             )
 
@@ -746,10 +771,10 @@ async def submit_batch_processing_tasks(
 
                 # Get documents for this collection
                 documents = storage.get_documents_by_collection(collection.id)
-                # Extract file paths from document metadata
+                # Extract file paths from documents
                 file_paths = []
                 for doc in documents:
-                    file_path = doc.document_metadata.get("file_path") if doc.document_metadata else None
+                    file_path = doc.file_path if hasattr(doc, 'file_path') else (doc.document_metadata.get("file_path") if doc.document_metadata else None)
                     if file_path:
                         file_paths.append(file_path)
 
@@ -1018,7 +1043,8 @@ async def upload_and_process_documents(
             file_id = str(uuid.uuid4())
             file_extension = Path(file.filename).suffix
             unique_filename = f"{file_id}{file_extension}"
-            file_path = Path(config.paths.uploads) / unique_filename
+            # Normalize to absolute path to ensure consistent matching in workflows
+            file_path = (Path(config.paths.uploads) / unique_filename).resolve()
 
             # Ensure upload directory exists
             file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1068,9 +1094,12 @@ async def upload_and_process_documents(
                     content_hash=content_hash,
                     file_size=file_size,
                     mime_type=mime_type,
-                    collection_id=collection.id,
-                    metadata={"uploaded_via": "api_v2", "file_path": str(file_path)},
+                    file_path=str(file_path),
+                    metadata={"uploaded_via": "api_v2"},
                 )
+
+                # Link document to collection
+                storage.add_document_to_collection(document.id, collection.id)
 
                 uploaded_files.append(str(file_path))
 

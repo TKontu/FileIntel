@@ -109,6 +109,7 @@ class DocumentUploadService:
         original_filename: str,
         content_hash: str,
         file_size: int,
+        file_path: str,
         collection_id: str,
     ) -> Document:
         """Create database record for uploaded document."""
@@ -116,15 +117,21 @@ class DocumentUploadService:
         if mime_type is None:
             mime_type = "application/octet-stream"
 
-        return self.storage.create_document(
+        # Create document without collection association
+        document = self.storage.create_document(
             filename=secure_filename,
             original_filename=original_filename,
             content_hash=content_hash,
             file_size=file_size,
             mime_type=mime_type,
-            collection_id=collection_id,
-            document_metadata={},
+            file_path=file_path,
+            metadata={},
         )
+
+        # Link document to collection
+        self.storage.add_document_to_collection(document.id, collection_id)
+
+        return document
 
     async def upload_single_document(
         self, file: UploadFile, collection: Collection
@@ -174,6 +181,7 @@ class DocumentUploadService:
             file.filename,
             content_hash,
             file_size,
+            file_path,
             collection.id,
         )
 
@@ -226,6 +234,7 @@ class DocumentUploadService:
                 file.filename,
                 content_hash,
                 file_size,
+                file_path,
                 collection.id,
             )
 
@@ -292,12 +301,14 @@ class CollectionService:
 
         return {
             "id": document.id,
-            "collection_id": document.collection_id,
+            "collection_ids": [c.id for c in document.collections],
+            "collections": [{"id": c.id, "name": c.name} for c in document.collections],
             "filename": document.filename,
             "original_filename": document.original_filename,
             "content_hash": document.content_hash,
             "file_size": document.file_size,
             "mime_type": document.mime_type,
+            "file_path": document.file_path,
             "document_metadata": document.document_metadata,
             "created_at": document.created_at,
             "updated_at": document.updated_at,

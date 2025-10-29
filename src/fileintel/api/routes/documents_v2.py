@@ -47,7 +47,7 @@ class DocumentChunksResponse(BaseModel):
     """Document chunks list response."""
     document_id: str
     filename: str
-    collection_id: str
+    collection_ids: List[str]
     total_chunks: int
     chunks: List[ChunkResponse]
 
@@ -117,7 +117,7 @@ async def get_document_chunks(
     return DocumentChunksResponse(
         document_id=doc.id,
         filename=doc.filename or doc.original_filename or "Unknown",
-        collection_id=doc.collection_id,
+        collection_ids=[c.id for c in doc.collections],
         total_chunks=len(chunk_list),
         chunks=chunk_list
     )
@@ -200,7 +200,8 @@ async def export_document_chunks_markdown(
     filename = doc.filename or doc.original_filename or "Unknown"
     output.write(f"# Document Export: {filename}\n\n")
     output.write(f"**Document ID**: `{doc.id}`\n")
-    output.write(f"**Collection ID**: `{doc.collection_id}`\n")
+    collection_names = [f"{c.name} ({c.id})" for c in doc.collections]
+    output.write(f"**Collections**: {', '.join(collection_names) if collection_names else 'None'}\n")
     output.write(f"**Created**: {doc.created_at}\n")
     output.write(f"**Total Chunks**: {len(chunk_list)}\n")
     output.write(f"**Exported**: {datetime.now().isoformat()}\n\n")
@@ -328,7 +329,8 @@ async def get_document_info(
     return create_success_response({
         'document_id': doc.id,
         'filename': doc.filename or doc.original_filename,
-        'collection_id': doc.collection_id,
+        'collection_ids': [c.id for c in doc.collections],
+        'collections': [{'id': c.id, 'name': c.name} for c in doc.collections],
         'created_at': doc.created_at.isoformat() if doc.created_at else None,
         'metadata': doc.document_metadata or {},
         'statistics': {
@@ -357,7 +359,6 @@ async def get_chunk_by_id(
     return create_success_response({
         'chunk_id': str(chunk.id),
         'document_id': str(chunk.document_id),
-        'collection_id': str(chunk.collection_id),
         'chunk_text': chunk.chunk_text,
         'chunk_metadata': chunk.chunk_metadata or {},
         'position': chunk.position,

@@ -105,7 +105,8 @@ class VectorSearchStorage:
                     1 - (c.embedding <=> CAST(:query_embedding AS vector)) as similarity
                 FROM document_chunks c
                 JOIN documents d ON c.document_id = d.id
-                WHERE d.collection_id = :collection_id
+                JOIN collection_documents cd ON d.id = cd.document_id
+                WHERE cd.collection_id = :collection_id
                     AND c.embedding IS NOT NULL
                     AND 1 - (c.embedding <=> CAST(:query_embedding AS vector)) >= :similarity_threshold
                     {exclusion_filter}
@@ -309,7 +310,8 @@ class VectorSearchStorage:
                         AVG(CASE WHEN c.embedding IS NOT NULL THEN array_length(c.embedding, 1) END) as avg_embedding_dimension
                     FROM document_chunks c
                     JOIN documents d ON c.document_id = d.id
-                    WHERE d.collection_id = :collection_id
+                    JOIN collection_documents cd ON d.id = cd.document_id
+                    WHERE cd.collection_id = :collection_id
                 """
                 )
 

@@ -40,8 +40,15 @@ class StorageInterface(ABC):
         content_hash: str,
         file_size: int,
         mime_type: str,
-        collection_id: str,
+        file_path: str,
+        original_filename: str = None,
+        metadata: dict = None,
+        content_fingerprint: str = None,
     ) -> Document:
+        pass
+
+    @abstractmethod
+    def add_document_to_collection(self, document_id: str, collection_id: str) -> bool:
         pass
 
     @abstractmethod

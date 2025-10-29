@@ -12,10 +12,10 @@ from .._graphrag_imports import (
     ModelType,
 )
 
-# Configuration constants
-DEFAULT_REQUEST_TIMEOUT = 7200.0  # Increased from 30s to 5 minutes for entity extraction
-DEFAULT_MAX_RETRIES = 5
-DEFAULT_MAX_RETRY_WAIT = 3.0
+# Configuration constants - made configurable for high-load/unstable server scenarios
+DEFAULT_REQUEST_TIMEOUT = float(os.environ.get("GRAPHRAG_REQUEST_TIMEOUT", "900.0"))  # 15 min (was 7200)
+DEFAULT_MAX_RETRIES = int(os.environ.get("GRAPHRAG_MAX_RETRIES", "10"))  # Increased from 5 to 10
+DEFAULT_MAX_RETRY_WAIT = float(os.environ.get("GRAPHRAG_MAX_RETRY_WAIT", "60.0"))  # Increased from 3s to 60s for 503 recovery
 # Ultra-high rate limits for local LLM server (effectively disables rate limiting)
 HIGH_RATE_LIMIT_RPM = 100000  # 100k requests per minute
 HIGH_RATE_LIMIT_TPM = 100000000  # 100M tokens per minute

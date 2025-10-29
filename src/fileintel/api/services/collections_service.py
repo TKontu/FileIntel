@@ -128,12 +128,14 @@ class CollectionsService:
             content_hash=content_hash,
             file_size=len(file_content),
             mime_type=file.content_type or "application/octet-stream",
-            collection_id=collection.id,
             file_path=str(file_path),
             original_filename=file.filename,
         )
 
-        logger.info(f"Document {document.id} uploaded to collection {collection.id}")
+        # Link document to collection
+        self.storage.add_document_to_collection(document.id, collection.id)
+
+        logger.info(f"Document {document.id} uploaded and linked to collection {collection.id}")
 
         return {
             "document_id": document.id,
@@ -162,8 +164,12 @@ class CollectionsService:
         # Update collection status
         self.storage.update_collection_status(collection_id, "processing")
 
-        # Get file paths from documents
-        file_paths = [doc.file_path for doc in documents]
+        # Get file paths from documents (file_path is required field)
+        file_paths = []
+        for doc in documents:
+            if not doc.file_path:
+                raise ValueError(f"Document {doc.id} missing file_path")
+            file_paths.append(doc.file_path)
 
         # Submit task
         task_result = complete_collection_analysis.delay(

@@ -5,6 +5,7 @@ networks:
 services:
   postgres:
     image: "pgvector/pgvector:pg13"
+    command: ["postgres", "-c", "max_connections=300", "-c", "shared_buffers=512MB"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fileintel_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password}
@@ -24,14 +25,19 @@ services:
   redis:
     image: "redis:alpine"
     # No external port exposure - only accessible within the network
+    sysctls:
+      - net.core.somaxconn=511
     restart: unless-stopped
     networks:
       - fileintel
 
   api:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: fileintel:latest
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["uvicorn", "fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
+    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
     ports:
       - "${API_PORT:-8000}:8000"  # Only the API is exposed to the host network
     volumes:
@@ -41,7 +47,8 @@ services:
       - ${HOST_UPLOADS_PATH:-uploads}:/home/appuser/app/uploads
       - ${HOST_INPUT_PATH:-input}:/home/appuser/app/input
       - ${HOST_OUTPUT_PATH:-output}:/home/appuser/app/output
-      - ${HOST_CONFIG_PATH:-config}:/home/appuser/app/config
+      # Note: config is NOT mounted - use config from Docker image
+      # Only mount config if you need to override: - ${HOST_CONFIG_PATH}:/home/appuser/app/config
       - ${HOST_GRAPHRAG_PATH:-graphrag_indices}:/data
     env_file:
       - .env
@@ -77,14 +84,19 @@ services:
       - fileintel
 
   celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: fileintel:latest
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}", "--max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-50}"]
+    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}"]
     deploy:
       resources:
         limits:
           # Hard limit - container killed if exceeded (triggers OOM)
           memory: ${CELERY_WORKER_MEMORY_LIMIT:-8G}
+          # Process limit - prevents fork bomb and process exhaustion
+          pids: 512
         reservations:
           # Soft guarantee - Docker tries to reserve this minimum (for scheduling)
           memory: ${CELERY_WORKER_MEMORY_RESERVATION:-1G}
@@ -96,7 +108,8 @@ services:
       - ${HOST_MINERU_OUTPUTS_PATH:-mineru_outputs}:/home/appuser/app/mineru_outputs
       - ${HOST_INPUT_PATH:-input}:/home/appuser/app/input
       - ${HOST_OUTPUT_PATH:-output}:/home/appuser/app/output
-      - ${HOST_CONFIG_PATH:-config}:/home/appuser/app/config
+      # Note: config is NOT mounted - use config from Docker image
+      # Only mount config if you need to override: - ${HOST_CONFIG_PATH}:/home/appuser/app/config
       - ${HOST_GRAPHRAG_PATH:-graphrag_indices}:/data
     env_file:
       - .env
@@ -141,14 +154,17 @@ services:
       - fileintel
 
   flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: fileintel:latest
     entrypoint: ["./docker-entrypoint.sh"]
     command: ["celery", "-A", "fileintel.flower_celery:app", "flower", "--port=5555"]
     ports:
       - "${FLOWER_PORT:-5555}:5555"
-    volumes:
-      # Only mount config - code is in the image
-      - ${HOST_CONFIG_PATH:-config}:/home/appuser/app/config
+    volumes: []
+      # Note: config is NOT mounted - use config from Docker image
+      # Flower doesn't need data volumes, only reads from Redis
     env_file:
       - .env
     environment:
@@ -204,7 +220,6 @@ volumes:
   # When deploying on TrueNAS, override with bind mounts to datasets in your .env:
   # HOST_GRAPHRAG_PATH=/mnt/HDDs/docker/apps/fileintel/graphrag_indices
   # HOST_UPLOADS_PATH=/mnt/HDDs/docker/apps/fileintel/uploads
-  # HOST_CONFIG_PATH=/mnt/HDDs/docker/apps/fileintel/config
   # etc.
   prompts:
   logs:
@@ -212,5 +227,5 @@ volumes:
   mineru_outputs:
   input:
   output:
-  config:
+  # config volume removed - config comes from Docker image, not external mount
   graphrag_indices:
