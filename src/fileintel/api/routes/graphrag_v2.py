@@ -23,7 +23,11 @@ router = APIRouter(prefix="/graphrag", tags=["GraphRAG"])
 
 class GraphRAGIndexRequest(BaseModel):
     collection_id: str = Field(..., description="Collection ID or name to index")
-    force_rebuild: bool = Field(False, description="Force rebuild existing index")
+    force_rebuild: bool = Field(
+        False,
+        description="Force full rebuild from scratch, ignoring checkpoints. "
+                    "When False (default), automatically resumes from last successful checkpoint if available."
+    )
 
 
 class GraphRAGIndexResponse(BaseModel):
@@ -39,7 +43,15 @@ async def create_graphrag_index(
     background_tasks: BackgroundTasks,
     storage: PostgreSQLStorage = Depends(get_storage),
 ):
-    """Create or rebuild GraphRAG index for a collection."""
+    """
+    Create or rebuild GraphRAG index for a collection.
+
+    This endpoint now supports automatic checkpoint resume, allowing indexing to
+    continue from the last successful workflow step if interrupted.
+
+    - force_rebuild=False (default): Automatically resumes from checkpoints if available
+    - force_rebuild=True: Ignores checkpoints and rebuilds from scratch
+    """
     try:
         config = get_config()
         # Get collection by identifier (ID or name)

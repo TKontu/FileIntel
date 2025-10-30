@@ -17,7 +17,7 @@ from graphrag.callbacks.noop_workflow_callbacks import NoopWorkflowCallbacks
 from graphrag.callbacks.workflow_callbacks import WorkflowCallbacks
 from graphrag.config.enums import IndexingMethod
 from graphrag.config.models.graph_rag_config import GraphRagConfig
-from graphrag.index.run.run_pipeline import run_pipeline
+from graphrag.index.run.run_pipeline import run_pipeline, run_pipeline_with_resume
 from graphrag.index.run.utils import create_callback_chain
 from graphrag.index.typing.pipeline_run_result import PipelineRunResult
 from graphrag.index.workflows.factory import PipelineFactory
@@ -35,6 +35,8 @@ async def build_index(
     additional_context: dict[str, Any] | None = None,
     verbose: bool = False,
     input_documents: pd.DataFrame | None = None,
+    enable_resume: bool = True,
+    validate_checkpoints: bool = True,
 ) -> list[PipelineRunResult]:
     """Run the pipeline with the given configuration.
 
@@ -52,6 +54,11 @@ async def build_index(
         Additional context to pass to the pipeline run. This can be accessed in the pipeline state under the 'additional_context' key.
     input_documents : pd.DataFrame | None default=None.
         Override document loading and parsing and supply your own dataframe of documents to index.
+    enable_resume : bool default=True
+        Enable checkpoint detection and automatic resume from last completed workflow.
+        Set to False to force full rebuild from scratch.
+    validate_checkpoints : bool default=True
+        Validate checkpoint data consistency before resume. Only used if enable_resume is True.
 
     Returns
     -------
@@ -77,14 +84,31 @@ async def build_index(
 
     workflow_callbacks.pipeline_start(pipeline.names())
 
-    async for output in run_pipeline(
-        pipeline,
-        config,
-        callbacks=workflow_callbacks,
-        is_update_run=is_update_run,
-        additional_context=additional_context,
-        input_documents=input_documents,
-    ):
+    # Use resume-capable runner if enabled, otherwise use standard runner
+    if enable_resume:
+        logger.info("Checkpoint resume enabled")
+        pipeline_runner = run_pipeline_with_resume(
+            pipeline,
+            config,
+            callbacks=workflow_callbacks,
+            is_update_run=is_update_run,
+            additional_context=additional_context,
+            input_documents=input_documents,
+            enable_resume=True,
+            validate_checkpoints=validate_checkpoints,
+        )
+    else:
+        logger.info("Checkpoint resume disabled - full rebuild")
+        pipeline_runner = run_pipeline(
+            pipeline,
+            config,
+            callbacks=workflow_callbacks,
+            is_update_run=is_update_run,
+            additional_context=additional_context,
+            input_documents=input_documents,
+        )
+
+    async for output in pipeline_runner:
         outputs.append(output)
         if output.errors and len(output.errors) > 0:
             logger.error("Workflow %s completed with errors", output.workflow)

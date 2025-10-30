@@ -128,6 +128,12 @@ graphrag:
   # Embedding configuration
   embedding_batch_max_tokens: ${GRAPHRAG_EMBEDDING_BATCH_MAX_TOKENS:-450}   # Max tokens per embedding request (optimal for 512 token model limit)
 
+  # Checkpoint & Resume Settings
+  # Enable automatic resume from last completed workflow step (prevents losing progress on failures)
+  enable_checkpoint_resume: ${GRAPHRAG_ENABLE_CHECKPOINT_RESUME:-true}
+  # Validate checkpoint data consistency before resume (recommended for data integrity)
+  validate_checkpoints: ${GRAPHRAG_VALIDATE_CHECKPOINTS:-true}
+
 document_processing:
   chunk_size: ${DOC_CHUNK_SIZE:-800}  # ~200 tokens (matches RAG chunk size for consistency)
   overlap: ${DOC_CHUNK_OVERLAP:-80}

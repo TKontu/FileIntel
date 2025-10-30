@@ -628,6 +628,9 @@ def build_graphrag_index_task(
     """
     Build GraphRAG index for a collection from existing document chunks.
 
+    This task now supports checkpoint resume, allowing automatic recovery from
+    failures without losing progress.
+
     Note: GraphRAG indexing can take hours for large collections due to:
     - Entity extraction for each chunk (~1-3s per chunk)
     - Community detection algorithms (scales with relationship count)
@@ -636,7 +639,8 @@ def build_graphrag_index_task(
 
     Args:
         collection_id: Collection identifier
-        force_rebuild: Whether to rebuild existing index
+        force_rebuild: Whether to force full rebuild ignoring checkpoints (default: False)
+                      When False, will automatically resume from last checkpoint if available
 
     Returns:
         Dict containing indexing results
@@ -649,6 +653,12 @@ def build_graphrag_index_task(
 
     try:
         logger.info(f"Starting GraphRAG index build for collection {collection_id}")
+
+        if force_rebuild:
+            logger.info("🔄 Force rebuild requested - ignoring checkpoints")
+        else:
+            logger.info("📌 Checkpoint resume enabled - will resume from last checkpoint if available")
+
         self.update_progress(0, 5, "Initializing GraphRAG indexing")
 
         # Initialize services
@@ -697,11 +707,21 @@ def build_graphrag_index_task(
                 2, 5, f"Building GraphRAG index from {len(all_chunks)} chunks"
             )
 
-            # Use GraphRAG service to build index
+            # Use GraphRAG service to build index with checkpoint resume
             import asyncio
 
+            # Determine if resume should be enabled
+            # force_rebuild=True -> disable resume (start from scratch)
+            # force_rebuild=False -> enable resume (use checkpoints)
+            enable_resume = not force_rebuild
+
             workspace_path = asyncio.run(
-                graphrag_service.build_index(all_chunks, collection_id)
+                graphrag_service.build_index_with_resume(
+                    all_chunks,
+                    collection_id,
+                    enable_resume=enable_resume,
+                    validate_checkpoints=True,  # Always validate for safety
+                )
             )
 
             self.update_progress(4, 5, "GraphRAG index completed")

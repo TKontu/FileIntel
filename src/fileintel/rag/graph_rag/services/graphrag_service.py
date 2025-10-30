@@ -115,7 +115,35 @@ class GraphRAGService:
         }
 
     async def build_index(self, documents: List[DocumentChunk], collection_id: str):
-        """Builds a GraphRAG index from a set of documents."""
+        """
+        Builds a GraphRAG index from a set of documents.
+
+        This method uses default settings without checkpoint resume.
+        For resume capability, use build_index_with_resume instead.
+        """
+        return await self.build_index_with_resume(
+            documents, collection_id, enable_resume=False
+        )
+
+    async def build_index_with_resume(
+        self,
+        documents: List[DocumentChunk],
+        collection_id: str,
+        enable_resume: bool = True,
+        validate_checkpoints: bool = True,
+    ):
+        """
+        Builds a GraphRAG index from a set of documents with checkpoint resume capability.
+
+        Args:
+            documents: List of document chunks to index
+            collection_id: Collection identifier
+            enable_resume: Whether to enable checkpoint detection and resume (default: True)
+            validate_checkpoints: Whether to validate checkpoint consistency (default: True)
+
+        Returns:
+            Workspace path where the index was built
+        """
         import logging
         import time
         from .progress_callback import GraphRAGProgressCallback
@@ -124,6 +152,11 @@ class GraphRAGService:
 
         logger.info(f"Starting GraphRAG index build for collection {collection_id}")
         logger.info(f"Processing {len(documents)} document chunks")
+
+        if enable_resume:
+            logger.info("📌 Checkpoint resume enabled")
+        else:
+            logger.info("🔄 Full rebuild mode (checkpoints disabled)")
 
         documents_df = self.data_adapter.adapt_documents(documents)
         logger.info(f"Converted to DataFrame with {len(documents_df)} rows")
@@ -152,10 +185,13 @@ class GraphRAGService:
         # Create progress callback for clean workflow tracking
         progress_callback = GraphRAGProgressCallback(collection_id)
 
+        # Call build_index with resume parameters
         result = await build_index(
             config=graphrag_config,
             input_documents=documents_df,
-            callbacks=[progress_callback]
+            callbacks=[progress_callback],
+            enable_resume=enable_resume,
+            validate_checkpoints=validate_checkpoints,
         )
 
         # Sync GraphRAG logger level with application config (build_index calls init_loggers)

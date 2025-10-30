@@ -291,6 +291,16 @@ class RAGSettings(BaseModel):
     auto_index_delay_seconds: int = Field(default=30)
     embedding_batch_max_tokens: int = Field(default=400)
 
+    # GraphRAG checkpoint & resume settings
+    enable_checkpoint_resume: bool = Field(
+        default=True,
+        description="Enable checkpoint detection and automatic resume from last successful workflow step"
+    )
+    validate_checkpoints: bool = Field(
+        default=True,
+        description="Validate checkpoint data consistency before resume (recommended for data integrity)"
+    )
+
     # Cache settings
     cache: GraphRAGCacheSettings = Field(default_factory=GraphRAGCacheSettings)
 
