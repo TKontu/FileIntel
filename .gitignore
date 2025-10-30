@@ -52,7 +52,7 @@ graphrag_indices/*
 /examples/*
 
 #Graphrag
-src/graphrag/*
+# src/graphrag/*  # COMMENTED OUT - graphrag source is now part of the repository
 
 #Mineru
 /mineru_outputs/*
