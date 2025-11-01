@@ -94,8 +94,9 @@ Communities will be rebuilt with:
 ## Files Modified
 
 1. `config/default.yaml` - Added max_cluster_size parameter
-2. `src/fileintel/rag/graph_rag/_graphrag_imports.py` - Added ClusterGraphConfig import
-3. `src/fileintel/rag/graph_rag/adapters/config_adapter.py` - Wired parameter through to GraphRAG config
+2. `src/fileintel/core/config.py` - Added max_cluster_size field to RAGSettings model (line 288)
+3. `src/fileintel/rag/graph_rag/_graphrag_imports.py` - Added ClusterGraphConfig import
+4. `src/fileintel/rag/graph_rag/adapters/config_adapter.py` - Wired parameter through to GraphRAG config
 
 ## Verification
 
