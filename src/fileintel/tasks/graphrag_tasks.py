@@ -715,6 +715,10 @@ def build_graphrag_index_task(
             # force_rebuild=False -> enable resume (use checkpoints)
             enable_resume = not force_rebuild
 
+            # Set status to "building" when indexing starts
+            storage.update_graphrag_index_status(collection_id, "building")
+            logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
+
             workspace_path = asyncio.run(
                 graphrag_service.build_index_with_resume(
                     all_chunks,
@@ -725,6 +729,10 @@ def build_graphrag_index_task(
             )
 
             self.update_progress(4, 5, "GraphRAG index completed")
+
+            # Set status to "ready" when indexing completes successfully
+            storage.update_graphrag_index_status(collection_id, "ready")
+            logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
 
             # Get final status
             status = asyncio.run(graphrag_service.get_index_status(collection_id))
@@ -755,6 +763,16 @@ def build_graphrag_index_task(
         logger.error(
             f"Error building GraphRAG index for collection {collection_id}: {e}"
         )
+
+        # Set status to "failed" when indexing fails
+        try:
+            storage = get_shared_storage()
+            storage.update_graphrag_index_status(collection_id, "failed")
+            storage.close()
+            logger.info(f"Set GraphRAG index status to 'failed' for collection {collection_id}")
+        except Exception as status_error:
+            logger.error(f"Failed to update status to 'failed': {status_error}")
+
         # Force cleanup even on failure to prevent memory leaks
         import gc
         gc.collect()

@@ -455,8 +455,10 @@ class GraphRAGService:
                 communities_count,
             ) = self._count_graphrag_results(workspace_path)
 
+            # Use actual index_status from database (building/ready/failed/updating)
+            # instead of hardcoded "indexed" to support checkpoint resume
             return {
-                "status": "indexed",
+                "status": index_info.get("index_status", "unknown"),
                 "index_path": workspace_path,
                 "documents_count": documents_count,
                 "entities_count": entities_count,

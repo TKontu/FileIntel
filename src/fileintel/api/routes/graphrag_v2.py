@@ -67,7 +67,9 @@ async def create_graphrag_index(
 
         if not request.force_rebuild:
             status = await graphrag_service.get_index_status(collection.id)
-            if status.get("status") == "indexed":
+            # Check for "ready" (schema value) or "indexed" (legacy compatibility)
+            # Allow resume if status is "building" (checkpoint resume enabled)
+            if status.get("status") in ["ready", "indexed"]:
                 return ApiResponseV2(
                     success=False,
                     message="GraphRAG index already exists. Use force_rebuild=true to rebuild.",
@@ -205,7 +207,7 @@ async def get_graphrag_entities(
         # Check if index exists
         graphrag_service = GraphRAGService(storage, config)
         status = await graphrag_service.get_index_status(collection.id)
-        if status.get("status") != "indexed":
+        if status.get("status") not in ["ready", "indexed"]:
             raise HTTPException(
                 status_code=404,
                 detail=f"No GraphRAG index found for collection '{collection_identifier}'. Please create index first.",
@@ -301,7 +303,7 @@ async def get_graphrag_communities(
         # Check if index exists
         graphrag_service = GraphRAGService(storage, config)
         status = await graphrag_service.get_index_status(collection.id)
-        if status.get("status") != "indexed":
+        if status.get("status") not in ["ready", "indexed"]:
             raise HTTPException(
                 status_code=404,
                 detail=f"No GraphRAG index found for collection '{collection_identifier}'. Please create index first.",
@@ -407,7 +409,7 @@ async def get_graphrag_community_by_id(
         # Check if index exists
         graphrag_service = GraphRAGService(storage, config)
         status = await graphrag_service.get_index_status(collection.id)
-        if status.get("status") != "indexed":
+        if status.get("status") not in ["ready", "indexed"]:
             raise HTTPException(
                 status_code=404,
                 detail=f"No GraphRAG index found for collection '{collection_identifier}'. Please create index first.",

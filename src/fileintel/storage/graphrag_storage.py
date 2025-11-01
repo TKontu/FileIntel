@@ -88,6 +88,7 @@ class GraphRAGStorage:
                 return {
                     "collection_id": index_info.collection_id,
                     "index_path": index_info.index_path,
+                    "index_status": index_info.index_status,  # Include status for resume logic
                     "documents_count": index_info.documents_count,
                     "entities_count": index_info.entities_count,
                     "communities_count": index_info.communities_count,
@@ -100,6 +101,42 @@ class GraphRAGStorage:
         except Exception as e:
             logger.error(f"Error getting GraphRAG index info: {e}")
             return None
+
+    def update_graphrag_index_status(self, collection_id: str, status: str) -> bool:
+        """
+        Update GraphRAG index status.
+
+        Args:
+            collection_id: Collection ID
+            status: New status (building, ready, failed, updating)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            index_info = (
+                self.db.query(GraphRAGIndex)
+                .filter(GraphRAGIndex.collection_id == collection_id)
+                .first()
+            )
+
+            if index_info:
+                index_info.index_status = status
+                self.base._safe_commit()
+                logger.info(
+                    f"Updated GraphRAG index status to '{status}' for collection {collection_id}"
+                )
+                return True
+            else:
+                logger.warning(
+                    f"Cannot update status: No GraphRAG index found for collection {collection_id}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"Error updating GraphRAG index status: {e}")
+            self.base._handle_session_error(e)
+            return False
 
     def remove_graphrag_index_info(self, collection_id: str) -> bool:
         """Remove GraphRAG index information for a collection."""

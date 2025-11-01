@@ -253,6 +253,10 @@ class PostgreSQLStorage(StorageInterface):
         """Get GraphRAG index information."""
         return self.graphrag_storage.get_graphrag_index_info(collection_id)
 
+    def update_graphrag_index_status(self, collection_id: str, status: str) -> bool:
+        """Update GraphRAG index status (building, ready, failed, updating)."""
+        return self.graphrag_storage.update_graphrag_index_status(collection_id, status)
+
     def remove_graphrag_index_info(self, collection_id: str) -> bool:
         """Remove GraphRAG index information."""
         return self.graphrag_storage.remove_graphrag_index_info(collection_id)
