@@ -10,6 +10,7 @@ from .._graphrag_imports import (
     OutputConfig,
     LanguageModelConfig,
     ModelType,
+    ClusterGraphConfig,
 )
 
 # Configuration constants - made configurable for high-load/unstable server scenarios
@@ -224,6 +225,15 @@ class GraphRAGConfigAdapter:
                 f"GRAPHRAG DEBUG: Setting embed_text batch_max_tokens to {settings.rag.embedding_batch_max_tokens}"
             )
 
+            # Create cluster_graph config with max_cluster_size
+            cluster_graph_config = ClusterGraphConfig(
+                max_cluster_size=settings.rag.max_cluster_size
+            )
+
+            logger.debug(
+                f"GRAPHRAG DEBUG: Setting cluster_graph max_cluster_size to {settings.rag.max_cluster_size}"
+            )
+
             config = GraphRagConfig(
                 root_dir=workspace_path,
                 models=models,
@@ -231,6 +241,7 @@ class GraphRAGConfigAdapter:
                 input=InputConfig(base_dir=input_path),
                 output=OutputConfig(base_dir=output_path),
                 embed_text=embed_text_config,
+                cluster_graph=cluster_graph_config,
             )
 
             # Debug log the final config

@@ -12,6 +12,7 @@ try:
     from graphrag.config.models.text_embedding_config import TextEmbeddingConfig
     from graphrag.config.models.storage_config import StorageConfig
     from graphrag.config.models.input_config import InputConfig
+    from graphrag.config.models.cluster_graph_config import ClusterGraphConfig
     from graphrag.query.indexer_adapters import (
         read_indexer_entities,
         read_indexer_communities,
@@ -49,6 +50,7 @@ except ImportError:
     OutputConfig = None
     LanguageModelConfig = None
     ModelType = None
+    ClusterGraphConfig = None
     read_indexer_entities = None
     read_indexer_communities = None
     TextEmbeddingConfig = None
@@ -66,6 +68,7 @@ __all__ = [
     "OutputConfig",
     "LanguageModelConfig",
     "ModelType",
+    "ClusterGraphConfig",
     "read_indexer_entities",
     "read_indexer_communities",
     "TextEmbeddingConfig",
