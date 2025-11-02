@@ -5,7 +5,28 @@ networks:
 services:
   postgres:
     image: "pgvector/pgvector:pg13"
-    command: ["postgres", "-c", "max_connections=300", "-c", "shared_buffers=512MB"]
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=${POSTGRES_MAX_CONNECTIONS:-500}"
+      - "-c"
+      - "shared_buffers=${POSTGRES_SHARED_BUFFERS:-2GB}"
+      - "-c"
+      - "effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-6GB}"
+      - "-c"
+      - "work_mem=${POSTGRES_WORK_MEM:-32MB}"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "random_page_cost=1.1"
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY_LIMIT:-8G}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fileintel_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password}
@@ -24,9 +45,14 @@ services:
 
   redis:
     image: "redis:alpine"
+    command: redis-server --maxmemory ${REDIS_MAXMEMORY:-2gb} --maxmemory-policy allkeys-lru
     # No external port exposure - only accessible within the network
     sysctls:
       - net.core.somaxconn=511
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-3G}
     restart: unless-stopped
     networks:
       - fileintel
@@ -89,7 +115,16 @@ services:
       dockerfile: Dockerfile
     image: fileintel:latest
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["celery", "-A", "fileintel.celery_config:app", "worker", "--loglevel=info", "--pool=${CELERY_WORKER_POOL:-prefork}", "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}"]
+    command:
+      - "celery"
+      - "-A"
+      - "fileintel.celery_config:app"
+      - "worker"
+      - "--loglevel=info"
+      - "--pool=${CELERY_WORKER_POOL:-prefork}"
+      - "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}"
+      - "--queues=default,document_processing,embedding_processing,llm_processing,rag_processing"
+      - "--hostname=main_prefork@%h"
     deploy:
       resources:
         limits:
@@ -142,6 +177,63 @@ services:
       - MALLOC_MMAP_THRESHOLD_=65536
       - MALLOC_TRIM_THRESHOLD_=131072
       - MALLOC_MMAP_MAX_=65536
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - fileintel
+
+  celery-graphrag-gevent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fileintel:latest
+    entrypoint: ["./docker-entrypoint.sh"]
+    command:
+      - "celery"
+      - "-A"
+      - "fileintel.celery_config:app"
+      - "worker"
+      - "--loglevel=info"
+      - "--pool=gevent"
+      - "--concurrency=${CELERY_GRAPHRAG_CONCURRENCY:-200}"
+      - "--queues=graphrag_indexing,graphrag_queries"
+      - "--hostname=graphrag_gevent@%h"
+      - "--max-tasks-per-child=1000"
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_GRAPHRAG_MEMORY_LIMIT:-20G}
+        reservations:
+          memory: ${CELERY_GRAPHRAG_MEMORY_RESERVATION:-2G}
+    volumes:
+      # Data directories - can use TrueNAS dataset paths via env vars
+      - ${HOST_PROMPTS_PATH:-prompts}:/home/appuser/app/prompts
+      - ${HOST_LOGS_PATH:-logs}:/home/appuser/app/logs
+      - ${HOST_GRAPHRAG_PATH:-graphrag_indices}:/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/home/appuser/app/src
+      - PYTHONUNBUFFERED=1
+      - DB_USER=${POSTGRES_USER:-fileintel_user}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-your_secure_password}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-fileintel}
+      - GRAPHRAG_INDEX_PATH=/data
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Gevent-specific optimizations
+      - GEVENT_RESOLVER=ares
+      - GEVENT_THREADPOOL_SIZE=50
+      # Python memory optimizations
+      - PYTHONMALLOC=malloc
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
