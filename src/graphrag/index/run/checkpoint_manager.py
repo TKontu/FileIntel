@@ -44,6 +44,37 @@ class CheckpointManager:
         ],
     }
 
+    # Define hard dependencies between workflows
+    # Maps workflow name -> list of workflows it absolutely requires
+    # Workflows not listed here can be safely skipped/re-run independently
+    WORKFLOW_DEPENDENCIES = {
+        # Standard pipeline workflows
+        "load_input_documents": [],  # No dependencies
+        "create_base_text_units": ["load_input_documents"],
+        "create_final_documents": ["load_input_documents"],
+        "extract_graph": ["create_base_text_units"],
+        "finalize_graph": ["extract_graph"],
+        "extract_covariates": ["create_base_text_units"],  # Optional, parallel to extract_graph
+        "create_communities": ["finalize_graph"],  # needs entities + relationships
+        "create_final_text_units": ["extract_graph"],  # needs entities for linkage
+        "create_community_reports": ["create_communities"],
+        "generate_text_embeddings": [],  # can run on whatever files exist
+        # Fast pipeline workflows (NLP-based)
+        "extract_graph_nlp": ["create_base_text_units"],  # Alternative to extract_graph
+        "prune_graph": ["extract_graph_nlp"],  # Prunes NLP graph
+        "create_community_reports_text": ["create_communities"],  # Text-only reports
+        # Update workflows
+        "load_update_documents": [],
+        "update_final_documents": ["load_update_documents"],
+        "update_entities_relationships": ["update_final_documents"],
+        "update_text_units": ["update_entities_relationships"],
+        "update_covariates": ["update_entities_relationships"],
+        "update_communities": ["update_entities_relationships"],
+        "update_community_reports": ["update_communities"],
+        "update_text_embeddings": ["update_community_reports"],
+        "update_clean_state": [],  # Cleanup, no dependencies
+    }
+
     # Define required columns for validation
     # Maps workflow name -> {filename: [required_columns]}
     WORKFLOW_REQUIRED_COLUMNS = {
@@ -95,6 +126,31 @@ class CheckpointManager:
         "text_units.parquet": 1,  # At least 1 text unit
         "documents.parquet": 1,  # At least 1 document
     }
+
+    def _get_all_dependencies(
+        self, workflow_name: str, all_workflows: list[str]
+    ) -> set[str]:
+        """
+        Recursively get all dependencies for a workflow.
+
+        Args:
+            workflow_name: Workflow to get dependencies for
+            all_workflows: Complete list of workflow names (for validation)
+
+        Returns:
+            Set of workflow names that are dependencies
+        """
+        dependencies = set()
+        direct_deps = self.WORKFLOW_DEPENDENCIES.get(workflow_name, [])
+
+        for dep in direct_deps:
+            if dep in all_workflows:
+                dependencies.add(dep)
+                # Recursively add transitive dependencies
+                transitive = self._get_all_dependencies(dep, all_workflows)
+                dependencies.update(transitive)
+
+        return dependencies
 
     async def check_workflow_completion(
         self, workflow_name: str, storage: PipelineStorage
@@ -243,6 +299,10 @@ class CheckpointManager:
         """
         Validate that all checkpoints before resume point form a valid chain.
 
+        This now uses dependency-aware validation: instead of requiring ALL previous
+        workflows to be complete, it only validates that workflows which are actual
+        dependencies of the resume point are complete.
+
         Args:
             workflow_names: List of workflow names
             storage: Storage instance
@@ -262,24 +322,50 @@ class CheckpointManager:
             "warnings": [],
         }
 
-        # Only validate workflows before resume point
+        # Determine which workflow we're resuming from
+        if resume_idx >= len(workflow_names):
+            # Already completed everything, nothing to validate
+            return result
+
+        resume_workflow = workflow_names[resume_idx]
+
+        # Build set of all required dependencies for the resume workflow
+        required_workflows = self._get_all_dependencies(resume_workflow, workflow_names)
+
+        logger.info(
+            f"🔍 Validating dependencies for '{resume_workflow}': "
+            f"{required_workflows if required_workflows else 'none'}"
+        )
+
+        # Only validate workflows that are actual dependencies
         workflows_to_check = workflow_names[:resume_idx]
 
         for workflow_name in workflows_to_check:
             status = await self.check_workflow_completion(workflow_name, storage)
 
-            if not status["completed"]:
-                result["valid"] = False
-                result["issues"].append(
-                    f"Workflow '{workflow_name}' marked as checkpoint but is incomplete"
-                )
+            # If this workflow is a hard dependency, it MUST be complete
+            if workflow_name in required_workflows:
+                if not status["completed"]:
+                    result["valid"] = False
+                    result["issues"].append(
+                        f"Required dependency '{workflow_name}' is incomplete "
+                        f"(needed by '{resume_workflow}')"
+                    )
 
-            if status["invalid_files"]:
-                result["valid"] = False
-                result["issues"].append(
-                    f"Workflow '{workflow_name}' has invalid files: "
-                    f"{status['invalid_files']}"
-                )
+                if status["invalid_files"]:
+                    result["valid"] = False
+                    result["issues"].append(
+                        f"Required dependency '{workflow_name}' has invalid files: "
+                        f"{status['invalid_files']}"
+                    )
+            else:
+                # Not a hard dependency - just warn if incomplete
+                if not status["completed"] and status["row_counts"]:
+                    # Has some data but incomplete - warn
+                    result["warnings"].append(
+                        f"Optional workflow '{workflow_name}' incomplete but not required "
+                        f"for '{resume_workflow}' - will be re-run"
+                    )
 
         # Additional cross-workflow validation
         if resume_idx > 0:
