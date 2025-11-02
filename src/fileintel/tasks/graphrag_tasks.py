@@ -709,10 +709,11 @@ def build_graphrag_index_task(
 
             # Use GraphRAG service to build index with checkpoint resume
             import asyncio
-            import nest_asyncio
+            from gevent import monkey
 
-            # Enable nested event loops for gevent compatibility
-            nest_asyncio.apply()
+            # Ensure gevent monkey patching is applied for asyncio compatibility
+            if not monkey.is_module_patched('threading'):
+                monkey.patch_all()
 
             # Determine if resume should be enabled
             # force_rebuild=True -> disable resume (start from scratch)
@@ -723,22 +724,23 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "building")
             logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
 
-            # Get or create event loop
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # For gevent: use asyncio.new_event_loop() to create a fresh loop
+            # This avoids conflicts with gevent's event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-            # With nest_asyncio, we can now use run_until_complete even in gevent
-            workspace_path = loop.run_until_complete(
-                graphrag_service.build_index_with_resume(
-                    all_chunks,
-                    collection_id,
-                    enable_resume=enable_resume,
-                    validate_checkpoints=True,  # Always validate for safety
+            try:
+                workspace_path = loop.run_until_complete(
+                    graphrag_service.build_index_with_resume(
+                        all_chunks,
+                        collection_id,
+                        enable_resume=enable_resume,
+                        validate_checkpoints=True,  # Always validate for safety
+                    )
                 )
-            )
+            finally:
+                # Clean up the loop
+                loop.close()
 
             self.update_progress(4, 5, "GraphRAG index completed")
 
@@ -746,8 +748,13 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "ready")
             logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
 
-            # Get final status
-            status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
+            # Get final status (create new loop since previous one was closed)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
+            finally:
+                loop.close()
 
             result = {
                 "collection_id": collection_id,
@@ -815,19 +822,20 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
             graphrag_service = GraphRAGService(storage=storage, settings=config)
             # Remove index using GraphRAG service
             import asyncio
-            import nest_asyncio
+            from gevent import monkey
 
-            # Enable nested event loops for gevent compatibility
-            nest_asyncio.apply()
+            # Ensure gevent monkey patching is applied
+            if not monkey.is_module_patched('threading'):
+                monkey.patch_all()
 
-            # Get or create event loop
+            # Create fresh event loop for gevent compatibility
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
             try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            result = loop.run_until_complete(graphrag_service.remove_index(collection_id))
+                result = loop.run_until_complete(graphrag_service.remove_index(collection_id))
+            finally:
+                loop.close()
 
             # Clean up database index info
             if hasattr(storage, "remove_graphrag_index_info"):
