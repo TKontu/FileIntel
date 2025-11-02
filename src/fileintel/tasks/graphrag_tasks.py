@@ -719,7 +719,16 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "building")
             logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
 
-            workspace_path = asyncio.run(
+            # Use get_event_loop().run_until_complete() instead of asyncio.run()
+            # This works with gevent workers that already have a running event loop
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # If no event loop exists, create one (for prefork workers)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            workspace_path = loop.run_until_complete(
                 graphrag_service.build_index_with_resume(
                     all_chunks,
                     collection_id,
@@ -734,8 +743,8 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "ready")
             logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
 
-            # Get final status
-            status = asyncio.run(graphrag_service.get_index_status(collection_id))
+            # Get final status (reuse the same event loop)
+            status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
 
             result = {
                 "collection_id": collection_id,
@@ -802,8 +811,14 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
         try:
             graphrag_service = GraphRAGService(storage=storage, settings=config)
             # Remove index using GraphRAG service
-            # Note: remove_index is async, so we use asyncio.run() to execute it
-            result = asyncio.run(graphrag_service.remove_index(collection_id))
+            # Note: remove_index is async, so we use get_event_loop() for gevent compatibility
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            result = loop.run_until_complete(graphrag_service.remove_index(collection_id))
 
             # Clean up database index info
             if hasattr(storage, "remove_graphrag_index_info"):
