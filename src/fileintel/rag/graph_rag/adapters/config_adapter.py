@@ -11,6 +11,7 @@ from .._graphrag_imports import (
     LanguageModelConfig,
     ModelType,
     ClusterGraphConfig,
+    AsyncType,
 )
 
 # Configuration constants - made configurable for high-load/unstable server scenarios
@@ -154,6 +155,8 @@ class GraphRAGConfigAdapter:
                 max_retries=DEFAULT_MAX_RETRIES,
                 max_retry_wait=DEFAULT_MAX_RETRY_WAIT,
                 retry_strategy=DEFAULT_RETRY_STRATEGY,
+                # CRITICAL: Use AsyncIO for gevent compatibility and high concurrency
+                async_mode=AsyncType.AsyncIO,
             )
 
             embedding_model_config = LanguageModelConfig(
@@ -170,6 +173,8 @@ class GraphRAGConfigAdapter:
                 max_retries=DEFAULT_MAX_RETRIES,
                 max_retry_wait=DEFAULT_MAX_RETRY_WAIT,
                 retry_strategy=DEFAULT_RETRY_STRATEGY,
+                # CRITICAL: Use AsyncIO for gevent compatibility and high concurrency
+                async_mode=AsyncType.AsyncIO,
             )
 
             # CRITICAL DEBUG: Log the exact api_base values before model creation
