@@ -229,6 +229,9 @@ services:
       - GRAPHRAG_INDEX_PATH=/data
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # GraphRAG clustering configuration
+      - GRAPHRAG_MAX_CLUSTER_SIZE=${GRAPHRAG_MAX_CLUSTER_SIZE:-150}
+      - GRAPHRAG_LEIDEN_RESOLUTION=${GRAPHRAG_LEIDEN_RESOLUTION:-0.5}
       # Gevent-specific optimizations
       - GEVENT_RESOLVER=ares
       - GEVENT_THREADPOOL_SIZE=50
