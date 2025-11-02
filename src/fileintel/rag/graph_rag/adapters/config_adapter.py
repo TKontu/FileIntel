@@ -235,6 +235,10 @@ class GraphRAGConfigAdapter:
                 max_cluster_size=settings.rag.max_cluster_size
             )
 
+            # CRITICAL: Log the actual max_cluster_size being used
+            logger.info(
+                f"GRAPHRAG CRITICAL: max_cluster_size set to {settings.rag.max_cluster_size} (from env GRAPHRAG_MAX_CLUSTER_SIZE)"
+            )
             logger.debug(
                 f"GRAPHRAG DEBUG: Setting cluster_graph max_cluster_size to {settings.rag.max_cluster_size}"
             )
