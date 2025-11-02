@@ -709,6 +709,10 @@ def build_graphrag_index_task(
 
             # Use GraphRAG service to build index with checkpoint resume
             import asyncio
+            import nest_asyncio
+
+            # Enable nested event loops for gevent compatibility
+            nest_asyncio.apply()
 
             # Determine if resume should be enabled
             # force_rebuild=True -> disable resume (start from scratch)
@@ -719,15 +723,14 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "building")
             logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
 
-            # Use get_event_loop().run_until_complete() instead of asyncio.run()
-            # This works with gevent workers that already have a running event loop
+            # Get or create event loop
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
-                # If no event loop exists, create one (for prefork workers)
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
+            # With nest_asyncio, we can now use run_until_complete even in gevent
             workspace_path = loop.run_until_complete(
                 graphrag_service.build_index_with_resume(
                     all_chunks,
@@ -743,7 +746,7 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "ready")
             logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
 
-            # Get final status (reuse the same event loop)
+            # Get final status
             status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
 
             result = {
@@ -811,7 +814,13 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
         try:
             graphrag_service = GraphRAGService(storage=storage, settings=config)
             # Remove index using GraphRAG service
-            # Note: remove_index is async, so we use get_event_loop() for gevent compatibility
+            import asyncio
+            import nest_asyncio
+
+            # Enable nested event loops for gevent compatibility
+            nest_asyncio.apply()
+
+            # Get or create event loop
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
