@@ -26,7 +26,7 @@ try:
 
     try:
         from graphrag.config.models.language_model_config import LanguageModelConfig
-        from graphrag.config.enums import ModelType
+        from graphrag.config.enums import ModelType, AsyncType
     except ImportError:
 
         class LanguageModelConfig:
@@ -36,6 +36,10 @@ try:
         class ModelType:
             OpenAIChat = "openai_chat"
             OpenAIEmbedding = "openai_embedding"
+
+        class AsyncType:
+            AsyncIO = "asyncio"
+            Threaded = "threaded"
 
     GRAPHRAG_AVAILABLE = True
 
@@ -50,6 +54,7 @@ except ImportError:
     OutputConfig = None
     LanguageModelConfig = None
     ModelType = None
+    AsyncType = None
     ClusterGraphConfig = None
     read_indexer_entities = None
     read_indexer_communities = None
@@ -68,6 +73,7 @@ __all__ = [
     "OutputConfig",
     "LanguageModelConfig",
     "ModelType",
+    "AsyncType",
     "ClusterGraphConfig",
     "read_indexer_entities",
     "read_indexer_communities",
