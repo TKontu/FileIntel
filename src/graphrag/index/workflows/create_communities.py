@@ -36,6 +36,7 @@ async def run_workflow(
     max_cluster_size = config.cluster_graph.max_cluster_size
     use_lcc = config.cluster_graph.use_lcc
     seed = config.cluster_graph.seed
+    resolution = getattr(config.cluster_graph, 'resolution', 1.0)
 
     output = create_communities(
         entities,
@@ -43,6 +44,7 @@ async def run_workflow(
         max_cluster_size=max_cluster_size,
         use_lcc=use_lcc,
         seed=seed,
+        resolution=resolution,
     )
 
     await write_table_to_storage(output, "communities", context.output_storage)
@@ -57,6 +59,7 @@ def create_communities(
     max_cluster_size: int,
     use_lcc: bool,
     seed: int | None = None,
+    resolution: float = 1.0,
 ) -> pd.DataFrame:
     """All the steps to transform final communities."""
     graph = create_graph(relationships, edge_attr=["weight"])
@@ -66,6 +69,7 @@ def create_communities(
         max_cluster_size,
         use_lcc,
         seed=seed,
+        resolution=resolution,
     )
 
     communities = pd.DataFrame(

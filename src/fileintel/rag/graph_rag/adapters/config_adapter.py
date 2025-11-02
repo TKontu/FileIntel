@@ -230,14 +230,17 @@ class GraphRAGConfigAdapter:
                 f"GRAPHRAG DEBUG: Setting embed_text batch_max_tokens to {settings.rag.embedding_batch_max_tokens}"
             )
 
-            # Create cluster_graph config with max_cluster_size
+            # Create cluster_graph config with max_cluster_size and resolution
+            # Resolution: Lower values (e.g., 0.5) = larger communities, Higher values (e.g., 2.0) = smaller communities
+            leiden_resolution = getattr(settings.rag, 'leiden_resolution', 1.0)
             cluster_graph_config = ClusterGraphConfig(
-                max_cluster_size=settings.rag.max_cluster_size
+                max_cluster_size=settings.rag.max_cluster_size,
+                resolution=leiden_resolution,
             )
 
-            # CRITICAL: Log the actual max_cluster_size being used
+            # CRITICAL: Log the actual clustering parameters being used
             logger.info(
-                f"GRAPHRAG CRITICAL: max_cluster_size set to {settings.rag.max_cluster_size} (from env GRAPHRAG_MAX_CLUSTER_SIZE)"
+                f"GRAPHRAG CRITICAL: Leiden clustering - max_cluster_size={settings.rag.max_cluster_size}, resolution={leiden_resolution}"
             )
             logger.debug(
                 f"GRAPHRAG DEBUG: Setting cluster_graph max_cluster_size to {settings.rag.max_cluster_size}"

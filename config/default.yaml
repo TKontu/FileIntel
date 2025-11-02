@@ -107,6 +107,7 @@ graphrag:
   # NOTE: GraphRAG uses existing Vector RAG chunks, no separate chunking needed
   community_levels: ${GRAPHRAG_COMMUNITY_LEVELS:-3}  # Good for hierarchical community detection (query-time parameter)
   max_cluster_size: ${GRAPHRAG_MAX_CLUSTER_SIZE:-50}  # Leiden algorithm max cluster size (higher = fewer levels, less redundancy)
+  leiden_resolution: ${GRAPHRAG_LEIDEN_RESOLUTION:-1.0}  # Leiden resolution (lower = larger communities like 0.5, higher = smaller communities like 2.0)
   max_tokens: ${GRAPHRAG_MAX_TOKENS:-12000}  #characters, Sufficient for complex analysis
   # Index storage
   index_base_path: ${GRAPHRAG_INDEX_PATH:-./graphrag_indices}

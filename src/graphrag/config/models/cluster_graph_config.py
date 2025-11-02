@@ -23,3 +23,7 @@ class ClusterGraphConfig(BaseModel):
         description="The seed to use for the clustering.",
         default=graphrag_config_defaults.cluster_graph.seed,
     )
+    resolution: float = Field(
+        description="Leiden algorithm resolution parameter. Lower values (e.g., 0.5) create larger communities, higher values (e.g., 2.0) create smaller communities. Default: 1.0",
+        default=1.0,
+    )

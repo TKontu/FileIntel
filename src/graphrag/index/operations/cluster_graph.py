@@ -21,6 +21,7 @@ def cluster_graph(
     max_cluster_size: int,
     use_lcc: bool,
     seed: int | None = None,
+    resolution: float = 1.0,
 ) -> Communities:
     """Apply a hierarchical clustering algorithm to a graph."""
     if len(graph.nodes) == 0:
@@ -32,6 +33,7 @@ def cluster_graph(
         max_cluster_size=max_cluster_size,
         use_lcc=use_lcc,
         seed=seed,
+        resolution=resolution,
     )
 
     levels = sorted(node_id_to_community_map.keys())
@@ -59,13 +61,18 @@ def _compute_leiden_communities(
     max_cluster_size: int,
     use_lcc: bool,
     seed: int | None = None,
+    resolution: float = 1.0,
 ) -> tuple[dict[int, dict[str, int]], dict[int, int]]:
     """Return Leiden root communities and their hierarchy mapping."""
     if use_lcc:
         graph = stable_largest_connected_component(graph)
 
+    logger.info(
+        f"Running hierarchical Leiden clustering with max_cluster_size={max_cluster_size}, resolution={resolution}"
+    )
+
     community_mapping = hierarchical_leiden(
-        graph, max_cluster_size=max_cluster_size, random_seed=seed
+        graph, max_cluster_size=max_cluster_size, random_seed=seed, resolution=resolution
     )
     results: dict[int, dict[str, int]] = {}
     hierarchy: dict[int, int] = {}

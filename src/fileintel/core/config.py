@@ -315,6 +315,7 @@ class RAGSettings(BaseModel):
     llm_model: str = Field(default="gemma3-12b-awq")
     community_levels: int = Field(default=3)
     max_cluster_size: int = Field(default=50, description="Leiden algorithm max cluster size (higher = fewer levels, less redundancy)")
+    leiden_resolution: float = Field(default=1.0, description="Leiden algorithm resolution parameter (lower = larger communities, e.g., 0.5; higher = smaller communities, e.g., 2.0)")
     max_tokens: int = Field(default=12000)
     root_dir: str = Field(default="/data/graphrag_indices")
     auto_index_after_upload: bool = Field(default=True)
