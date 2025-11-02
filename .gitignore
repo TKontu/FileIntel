@@ -59,3 +59,4 @@ graphrag_indices/*
 
 #Claude
 .claude/*
+.env.fileintel.verified

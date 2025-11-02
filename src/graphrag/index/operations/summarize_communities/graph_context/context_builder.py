@@ -69,7 +69,17 @@ def _prepare_reports_at_level(
     """Prepare reports at a given level."""
     # Filter and prepare node details
     level_node_df = node_df[node_df[schemas.COMMUNITY_LEVEL] == level]
-    logger.info("Number of nodes at level=%s => %s", level, len(level_node_df))
+    num_entities = len(level_node_df)
+    num_communities = level_node_df[schemas.COMMUNITY_ID].nunique()
+    avg_entities_per_community = num_entities / num_communities if num_communities > 0 else 0
+
+    logger.info(
+        "Level %s: %s entities across %s communities (avg %.1f entities/community)",
+        level,
+        num_entities,
+        num_communities,
+        avg_entities_per_community
+    )
     nodes_set = set(level_node_df[schemas.TITLE])
 
     # Filter and prepare edge details

@@ -57,6 +57,14 @@ async def run_workflow(
     )
     async_mode = community_reports_llm_settings.async_mode
     num_threads = community_reports_llm_settings.concurrent_requests
+
+    # CRITICAL LOGGING: Show actual concurrency being used
+    logger.info(
+        "Community reports configuration: async_mode=%s, concurrent_requests=%s",
+        async_mode,
+        num_threads
+    )
+
     summarization_strategy = config.community_reports.resolved_strategy(
         config.root_dir, community_reports_llm_settings
     )
