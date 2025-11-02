@@ -135,6 +135,19 @@ graphrag:
   # Validate checkpoint data consistency before resume (recommended for data integrity)
   validate_checkpoints: ${GRAPHRAG_VALIDATE_CHECKPOINTS:-true}
 
+  # Gap Prevention & Completeness Settings
+  # Retry configuration for failed items during indexing
+  gap_prevention:
+    enabled: ${GRAPHRAG_GAP_PREVENTION_ENABLED:-false}  # Enable in-phase gap prevention (default: false)
+    max_retries_per_item: ${GRAPHRAG_MAX_RETRIES_PER_ITEM:-20}  # Maximum retry attempts for each failed item
+    retry_backoff_base: ${GRAPHRAG_RETRY_BACKOFF_BASE:-2.0}  # Exponential backoff base multiplier
+    retry_backoff_max: ${GRAPHRAG_RETRY_BACKOFF_MAX:-120.0}  # Maximum backoff time in seconds
+    retry_jitter: ${GRAPHRAG_RETRY_JITTER:-true}  # Add random jitter to backoff (reduces thundering herd)
+    gap_fill_concurrency: ${GRAPHRAG_GAP_FILL_CONCURRENCY:-5}  # Lower concurrency for gap filling (reduces 503s)
+  # Completeness validation
+  validate_completeness: ${GRAPHRAG_VALIDATE_COMPLETENESS:-true}  # Enable completeness validation after indexing
+  completeness_threshold: ${GRAPHRAG_COMPLETENESS_THRESHOLD:-0.99}  # Warn if completeness < 99%
+
 document_processing:
   chunk_size: ${DOC_CHUNK_SIZE:-800}  # ~200 tokens (matches RAG chunk size for consistency)
   overlap: ${DOC_CHUNK_OVERLAP:-80}
@@ -304,6 +317,12 @@ celery:
   # Task timeout limits - configurable for large batch processing
   task_soft_time_limit: ${CELERY_TASK_SOFT_TIME_LIMIT:-null}  # Soft limit in seconds (null = no limit)
   task_time_limit: ${CELERY_TASK_TIME_LIMIT:-null}       # Hard limit in seconds (null = no limit)
+
+  # Broker visibility timeout (CRITICAL for long-running tasks)
+  # Redis default is 3600s (1 hour) - tasks longer than this get re-queued
+  # Set in celery_config.py to 432000s (5 days) to support 96-hour GraphRAG indexing
+  # If you modify task time limits, ensure broker_transport_options.visibility_timeout
+  # in celery_config.py is greater than your longest task
 
   # Worker pool restart settings (prevents fork bomb)
   worker_pool_restarts: ${CELERY_WORKER_POOL_RESTARTS:-true}  # Allow pool restarts

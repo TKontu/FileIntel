@@ -71,25 +71,27 @@ class TaskService:
     def list_tasks(
         self, state_filter: Optional[str] = None, limit: int = 100, offset: int = 0
     ) -> Dict[str, Any]:
-        """List tasks with optional filtering."""
+        """List tasks with optional filtering and deduplication."""
         try:
             from celery import current_app
 
             # Get active tasks
             inspect = current_app.control.inspect()
 
-            # Collect tasks from different states
-            all_tasks = []
+            # Collect tasks from different states with deduplication
+            # Use dict keyed by task_id to prevent duplicates from active+scheduled
+            tasks_by_id = {}
 
-            # Active tasks
+            # Active tasks (priority over scheduled - they're actually running)
             if not state_filter or state_filter.upper() in ["PENDING", "RUNNING"]:
                 active_tasks = inspect.active()
                 if active_tasks:
                     for worker, tasks in active_tasks.items():
                         for task in tasks:
-                            all_tasks.append(
-                                {
-                                    "task_id": task.get("id"),
+                            task_id = task.get("id")
+                            if task_id:
+                                tasks_by_id[task_id] = {
+                                    "task_id": task_id,
                                     "state": TaskState.RUNNING.value,
                                     "name": task.get("name"),
                                     "worker": worker,
@@ -97,25 +99,26 @@ class TaskService:
                                     "kwargs": task.get("kwargs", {}),
                                     "time_start": task.get("time_start"),
                                 }
-                            )
 
-            # Scheduled tasks
+            # Scheduled tasks (only add if not already active)
             if not state_filter or state_filter.upper() == "PENDING":
                 scheduled_tasks = inspect.scheduled()
                 if scheduled_tasks:
                     for worker, tasks in scheduled_tasks.items():
                         for task in tasks:
-                            all_tasks.append(
-                                {
-                                    "task_id": task.get("request", {}).get("id"),
+                            task_id = task.get("request", {}).get("id")
+                            # Only add if not already in tasks_by_id (avoid duplicating active tasks)
+                            if task_id and task_id not in tasks_by_id:
+                                tasks_by_id[task_id] = {
+                                    "task_id": task_id,
                                     "state": TaskState.PENDING.value,
                                     "name": task.get("request", {}).get("task"),
                                     "worker": worker,
                                     "eta": task.get("eta"),
                                 }
-                            )
 
-            # Apply pagination
+            # Convert to list and apply pagination
+            all_tasks = list(tasks_by_id.values())
             total_count = len(all_tasks)
             paginated_tasks = all_tasks[offset : offset + limit]
 

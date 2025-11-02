@@ -443,6 +443,113 @@ def rebuild_index(
             monitor_task_with_progress(task_id, "GraphRAG index rebuild")
 
 
+@app.command("check-completeness")
+def check_completeness(
+    collection_identifier: str = typer.Argument(
+        ..., help="The name or ID of the collection to check."
+    ),
+    format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: 'text' or 'json'."
+    ),
+):
+    """Check GraphRAG index completeness for a collection.
+
+    Returns raw completeness data including:
+    - Overall completeness score
+    - Per-phase breakdown (entities, communities)
+    - Hierarchy-level details for communities
+    - Missing item IDs
+
+    No assessment is provided - just raw data for analysis.
+    """
+
+    def _get_completeness(api):
+        return api._request("GET", f"graphrag/{collection_identifier}/completeness")
+
+    completeness_data = cli_handler.handle_api_call(
+        _get_completeness, "get GraphRAG completeness"
+    )
+    data = completeness_data.get("data", completeness_data)
+
+    if format == "json":
+        # JSON output for machine consumption
+        cli_handler.display_json(data, f"GraphRAG Completeness: {collection_identifier}")
+    else:
+        # Text output for human consumption
+        collection_name = data.get("collection_name", collection_identifier)
+        overall_completeness = data.get("overall_completeness", 0.0)
+        total_items = data.get("total_items", 0)
+        complete_items = data.get("complete_items", 0)
+        missing_items = data.get("missing_items", 0)
+
+        cli_handler.console.print(f"\n[bold blue]GraphRAG Index Completeness: {collection_name}[/bold blue]\n")
+
+        # Overall stats
+        cli_handler.console.print(f"[bold]Overall Completeness:[/bold] {overall_completeness:.2%}")
+        cli_handler.console.print(f"[bold]Total Items:[/bold] {total_items:,}")
+        cli_handler.console.print(f"[bold]Complete Items:[/bold] {complete_items:,}")
+        cli_handler.console.print(f"[bold]Missing Items:[/bold] {missing_items:,}\n")
+
+        # Per-phase breakdown
+        phases = data.get("phases", {})
+        if phases:
+            cli_handler.console.print("[bold blue]Phase Breakdown:[/bold blue]\n")
+
+            for phase_name, phase_data in phases.items():
+                phase_total = phase_data.get("total_items", 0)
+                phase_complete = phase_data.get("complete_items", 0)
+                phase_missing = phase_data.get("missing_items", 0)
+                phase_completeness = phase_data.get("completeness", 0.0)
+
+                # Status indicator
+                if phase_completeness >= 1.0:
+                    status = "[green]✓[/green]"
+                elif phase_completeness >= 0.99:
+                    status = "[yellow]⚠[/yellow]"
+                else:
+                    status = "[red]✗[/red]"
+
+                cli_handler.console.print(
+                    f"{status} [bold]{phase_name}:[/bold] {phase_completeness:.2%} "
+                    f"({phase_complete:,}/{phase_total:,})"
+                )
+
+                # Show hierarchy-level details if available (for communities)
+                details_by_level = phase_data.get("details_by_level")
+                if details_by_level:
+                    cli_handler.console.print(f"   [dim]Hierarchy Level Breakdown:[/dim]")
+                    for level in sorted(details_by_level.keys()):
+                        level_data = details_by_level[level]
+                        level_total = level_data.get("total", 0)
+                        level_complete = level_data.get("complete", 0)
+                        level_missing = level_data.get("missing", 0)
+                        level_completeness = level_data.get("completeness", 0.0)
+
+                        # Level status indicator
+                        if level_completeness >= 1.0:
+                            level_status = "[green]✓[/green]"
+                        elif level_completeness >= 0.99:
+                            level_status = "[yellow]⚠[/yellow]"
+                        else:
+                            level_status = "[red]✗[/red]"
+
+                        cli_handler.console.print(
+                            f"   {level_status} Level {level}: {level_completeness:.2%} "
+                            f"({level_complete:,}/{level_total:,})"
+                        )
+
+                # Show sample of missing IDs if any
+                missing_ids = phase_data.get("missing_ids", [])
+                if missing_ids:
+                    sample_size = min(10, len(missing_ids))
+                    sample = missing_ids[:sample_size]
+                    cli_handler.console.print(
+                        f"   [dim]Sample Missing IDs: {sample}{'...' if len(missing_ids) > sample_size else ''}[/dim]"
+                    )
+
+                cli_handler.console.print()
+
+
 @app.command("system-status")
 def system_status():
     """Check GraphRAG system status."""

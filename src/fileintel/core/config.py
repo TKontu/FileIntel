@@ -62,7 +62,7 @@ class AsyncProcessingSettings(BaseModel):
         default=4, ge=1, le=8, description="Concurrent requests per batch"
     )
     max_concurrent_requests: int = Field(
-        default=25, ge=1, le=32, description="Total concurrent HTTP connections"
+        default=25, ge=1, le=100, description="Total concurrent HTTP connections (must match vLLM max_num_seqs)"
     )
     batch_timeout: int = Field(
         default=30, ge=10, description="Timeout per batch in seconds"
@@ -80,6 +80,35 @@ class GraphRAGCacheSettings(BaseModel):
     redis_port: int = Field(default=6379)
     redis_db: int = Field(default=0)
     warmup_collections: List[str] = Field(default_factory=list)
+
+
+class GapPreventionSettings(BaseModel):
+    """Gap prevention and retry configuration for GraphRAG indexing."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable in-phase gap prevention (retries failed items before proceeding to next phase)"
+    )
+    max_retries_per_item: int = Field(
+        default=20,
+        description="Maximum number of retry attempts for each failed item"
+    )
+    retry_backoff_base: float = Field(
+        default=2.0,
+        description="Exponential backoff base multiplier (e.g., 2.0 means 2s, 4s, 8s, 16s...)"
+    )
+    retry_backoff_max: float = Field(
+        default=120.0,
+        description="Maximum backoff time in seconds (caps exponential growth)"
+    )
+    retry_jitter: bool = Field(
+        default=True,
+        description="Add random jitter to backoff times (reduces thundering herd effect)"
+    )
+    gap_fill_concurrency: int = Field(
+        default=5,
+        description="Lower concurrency limit for gap filling pass (reduces 503 errors)"
+    )
 
 
 # GraphRAGSettings class removed - consolidated into RAGSettings to eliminate duplication
@@ -300,6 +329,20 @@ class RAGSettings(BaseModel):
     validate_checkpoints: bool = Field(
         default=True,
         description="Validate checkpoint data consistency before resume (recommended for data integrity)"
+    )
+
+    # Gap prevention & completeness settings
+    gap_prevention: GapPreventionSettings = Field(
+        default_factory=GapPreventionSettings,
+        description="Gap prevention and retry configuration for in-phase gap filling"
+    )
+    validate_completeness: bool = Field(
+        default=True,
+        description="Enable completeness validation after indexing"
+    )
+    completeness_threshold: float = Field(
+        default=0.99,
+        description="Warn if completeness falls below this threshold (0.99 = 99%)"
     )
 
     # Cache settings

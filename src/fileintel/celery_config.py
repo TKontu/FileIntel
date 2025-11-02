@@ -131,6 +131,17 @@ def configure_celery_app(config=None):
         # Broker and result backend configuration
         broker_url=celery_settings.broker_url,
         result_backend=celery_settings.result_backend,
+        # Broker transport options for long-running tasks
+        # CRITICAL: GraphRAG indexing can take 24-96 hours
+        # Without this, Redis re-queues tasks every hour (default visibility_timeout=3600s)
+        # causing duplicate task entries and potential resource conflicts
+        broker_transport_options={
+            'visibility_timeout': 432000,  # 5 days (120 hours) in seconds
+            # Safely covers longest tasks (GraphRAG indexing ~96 hours)
+            # Must exceed task_time_limit to prevent premature re-queuing
+            'fanout_prefix': True,  # Enable efficient fanout pattern for broadcasting
+            'fanout_patterns': True,  # Enable pattern matching in fanout exchanges
+        },
         # Serialization settings
         task_serializer=celery_settings.task_serializer,
         accept_content=celery_settings.accept_content,

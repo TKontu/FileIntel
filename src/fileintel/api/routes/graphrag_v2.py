@@ -13,6 +13,7 @@ from ..dependencies import get_storage
 from ..services import get_collection_by_identifier
 from ...core.config import get_config
 from ...rag.graph_rag.services.graphrag_service import GraphRAGService
+from ...rag.graph_rag.validators import CompletenessValidator
 from ...storage.postgresql_storage import PostgreSQLStorage
 from ...tasks.graphrag_tasks import build_graphrag_index_task
 
@@ -536,6 +537,85 @@ async def remove_graphrag_index(
         logger.error(f"Failed to remove GraphRAG index: {e}")
         raise HTTPException(
             status_code=500, detail=f"Failed to remove GraphRAG index: {str(e)}"
+        )
+
+
+@router.get("/{collection_identifier}/completeness", response_model=ApiResponseV2)
+async def get_graphrag_completeness(
+    collection_identifier: str, storage: PostgreSQLStorage = Depends(get_storage)
+):
+    """
+    Get completeness analysis for a GraphRAG index.
+
+    Returns raw completeness data including:
+    - Overall completeness score
+    - Per-phase breakdown (entities, communities)
+    - Hierarchy-level details for communities
+    - Missing item IDs
+
+    No assessment is provided - just raw data for analysis.
+    """
+    try:
+        config = get_config()
+        # Get collection by identifier
+        collection = await get_collection_by_identifier(storage, collection_identifier)
+        if not collection:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{collection_identifier}' not found",
+            )
+
+        # Log completeness request
+        logger.info(f"GraphRAG completeness requested: collection='{collection.name}' ({collection.id})")
+
+        # Check if index exists
+        graphrag_service = GraphRAGService(storage, config)
+        status = await graphrag_service.get_index_status(collection.id)
+        if status.get("status") not in ["ready", "indexed", "building"]:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No GraphRAG index found for collection '{collection_identifier}'. Please create index first.",
+            )
+
+        # Validate completeness
+        from pathlib import Path
+        workspace_path = Path(status["index_path"])
+        validator = CompletenessValidator(workspace_path)
+
+        reports = validator.validate_all()
+
+        # Calculate overall completeness
+        total_items = sum(r.total_items for r in reports.values())
+        complete_items = sum(r.complete_items for r in reports.values())
+        overall_completeness = complete_items / total_items if total_items > 0 else 0.0
+
+        # Build response
+        completeness_data = {
+            "collection_id": str(collection.id),
+            "collection_name": collection.name,
+            "overall_completeness": overall_completeness,
+            "total_items": total_items,
+            "complete_items": complete_items,
+            "missing_items": total_items - complete_items,
+            "phases": {
+                phase_name: report.to_dict()
+                for phase_name, report in reports.items()
+            }
+        }
+
+        return ApiResponseV2(
+            success=True,
+            message=f"Completeness analysis for collection '{collection.name}'",
+            data=completeness_data,
+            timestamp=datetime.utcnow()
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get GraphRAG completeness: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get GraphRAG completeness: {str(e)}"
         )
 
 

@@ -221,6 +221,10 @@ class GraphRAGService:
         # Load and save entities and communities to database
         await self._save_graphrag_data_to_database(collection_id, workspace_path)
 
+        # Validate completeness if enabled
+        if self.config.rag.validate_completeness:
+            self._validate_index_completeness(workspace_path)
+
         return workspace_path
 
     def _count_graphrag_results(self, workspace_path: str) -> tuple[int, int, int]:
@@ -256,6 +260,70 @@ class GraphRAGService:
             # If counting fails, return zeros but don't fail the indexing
             print(f"Warning: Could not count GraphRAG results: {e}")
             return 0, 0, 0
+
+    def _validate_index_completeness(self, workspace_path: str) -> None:
+        """Validate completeness of GraphRAG index and log warnings for gaps.
+
+        Args:
+            workspace_path: Path to GraphRAG workspace directory (output dir)
+        """
+        try:
+            from pathlib import Path
+            from ..validators import CompletenessValidator
+
+            logger.info("Validating GraphRAG index completeness...")
+
+            validator = CompletenessValidator(Path(workspace_path))
+            reports = validator.validate_all()
+
+            # Log results for each phase
+            for phase_name, report in reports.items():
+                if report.completeness >= self.config.rag.completeness_threshold:
+                    logger.info(
+                        f"✅ Phase '{phase_name}' {report.completeness:.2%} complete "
+                        f"({report.complete_items:,}/{report.total_items:,})"
+                    )
+                else:
+                    logger.warning(
+                        f"⚠️  Phase '{phase_name}' only {report.completeness:.2%} complete. "
+                        f"Missing {report.missing_items:,} items. "
+                        f"Sample IDs: {report.missing_ids[:10]}"
+                    )
+
+                    # Log hierarchy-level details if available
+                    if report.details_by_level:
+                        logger.info(f"   Hierarchy level breakdown for '{phase_name}':")
+                        for level in sorted(report.details_by_level.keys()):
+                            level_data = report.details_by_level[level]
+                            level_completeness = level_data['completeness']
+                            if level_completeness >= self.config.rag.completeness_threshold:
+                                status = "✅"
+                            else:
+                                status = "⚠️ "
+                            logger.info(
+                                f"   {status} Level {level}: {level_completeness:.2%} "
+                                f"({level_data['complete']:,}/{level_data['total']:,})"
+                            )
+
+            # Calculate and log overall completeness
+            total_items = sum(r.total_items for r in reports.values())
+            complete_items = sum(r.complete_items for r in reports.values())
+            overall_completeness = complete_items / total_items if total_items > 0 else 0.0
+
+            if overall_completeness >= self.config.rag.completeness_threshold:
+                logger.info(
+                    f"✅ Overall index completeness: {overall_completeness:.2%} "
+                    f"({complete_items:,}/{total_items:,})"
+                )
+            else:
+                logger.warning(
+                    f"⚠️  Overall index completeness: {overall_completeness:.2%} "
+                    f"({complete_items:,}/{total_items:,})"
+                )
+
+        except Exception as e:
+            # Don't fail indexing if validation fails
+            logger.error(f"Error validating index completeness: {e}", exc_info=True)
 
     async def global_search(self, query: str, collection_id: str):
         """Performs a global search on the GraphRAG index."""
