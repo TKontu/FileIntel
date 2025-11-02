@@ -5,7 +5,6 @@ Converts GraphRAG operations to distributed Celery tasks for parallel processing
 of entity extraction, community detection, and graph-based querying.
 """
 
-import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -709,11 +708,6 @@ def build_graphrag_index_task(
 
             # Use GraphRAG service to build index with checkpoint resume
             import asyncio
-            from gevent import monkey
-
-            # Ensure gevent monkey patching is applied for asyncio compatibility
-            if not monkey.is_module_patched('threading'):
-                monkey.patch_all()
 
             # Determine if resume should be enabled
             # force_rebuild=True -> disable resume (start from scratch)
@@ -724,23 +718,16 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "building")
             logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
 
-            # For gevent: use asyncio.new_event_loop() to create a fresh loop
-            # This avoids conflicts with gevent's event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                workspace_path = loop.run_until_complete(
-                    graphrag_service.build_index_with_resume(
-                        all_chunks,
-                        collection_id,
-                        enable_resume=enable_resume,
-                        validate_checkpoints=True,  # Always validate for safety
-                    )
+            # For gevent: Create task in existing event loop (gevent-patched)
+            loop = asyncio.get_event_loop()
+            workspace_path = loop.run_until_complete(
+                graphrag_service.build_index_with_resume(
+                    all_chunks,
+                    collection_id,
+                    enable_resume=enable_resume,
+                    validate_checkpoints=True,  # Always validate for safety
                 )
-            finally:
-                # Clean up the loop
-                loop.close()
+            )
 
             self.update_progress(4, 5, "GraphRAG index completed")
 
@@ -748,13 +735,8 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "ready")
             logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
 
-            # Get final status (create new loop since previous one was closed)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
-            finally:
-                loop.close()
+            # Get final status
+            status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
 
             result = {
                 "collection_id": collection_id,
@@ -822,20 +804,9 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
             graphrag_service = GraphRAGService(storage=storage, settings=config)
             # Remove index using GraphRAG service
             import asyncio
-            from gevent import monkey
 
-            # Ensure gevent monkey patching is applied
-            if not monkey.is_module_patched('threading'):
-                monkey.patch_all()
-
-            # Create fresh event loop for gevent compatibility
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                result = loop.run_until_complete(graphrag_service.remove_index(collection_id))
-            finally:
-                loop.close()
+            loop = asyncio.get_event_loop()
+            result = loop.run_until_complete(graphrag_service.remove_index(collection_id))
 
             # Clean up database index info
             if hasattr(storage, "remove_graphrag_index_info"):
