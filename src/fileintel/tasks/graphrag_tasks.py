@@ -708,6 +708,7 @@ def build_graphrag_index_task(
 
             # Use GraphRAG service to build index with checkpoint resume
             import asyncio
+            import concurrent.futures
 
             # Determine if resume should be enabled
             # force_rebuild=True -> disable resume (start from scratch)
@@ -718,16 +719,19 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "building")
             logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
 
-            # For gevent: Create task in existing event loop (gevent-patched)
+            # For gevent: Run async code using asyncio.run_coroutine_threadsafe
+            # This submits the coroutine to the event loop from outside
             loop = asyncio.get_event_loop()
-            workspace_path = loop.run_until_complete(
+            future = asyncio.run_coroutine_threadsafe(
                 graphrag_service.build_index_with_resume(
                     all_chunks,
                     collection_id,
                     enable_resume=enable_resume,
-                    validate_checkpoints=True,  # Always validate for safety
-                )
+                    validate_checkpoints=True,
+                ),
+                loop
             )
+            workspace_path = future.result()  # Wait for completion
 
             self.update_progress(4, 5, "GraphRAG index completed")
 
@@ -736,7 +740,11 @@ def build_graphrag_index_task(
             logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
 
             # Get final status
-            status = loop.run_until_complete(graphrag_service.get_index_status(collection_id))
+            future = asyncio.run_coroutine_threadsafe(
+                graphrag_service.get_index_status(collection_id),
+                loop
+            )
+            status = future.result()
 
             result = {
                 "collection_id": collection_id,
@@ -806,7 +814,11 @@ def remove_graphrag_index(self, collection_id: str) -> Dict[str, Any]:
             import asyncio
 
             loop = asyncio.get_event_loop()
-            result = loop.run_until_complete(graphrag_service.remove_index(collection_id))
+            future = asyncio.run_coroutine_threadsafe(
+                graphrag_service.remove_index(collection_id),
+                loop
+            )
+            result = future.result()
 
             # Clean up database index info
             if hasattr(storage, "remove_graphrag_index_info"):
