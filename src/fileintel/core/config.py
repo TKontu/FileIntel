@@ -697,14 +697,6 @@ def substitute_environment_variables(config_str: str) -> str:
         if ":-" in placeholder:
             var_name, default_value = placeholder.split(":-", 1)
             value = os.environ.get(var_name, default_value)
-            # CRITICAL DEBUG: Log GraphRAG clustering variables
-            if var_name in ["GRAPHRAG_MAX_CLUSTER_SIZE", "GRAPHRAG_LEIDEN_RESOLUTION"]:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    f"ENV SUBSTITUTION: {var_name} = '{value}' "
-                    f"(from env: '{os.environ.get(var_name, 'NOT_SET')}', default: '{default_value}')"
-                )
         else:
             var_name = placeholder
             value = os.environ.get(var_name)
@@ -779,13 +771,4 @@ def get_config() -> "Settings":
     global _settings
     if _settings is None:
         _settings = load_config()
-        # CRITICAL DEBUG: Log GraphRAG clustering config at load time
-        logger.info(
-            f"CONFIG LOAD: GraphRAG clustering - max_cluster_size={_settings.graphrag.max_cluster_size}, "
-            f"leiden_resolution={_settings.graphrag.leiden_resolution}"
-        )
-        logger.info(
-            f"CONFIG LOAD: Env vars - GRAPHRAG_MAX_CLUSTER_SIZE={os.getenv('GRAPHRAG_MAX_CLUSTER_SIZE', 'NOT_SET')}, "
-            f"GRAPHRAG_LEIDEN_RESOLUTION={os.getenv('GRAPHRAG_LEIDEN_RESOLUTION', 'NOT_SET')}"
-        )
     return _settings

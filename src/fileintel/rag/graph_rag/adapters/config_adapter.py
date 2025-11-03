@@ -237,14 +237,6 @@ class GraphRAGConfigAdapter:
                 resolution=settings.graphrag.leiden_resolution,
             )
 
-            # CRITICAL: Log the actual clustering parameters being used
-            logger.info(
-                f"GRAPHRAG CRITICAL: Leiden clustering - max_cluster_size={settings.graphrag.max_cluster_size}, "
-                f"resolution={settings.graphrag.leiden_resolution}"
-            )
-            logger.debug(
-                f"GRAPHRAG DEBUG: Setting cluster_graph max_cluster_size to {settings.graphrag.max_cluster_size}"
-            )
 
             config = GraphRagConfig(
                 root_dir=workspace_path,
