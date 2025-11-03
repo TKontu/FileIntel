@@ -26,12 +26,23 @@ llm:
     api_key: ${ANTHROPIC_API_KEY:-}  # Load from environment variable, empty if not set
     rate_limit: ${ANTHROPIC_RATE_LIMIT:-15}
 
+# Shared Redis cache configuration (used by both Vector RAG and GraphRAG)
+cache:
+  enabled: ${CACHE_ENABLED:-true}
+  ttl_seconds: ${CACHE_TTL:-3600}
+  max_size_mb: ${CACHE_MAX_SIZE_MB:-500}
+  redis_host: ${REDIS_HOST:-redis}
+  redis_port: ${REDIS_PORT:-6379}
+  redis_db: ${REDIS_DB:-0}
+  warmup_collections: []  # GraphRAG-specific: Collections to pre-load on startup
+
 rag:
   strategy: ${RAG_STRATEGY:-separate} # Can be "merge" or "separate", parameter to select if each embeddng query is sent separately or merged into a single prompt
   embedding_provider: ${RAG_EMBEDDING_PROVIDER:-openai}
   embedding_model: ${RAG_EMBEDDING_MODEL:-bge-large-en}
   embedding_max_tokens: ${RAG_EMBEDDING_MAX_TOKENS:-450}  # Maximum tokens for embedding input (optimal for 512 token model limit)
   enable_two_tier_chunking: ${RAG_ENABLE_TWO_TIER_CHUNKING:-false}  # Enable two-tier vector/graph chunking system
+
   chunking:
     chunk_size: ${RAG_CHUNK_SIZE:-800}  #characters, ~200 tokens (safe conservative limit for 512 token model)
     chunk_overlap: ${RAG_CHUNK_OVERLAP:-80}
@@ -44,14 +55,6 @@ rag:
     batch_size: ${RAG_EMBEDDING_BATCH_SIZE:-25}  # Chunks per batch (1=disable, 25=optimal, 50-100=high throughput)
     fallback_to_single: ${RAG_EMBEDDING_FALLBACK_SINGLE:-true}  # Fall back to single-chunk on batch failure
     retry_failed_individually: ${RAG_EMBEDDING_RETRY_INDIVIDUAL:-true}  # Retry failed chunks individually
-
-  # Async processing for GraphRAG (consolidated under rag section)
-  async_processing:
-    enabled: ${RAG_ASYNC_ENABLED:-true}
-    batch_size: ${RAG_ASYNC_BATCH_SIZE:-4}
-    max_concurrent_requests: ${RAG_ASYNC_MAX_CONCURRENT:-25}
-    batch_timeout: ${RAG_ASYNC_BATCH_TIMEOUT:-900}  # 15 minutes timeout per batch (handles high queue depths)
-    fallback_to_sequential: ${RAG_ASYNC_FALLBACK:-true}
 
   # LLM-based query classification settings
   classification_method: ${RAG_CLASSIFICATION_METHOD:-hybrid}  # Options: llm, keyword, hybrid
@@ -106,18 +109,16 @@ graphrag:
   embedding_model: ${GRAPHRAG_EMBEDDING_MODEL:-bge-large-en}  # Match embedding model
   # NOTE: GraphRAG uses existing Vector RAG chunks, no separate chunking needed
   community_levels: ${GRAPHRAG_COMMUNITY_LEVELS:-3}  # Good for hierarchical community detection (query-time parameter)
-  max_cluster_size: ${GRAPHRAG_MAX_CLUSTER_SIZE:-50}  # Leiden algorithm max cluster size (higher = fewer levels, less redundancy)
-  leiden_resolution: ${GRAPHRAG_LEIDEN_RESOLUTION:-1.0}  # Leiden resolution (lower = larger communities like 0.5, higher = smaller communities like 2.0)
+
+  # Leiden clustering parameters (controls community hierarchy structure)
+  # PRODUCTION NOTE: docker-compose.prod.yml and stack.env use (150/0.5) for consolidated hierarchies
+  # Development defaults (50/1.0) below create finer-grained communities for detailed analysis
+  max_cluster_size: ${GRAPHRAG_MAX_CLUSTER_SIZE:-50}  # Leiden algorithm max cluster size (higher = fewer levels, less redundancy) [Prod: 150]
+  leiden_resolution: ${GRAPHRAG_LEIDEN_RESOLUTION:-1.0}  # Leiden resolution (lower = larger communities like 0.5, higher = smaller like 2.0) [Prod: 0.5]
   max_tokens: ${GRAPHRAG_MAX_TOKENS:-12000}  #characters, Sufficient for complex analysis
   # Index storage
   index_base_path: ${GRAPHRAG_INDEX_PATH:-./graphrag_indices}
-  cache:
-    enabled: ${GRAPHRAG_CACHE_ENABLED:-true}
-    ttl_seconds: ${GRAPHRAG_CACHE_TTL:-3600}
-    max_size_mb: ${GRAPHRAG_CACHE_MAX_SIZE_MB:-500}
-    redis_host: ${REDIS_HOST:-redis}
-    redis_port: ${REDIS_PORT:-6379}
-    redis_db: ${REDIS_DB:-0}
+
   # Query routing
   query_classification_model: ${GRAPHRAG_CLASSIFICATION_MODEL:-gemma3-12b-awq}
   # Async processing for RTX 3090 24GB optimization

@@ -27,7 +27,7 @@ class SimpleCache:
 
     def __init__(self):
         config = get_config()
-        redis_config = config.rag.cache
+        redis_config = config.cache
 
         self.client = redis.Redis(
             host=redis_config.redis_host,

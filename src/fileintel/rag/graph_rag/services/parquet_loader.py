@@ -46,7 +46,7 @@ class ParquetLoader:
 
             df = pd.read_parquet(full_path)
             await self.cache.set(
-                cache_key, df, ttl=self.cache.settings.rag.cache.ttl_seconds
+                cache_key, df, ttl=self.cache.settings.cache.ttl_seconds
             )
             dataframes[name] = df
 

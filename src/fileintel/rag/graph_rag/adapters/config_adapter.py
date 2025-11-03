@@ -52,10 +52,10 @@ class GraphRAGConfigAdapter:
         original_openai_api_base = os.environ.get("OPENAI_API_BASE")
 
         logger.info(
-            f"Creating GraphRAG config - Chat model: {settings.rag.llm_model}"
+            f"Creating GraphRAG config - Chat model: {settings.graphrag.llm_model}"
         )
         logger.info(
-            f"Creating GraphRAG config - Embedding model: {settings.rag.embedding_model}"
+            f"Creating GraphRAG config - Embedding model: {settings.graphrag.embedding_model}"
         )
         logger.debug(f"GRAPHRAG DEBUG: Chat base URL: {chat_base_url}")
         logger.debug(f"GRAPHRAG DEBUG: Embedding base URL: {embedding_base_url}")
@@ -143,14 +143,14 @@ class GraphRAGConfigAdapter:
             # Create model configs with explicit debugging and performance settings
             chat_model_config = LanguageModelConfig(
                 type=ModelType.OpenAIChat,
-                model=settings.rag.llm_model,
+                model=settings.graphrag.llm_model,
                 api_key=settings.llm.openai.api_key or settings.llm.api_key,
                 api_base=chat_base_url,
                 encoding_model=DEFAULT_ENCODING_MODEL,
                 # Performance overrides to fix the ~60 second delays
                 requests_per_minute=HIGH_RATE_LIMIT_RPM,
                 tokens_per_minute=HIGH_RATE_LIMIT_TPM,
-                concurrent_requests=settings.rag.async_processing.max_concurrent_requests,
+                concurrent_requests=settings.graphrag.async_processing.max_concurrent_requests,
                 request_timeout=DEFAULT_REQUEST_TIMEOUT,
                 max_retries=DEFAULT_MAX_RETRIES,
                 max_retry_wait=DEFAULT_MAX_RETRY_WAIT,
@@ -161,14 +161,14 @@ class GraphRAGConfigAdapter:
 
             embedding_model_config = LanguageModelConfig(
                 type=ModelType.OpenAIEmbedding,
-                model=settings.rag.embedding_model,
+                model=settings.graphrag.embedding_model,
                 api_key=settings.llm.openai.api_key or settings.llm.api_key,
                 api_base=embedding_base_url,
                 encoding_model=DEFAULT_ENCODING_MODEL,
                 # Performance overrides to fix the ~60 second delays
                 requests_per_minute=HIGH_RATE_LIMIT_RPM,
                 tokens_per_minute=HIGH_RATE_LIMIT_TPM,
-                concurrent_requests=settings.rag.async_processing.max_concurrent_requests,
+                concurrent_requests=settings.graphrag.async_processing.max_concurrent_requests,
                 request_timeout=DEFAULT_REQUEST_TIMEOUT,
                 max_retries=DEFAULT_MAX_RETRIES,
                 max_retry_wait=DEFAULT_MAX_RETRY_WAIT,
@@ -223,27 +223,27 @@ class GraphRAGConfigAdapter:
 
             # Create embedding config with FileIntel's token limit
             embed_text_config = TextEmbeddingConfig(
-                batch_max_tokens=settings.rag.embedding_batch_max_tokens
+                batch_max_tokens=settings.graphrag.embedding_batch_max_tokens
             )
 
             logger.debug(
-                f"GRAPHRAG DEBUG: Setting embed_text batch_max_tokens to {settings.rag.embedding_batch_max_tokens}"
+                f"GRAPHRAG DEBUG: Setting embed_text batch_max_tokens to {settings.graphrag.embedding_batch_max_tokens}"
             )
 
             # Create cluster_graph config with max_cluster_size and resolution
             # Resolution: Lower values (e.g., 0.5) = larger communities, Higher values (e.g., 2.0) = smaller communities
-            leiden_resolution = getattr(settings.rag, 'leiden_resolution', 1.0)
             cluster_graph_config = ClusterGraphConfig(
-                max_cluster_size=settings.rag.max_cluster_size,
-                resolution=leiden_resolution,
+                max_cluster_size=settings.graphrag.max_cluster_size,
+                resolution=settings.graphrag.leiden_resolution,
             )
 
             # CRITICAL: Log the actual clustering parameters being used
             logger.info(
-                f"GRAPHRAG CRITICAL: Leiden clustering - max_cluster_size={settings.rag.max_cluster_size}, resolution={leiden_resolution}"
+                f"GRAPHRAG CRITICAL: Leiden clustering - max_cluster_size={settings.graphrag.max_cluster_size}, "
+                f"resolution={settings.graphrag.leiden_resolution}"
             )
             logger.debug(
-                f"GRAPHRAG DEBUG: Setting cluster_graph max_cluster_size to {settings.rag.max_cluster_size}"
+                f"GRAPHRAG DEBUG: Setting cluster_graph max_cluster_size to {settings.graphrag.max_cluster_size}"
             )
 
             config = GraphRagConfig(

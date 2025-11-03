@@ -233,8 +233,8 @@ async def on_startup():
         print("STARTUP: Redis cache is available")
 
     print("STARTUP: Checking GraphRAG cache warmup settings...")
-    if config.rag.cache.enabled and config.rag.cache.warmup_collections:
-        print(f"STARTUP: Starting GraphRAG cache warmup for {len(config.rag.cache.warmup_collections)} collections...")
+    if config.cache.enabled and config.cache.warmup_collections:
+        print(f"STARTUP: Starting GraphRAG cache warmup for {len(config.cache.warmup_collections)} collections...")
         logger.info("Starting GraphRAG cache warmup...")
         storage = get_storage()
         cache = GraphRAGDataFrameCache(config)

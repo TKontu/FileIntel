@@ -68,7 +68,7 @@ class GraphRAGService:
                 self.config_adapter.adapt_config,
                 self.settings,
                 collection_id,
-                self.settings.rag.root_dir,
+                self.settings.graphrag.index_base_path,
             )
         return self._config_cache[collection_id]
 
@@ -222,7 +222,7 @@ class GraphRAGService:
         await self._save_graphrag_data_to_database(collection_id, workspace_path)
 
         # Validate completeness if enabled
-        if self.config.rag.validate_completeness:
+        if self.settings.graphrag.validate_completeness:
             self._validate_index_completeness(workspace_path)
 
         return workspace_path
@@ -278,7 +278,7 @@ class GraphRAGService:
 
             # Log results for each phase
             for phase_name, report in reports.items():
-                if report.completeness >= self.config.rag.completeness_threshold:
+                if report.completeness >= self.settings.graphrag.completeness_threshold:
                     logger.info(
                         f"✅ Phase '{phase_name}' {report.completeness:.2%} complete "
                         f"({report.complete_items:,}/{report.total_items:,})"
@@ -296,7 +296,7 @@ class GraphRAGService:
                         for level in sorted(report.details_by_level.keys()):
                             level_data = report.details_by_level[level]
                             level_completeness = level_data['completeness']
-                            if level_completeness >= self.config.rag.completeness_threshold:
+                            if level_completeness >= self.settings.graphrag.completeness_threshold:
                                 status = "✅"
                             else:
                                 status = "⚠️ "
@@ -310,7 +310,7 @@ class GraphRAGService:
             complete_items = sum(r.complete_items for r in reports.values())
             overall_completeness = complete_items / total_items if total_items > 0 else 0.0
 
-            if overall_completeness >= self.config.rag.completeness_threshold:
+            if overall_completeness >= self.settings.graphrag.completeness_threshold:
                 logger.info(
                     f"✅ Overall index completeness: {overall_completeness:.2%} "
                     f"({complete_items:,}/{total_items:,})"
@@ -346,7 +346,7 @@ class GraphRAGService:
             entities=dataframes["entities"],
             communities=dataframes["communities"],
             community_reports=dataframes["community_reports"],
-            community_level=self.settings.rag.community_levels,
+            community_level=self.settings.graphrag.community_levels,
             dynamic_community_selection=True,
             response_type="text",
             query=query,
@@ -389,7 +389,7 @@ class GraphRAGService:
             text_units=dataframes.get("text_units"),
             relationships=dataframes.get("relationships"),
             covariates=covariates,
-            community_level=self.settings.rag.community_levels,
+            community_level=self.settings.graphrag.community_levels,
             response_type="text",
             query=query,
         )

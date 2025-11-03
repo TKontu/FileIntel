@@ -72,14 +72,20 @@ class AsyncProcessingSettings(BaseModel):
     )
 
 
-class GraphRAGCacheSettings(BaseModel):
+class CacheSettings(BaseModel):
+    """Shared cache configuration for both Vector RAG and GraphRAG.
+
+    Uses a single Redis instance for all caching needs:
+    - SimpleCache: LLM response caching (Vector RAG, query classification)
+    - GraphRAGDataFrameCache: Parquet DataFrame caching (GraphRAG indexing)
+    """
     enabled: bool = Field(default=True)
     ttl_seconds: int = Field(default=3600)
     max_size_mb: int = Field(default=500)
     redis_host: str = Field(default="redis")
     redis_port: int = Field(default=6379)
     redis_db: int = Field(default=0)
-    warmup_collections: List[str] = Field(default_factory=list)
+    warmup_collections: List[str] = Field(default_factory=list, description="GraphRAG-specific: Collections to pre-load on startup")
 
 
 class GapPreventionSettings(BaseModel):
@@ -111,7 +117,34 @@ class GapPreventionSettings(BaseModel):
     )
 
 
-# GraphRAGSettings class removed - consolidated into RAGSettings to eliminate duplication
+class GraphRAGSettings(BaseModel):
+    """Microsoft GraphRAG-specific configuration."""
+
+    llm_model: str = Field(default="gemma3-12b-awq")
+    embedding_model: str = Field(default="bge-large-en")
+    community_levels: int = Field(default=3)
+    max_cluster_size: int = Field(default=50, description="Leiden algorithm max cluster size")
+    leiden_resolution: float = Field(default=1.0, description="Leiden resolution parameter (lower = larger communities)")
+    max_tokens: int = Field(default=12000)
+    index_base_path: str = Field(default="./graphrag_indices")
+
+    # Query classification
+    query_classification_model: str = Field(default="gemma3-12b-awq")
+
+    # Async processing
+    async_processing: AsyncProcessingSettings = Field(default_factory=AsyncProcessingSettings)
+
+    # Embedding configuration
+    embedding_batch_max_tokens: int = Field(default=450)
+
+    # Checkpoint & Resume
+    enable_checkpoint_resume: bool = Field(default=True)
+    validate_checkpoints: bool = Field(default=True)
+
+    # Gap prevention & completeness
+    gap_prevention: GapPreventionSettings = Field(default_factory=GapPreventionSettings)
+    validate_completeness: bool = Field(default=True)
+    completeness_threshold: float = Field(default=0.99)
 
 
 class ChunkingSettings(BaseModel):
@@ -311,50 +344,7 @@ class RAGSettings(BaseModel):
         description="Keywords that trigger hybrid routing (complex multi-part queries)"
     )
 
-    # GraphRAG-specific settings (moved here to eliminate duplication)
-    llm_model: str = Field(default="gemma3-12b-awq")
-    community_levels: int = Field(default=3)
-    max_cluster_size: int = Field(default=50, description="Leiden algorithm max cluster size (higher = fewer levels, less redundancy)")
-    leiden_resolution: float = Field(default=1.0, description="Leiden algorithm resolution parameter (lower = larger communities, e.g., 0.5; higher = smaller communities, e.g., 2.0)")
-    max_tokens: int = Field(default=12000)
-    root_dir: str = Field(default="/data/graphrag_indices")
-    auto_index_after_upload: bool = Field(default=True)
-    auto_index_delay_seconds: int = Field(default=30)
-    embedding_batch_max_tokens: int = Field(default=400)
-
-    # GraphRAG checkpoint & resume settings
-    enable_checkpoint_resume: bool = Field(
-        default=True,
-        description="Enable checkpoint detection and automatic resume from last successful workflow step"
-    )
-    validate_checkpoints: bool = Field(
-        default=True,
-        description="Validate checkpoint data consistency before resume (recommended for data integrity)"
-    )
-
-    # Gap prevention & completeness settings
-    gap_prevention: GapPreventionSettings = Field(
-        default_factory=GapPreventionSettings,
-        description="Gap prevention and retry configuration for in-phase gap filling"
-    )
-    validate_completeness: bool = Field(
-        default=True,
-        description="Enable completeness validation after indexing"
-    )
-    completeness_threshold: float = Field(
-        default=0.99,
-        description="Warn if completeness falls below this threshold (0.99 = 99%)"
-    )
-
-    # Cache settings
-    cache: GraphRAGCacheSettings = Field(default_factory=GraphRAGCacheSettings)
-
-    # Async processing
-    async_processing: AsyncProcessingSettings = Field(
-        default_factory=AsyncProcessingSettings
-    )
-
-    # Result reranking
+    # Result reranking (Vector RAG specific)
     reranking: RerankerSettings = Field(
         default_factory=RerankerSettings,
         description="Reranker settings for improving retrieval relevance"
@@ -507,7 +497,7 @@ class StorageSettings(BaseModel):
     pool_timeout: int = Field(
         default=30, ge=5, le=300, description="Seconds to wait for connection"
     )
-    # Redis settings consolidated into GraphRAGCacheSettings to avoid duplication
+    # Redis settings consolidated into CacheSettings to avoid duplication
 
 
 class PathSettings(BaseModel):
@@ -576,7 +566,11 @@ class BatchProcessingSettings(BaseModel):
 class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
-    # graphrag field removed - consolidated into rag for cleaner architecture
+    graphrag: GraphRAGSettings = Field(default_factory=GraphRAGSettings)
+
+    # Shared cache configuration (used by both Vector RAG and GraphRAG)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
+
     document_processing: DocumentProcessingSettings = Field(
         default_factory=DocumentProcessingSettings
     )
@@ -621,25 +615,25 @@ class Settings(BaseModel):
                     "Set DATABASE_URL environment variable with PostgreSQL connection string."
                 )
 
-        # Check Redis configuration for caching
-        if self.rag.cache.enabled:
-            if not self.rag.cache.redis_host:
+        # Check Redis configuration for shared caching (used by both Vector RAG and GraphRAG)
+        if self.cache.enabled:
+            if not self.cache.redis_host:
                 errors.append(
                     "Redis caching is enabled but 'redis_host' is not configured. "
                     "Set REDIS_HOST environment variable or disable caching."
                 )
-            if not isinstance(self.rag.cache.redis_port, int) or not (
-                1 <= self.rag.cache.redis_port <= 65535
+            if not isinstance(self.cache.redis_port, int) or not (
+                1 <= self.cache.redis_port <= 65535
             ):
                 errors.append(
-                    f"Redis port {self.rag.cache.redis_port} is invalid. "
+                    f"Redis port {self.cache.redis_port} is invalid. "
                     "Must be an integer between 1 and 65535."
                 )
-            if not isinstance(self.rag.cache.redis_db, int) or not (
-                0 <= self.rag.cache.redis_db <= 15
+            if not isinstance(self.cache.redis_db, int) or not (
+                0 <= self.cache.redis_db <= 15
             ):
                 errors.append(
-                    f"Redis database {self.rag.cache.redis_db} is invalid. "
+                    f"Redis database {self.cache.redis_db} is invalid. "
                     "Must be an integer between 0 and 15."
                 )
 
@@ -703,6 +697,14 @@ def substitute_environment_variables(config_str: str) -> str:
         if ":-" in placeholder:
             var_name, default_value = placeholder.split(":-", 1)
             value = os.environ.get(var_name, default_value)
+            # CRITICAL DEBUG: Log GraphRAG clustering variables
+            if var_name in ["GRAPHRAG_MAX_CLUSTER_SIZE", "GRAPHRAG_LEIDEN_RESOLUTION"]:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"ENV SUBSTITUTION: {var_name} = '{value}' "
+                    f"(from env: '{os.environ.get(var_name, 'NOT_SET')}', default: '{default_value}')"
+                )
         else:
             var_name = placeholder
             value = os.environ.get(var_name)
@@ -779,8 +781,8 @@ def get_config() -> "Settings":
         _settings = load_config()
         # CRITICAL DEBUG: Log GraphRAG clustering config at load time
         logger.info(
-            f"CONFIG LOAD: GraphRAG clustering - max_cluster_size={_settings.rag.max_cluster_size}, "
-            f"leiden_resolution={_settings.rag.leiden_resolution}"
+            f"CONFIG LOAD: GraphRAG clustering - max_cluster_size={_settings.graphrag.max_cluster_size}, "
+            f"leiden_resolution={_settings.graphrag.leiden_resolution}"
         )
         logger.info(
             f"CONFIG LOAD: Env vars - GRAPHRAG_MAX_CLUSTER_SIZE={os.getenv('GRAPHRAG_MAX_CLUSTER_SIZE', 'NOT_SET')}, "

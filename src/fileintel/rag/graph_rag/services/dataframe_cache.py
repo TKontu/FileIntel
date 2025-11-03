@@ -20,13 +20,13 @@ class GraphRAGDataFrameCache:
         # Estimate maxsize for LRU cache based on average dataframe size
         # This is a rough estimation and can be tuned
         avg_df_size_mb = 5  # Assuming an average of 5MB per DataFrame
-        max_lru_size = settings.rag.cache.max_size_mb // avg_df_size_mb
+        max_lru_size = settings.cache.max_size_mb // avg_df_size_mb
         self.lru_cache = LRUCache(maxsize=max_lru_size)
 
-        if settings.rag.cache.enabled and settings.rag.cache.redis_host:
+        if settings.cache.enabled and settings.cache.redis_host:
             try:
                 self.redis_client = redis.from_url(
-                    f"redis://{settings.rag.cache.redis_host}:{settings.rag.cache.redis_port}/{settings.rag.cache.redis_db}",
+                    f"redis://{settings.cache.redis_host}:{settings.cache.redis_port}/{settings.cache.redis_db}",
                     decode_responses=True
                 )
             except Exception as e:
@@ -92,7 +92,7 @@ class GraphRAGDataFrameCache:
         """Pre-load frequently used collections into the cache."""
         import asyncio
 
-        if not self.settings.rag.cache.warmup_collections:
+        if not self.settings.cache.warmup_collections:
             return
 
         if parquet_loader is None:
@@ -101,7 +101,7 @@ class GraphRAGDataFrameCache:
 
             parquet_loader = ParquetLoader(self)
 
-        for collection_id in self.settings.rag.cache.warmup_collections:
+        for collection_id in self.settings.cache.warmup_collections:
             try:
                 # Run blocking storage call in thread pool to avoid blocking event loop
                 loop = asyncio.get_event_loop()

@@ -35,7 +35,7 @@ def prepare_graphrag_data(
     from pathlib import Path
 
     config = get_config()
-    root_dir = Path(config.rag.root_dir) / collection_id
+    root_dir = Path(config.graphrag.index_base_path) / collection_id
 
     # Create directory structure
     root_dir.mkdir(parents=True, exist_ok=True)
@@ -96,29 +96,29 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
         "llm": {
             "api_key": config.get("llm.openai.api_key"),
             "type": "openai_chat",
-            "model": config.rag.llm_model,
+            "model": config.graphrag.llm_model,
             "api_base": config.get("llm.openai.base_url"),  # Custom API endpoint
-            "max_tokens": config.rag.max_tokens,
+            "max_tokens": config.graphrag.max_tokens,
             "temperature": config.get("llm.temperature", 0.1),
             # Resilience settings - MORE aggressive than Vector RAG due to high failure cost
             # GraphRAG indexing can take 24 hours; failure means losing ALL progress
             "max_retries": 10,  # 10 retries (vs Vector RAG's 3) - GraphRAG failure is catastrophic
             "request_timeout": 600,  # 10 minutes per LLM request (community summarization can be very slow)
-            "concurrent_requests": config.rag.async_processing.max_concurrent_requests,  # Match Vector RAG concurrency (8)
+            "concurrent_requests": config.graphrag.async_processing.max_concurrent_requests,  # GraphRAG async concurrency
         },
         "embeddings": {
             "api_key": config.get("llm.openai.api_key"),
             "type": "openai_embedding",
-            "model": config.rag.embedding_model,
+            "model": config.graphrag.embedding_model,
             "api_base": config.get("llm.openai.embedding_base_url") or config.get("llm.openai.base_url"),  # Custom API endpoint
-            "batch_size": config.rag.embedding_batch_max_tokens,
+            "batch_size": config.graphrag.embedding_batch_max_tokens,
             # Resilience settings - MORE aggressive than Vector RAG due to high failure cost
             # GraphRAG indexing can take 24 hours; failure means losing ALL progress
             "max_retries": 10,  # 10 retries (vs Vector RAG's 3) - GraphRAG failure is catastrophic
             "request_timeout": 60,  # 60s timeout (vs Vector RAG's 30s) - give more time for transient issues
             # Connection pool race condition fixed in models.py with custom httpx client
             # See: docs/graphrag_embedding_todo.md for root cause analysis
-            "concurrent_requests": config.rag.async_processing.max_concurrent_requests,  # Match Vector RAG concurrency (8)
+            "concurrent_requests": config.graphrag.async_processing.max_concurrent_requests,  # GraphRAG async concurrency
         },
         "chunks": {
             "size": config.rag.chunking.chunk_size,
@@ -278,7 +278,7 @@ def query_graph_global(
         self.update_progress(0, 3, "Preparing global GraphRAG query")
 
         config = get_config()
-        root_dir = Path(config.rag.root_dir) / collection_id
+        root_dir = Path(config.graphrag.index_base_path) / collection_id
 
         # Check if index exists
         output_dir = root_dir / "output"
@@ -373,7 +373,7 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
         self.update_progress(0, 3, "Preparing local GraphRAG query")
 
         config = get_config()
-        root_dir = Path(config.rag.root_dir) / collection_id
+        root_dir = Path(config.graphrag.index_base_path) / collection_id
 
         # Check if index exists
         output_dir = root_dir / "output"
@@ -552,7 +552,7 @@ def get_graphrag_index_status(self, collection_id: str) -> Dict[str, Any]:
 
     try:
         config = get_config()
-        root_dir = Path(config.rag.root_dir) / collection_id
+        root_dir = Path(config.graphrag.index_base_path) / collection_id
         output_dir = root_dir / "output"
 
         if not root_dir.exists():

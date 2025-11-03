@@ -36,7 +36,7 @@ async def run_workflow(
     max_cluster_size = config.cluster_graph.max_cluster_size
     use_lcc = config.cluster_graph.use_lcc
     seed = config.cluster_graph.seed
-    resolution = getattr(config.cluster_graph, 'resolution', 1.0)
+    resolution = config.cluster_graph.resolution
 
     output = create_communities(
         entities,
