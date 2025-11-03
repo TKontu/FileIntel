@@ -148,8 +148,9 @@ def _compute_pyramid_communities(
 
     # Step 1: Create fine-grained base using high resolution for small communities
     # Target: 15-25 entities per community
-    # Formula: resolution * 3.0 creates smaller communities than default
-    base_resolution = resolution * 3.0
+    # Formula: resolution * 5.0 creates smaller communities (more aggressive than 3.0)
+    # For resolution=0.3: base_resolution=1.5 should create ~3000-5000 communities for 75K entities
+    base_resolution = resolution * 5.0
     base_communities = leiden(
         graph,
         resolution=base_resolution,
@@ -175,8 +176,9 @@ def _compute_pyramid_communities(
     temp_level = 1
 
     # Target: 1-3 communities at top level for optimal global queries
-    # Using 0.15 power gives aggressive consolidation: 3000^0.15 ≈ 3.7 → 3 communities
-    target_top = max(2, int(num_base ** 0.15))
+    # Using 0.2 power gives gentler consolidation: 3000^0.2 ≈ 4.7 → 4 communities
+    # This creates more gradual pyramid levels instead of collapsing too quickly
+    target_top = max(3, int(num_base ** 0.2))
 
     while len(set(current_communities.values())) > target_top and temp_level < 15:
         # Build metagraph where communities are nodes
@@ -187,9 +189,11 @@ def _compute_pyramid_communities(
             break
 
         # Consolidate with decreasing resolution (broader groupings at higher levels)
-        # Gentler scaling (1.2^level) to avoid over-consolidation
-        # temp_level=1: 0.83x, temp_level=2: 0.69x, temp_level=3: 0.58x
-        consolidation_resolution = resolution / (1.2 ** temp_level)
+        # Much gentler scaling to create gradual pyramid instead of collapsing
+        # Use fixed fraction of base resolution for consistent consolidation
+        # temp_level=1: 0.6x base_resolution, temp_level=2: 0.4x, temp_level=3: 0.27x
+        # This ensures gradual consolidation instead of immediate collapse
+        consolidation_resolution = base_resolution * (0.6 ** temp_level)
 
         try:
             parent_communities = leiden(
