@@ -62,7 +62,7 @@ class AsyncProcessingSettings(BaseModel):
         default=4, ge=1, le=8, description="Concurrent requests per batch"
     )
     max_concurrent_requests: int = Field(
-        default=25, ge=1, le=100, description="Total concurrent HTTP connections (must match vLLM max_num_seqs)"
+        default=25, ge=1, le=500, description="Total concurrent HTTP connections (must match vLLM max_num_seqs)"
     )
     batch_timeout: int = Field(
         default=30, ge=10, description="Timeout per batch in seconds"
