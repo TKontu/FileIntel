@@ -125,6 +125,10 @@ class GraphRAGSettings(BaseModel):
     community_levels: int = Field(default=3)
     max_cluster_size: int = Field(default=50, description="Leiden algorithm max cluster size")
     leiden_resolution: float = Field(default=1.0, description="Leiden resolution parameter (lower = larger communities)")
+    base_resolution_multiplier: float = Field(
+        default=15.0,
+        description="Multiplier for base resolution in pyramid hierarchy (higher = more fine-grained base communities)"
+    )
     max_tokens: int = Field(default=12000)
     index_base_path: str = Field(default="./graphrag_indices")
 

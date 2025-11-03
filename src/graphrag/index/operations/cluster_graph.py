@@ -20,6 +20,15 @@ logger = logging.getLogger(__name__)
 # Feature flag to enable new pyramid hierarchy algorithm
 USE_PYRAMID_HIERARCHY = os.environ.get("GRAPHRAG_USE_PYRAMID_HIERARCHY", "true").lower() == "true"
 
+# Base resolution multiplier for pyramid hierarchy (configurable)
+# Higher values = more fine-grained base communities (15.0 recommended for ~75K entities)
+BASE_RESOLUTION_MULTIPLIER = float(os.environ.get("GRAPHRAG_BASE_RESOLUTION_MULTIPLIER", "15.0"))
+
+# Consolidation scaling factor for pyramid hierarchy (configurable)
+# Lower values = steeper consolidation (fewer levels), higher values = gentler (more levels)
+# 0.6 = gentle (8-10 levels), 0.4 = moderate (6-8 levels), 0.3 = steep (5-6 levels)
+CONSOLIDATION_SCALING_FACTOR = float(os.environ.get("GRAPHRAG_CONSOLIDATION_SCALING_FACTOR", "0.4"))
+
 
 def cluster_graph(
     graph: nx.Graph,
@@ -122,6 +131,8 @@ def _compute_pyramid_communities(
     use_lcc: bool,
     seed: int | None = None,
     resolution: float = 1.0,
+    base_resolution_multiplier: float | None = None,
+    consolidation_scaling_factor: float | None = None,
 ) -> tuple[dict[int, dict[str, int]], dict[int, int]]:
     """Build proper bottom-up pyramid hierarchy with query-compatible level numbering.
 
@@ -147,10 +158,15 @@ def _compute_pyramid_communities(
     )
 
     # Step 1: Create fine-grained base using high resolution for small communities
-    # Target: 15-25 entities per community
-    # Formula: resolution * 5.0 creates smaller communities (more aggressive than 3.0)
-    # For resolution=0.3: base_resolution=1.5 should create ~3000-5000 communities for 75K entities
-    base_resolution = resolution * 5.0
+    # Target: 15-25 entities per community (~3000-5000 communities for 75K entities)
+    # Use configurable multiplier (parameter or env var) - adjust via GRAPHRAG_BASE_RESOLUTION_MULTIPLIER env var
+    # For resolution=1.0 with multiplier=15.0: base_resolution=15.0 creates ~3000-5000 communities for 75K entities
+    if base_resolution_multiplier is None:
+        base_resolution_multiplier = BASE_RESOLUTION_MULTIPLIER
+    if consolidation_scaling_factor is None:
+        consolidation_scaling_factor = CONSOLIDATION_SCALING_FACTOR
+
+    base_resolution = resolution * base_resolution_multiplier
     base_communities = leiden(
         graph,
         resolution=base_resolution,
@@ -189,11 +205,12 @@ def _compute_pyramid_communities(
             break
 
         # Consolidate with decreasing resolution (broader groupings at higher levels)
-        # Much gentler scaling to create gradual pyramid instead of collapsing
-        # Use fixed fraction of base resolution for consistent consolidation
-        # temp_level=1: 0.6x base_resolution, temp_level=2: 0.4x, temp_level=3: 0.27x
-        # This ensures gradual consolidation instead of immediate collapse
-        consolidation_resolution = base_resolution * (0.6 ** temp_level)
+        # Use configurable scaling factor to control pyramid steepness
+        # Lower factor = steeper (fewer levels), higher factor = gentler (more levels)
+        # temp_level=1: factor^1 × base, temp_level=2: factor^2 × base, etc.
+        # factor=0.4: steeper consolidation (6-8 levels)
+        # factor=0.6: gentler consolidation (8-10 levels)
+        consolidation_resolution = base_resolution * (consolidation_scaling_factor ** temp_level)
 
         try:
             parent_communities = leiden(
