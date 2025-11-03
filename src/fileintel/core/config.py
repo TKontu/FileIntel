@@ -770,7 +770,20 @@ def get_config() -> "Settings":
     Loads the configuration settings lazily.
     This function ensures that the configuration is loaded only once.
     """
+    import logging
+    import os
+    logger = logging.getLogger(__name__)
+
     global _settings
     if _settings is None:
         _settings = load_config()
+        # CRITICAL DEBUG: Log GraphRAG clustering config at load time
+        logger.info(
+            f"CONFIG LOAD: GraphRAG clustering - max_cluster_size={_settings.rag.max_cluster_size}, "
+            f"leiden_resolution={_settings.rag.leiden_resolution}"
+        )
+        logger.info(
+            f"CONFIG LOAD: Env vars - GRAPHRAG_MAX_CLUSTER_SIZE={os.getenv('GRAPHRAG_MAX_CLUSTER_SIZE', 'NOT_SET')}, "
+            f"GRAPHRAG_LEIDEN_RESOLUTION={os.getenv('GRAPHRAG_LEIDEN_RESOLUTION', 'NOT_SET')}"
+        )
     return _settings
