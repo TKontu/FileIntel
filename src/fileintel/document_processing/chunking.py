@@ -32,7 +32,7 @@ class TextChunker:
             config.rag, "embedding_max_tokens", 400
         )  # Safe limit for 512 token embedding models
         self.graphrag_max_tokens = (
-            config.rag.embedding_batch_max_tokens
+            config.graphrag.embedding_batch_max_tokens
         )  # Use configured GraphRAG token limit
 
         # Initialize primary tokenizer (OpenAI)
