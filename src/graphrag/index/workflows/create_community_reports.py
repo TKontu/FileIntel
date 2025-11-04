@@ -52,6 +52,20 @@ async def run_workflow(
     ):
         claims = await load_table_from_storage("covariates", context.output_storage)
 
+    # Load existing partial community reports if they exist (for resume capability)
+    existing_reports = None
+    if await storage_has_table("community_reports", context.output_storage):
+        try:
+            logger.info("Found existing community_reports - checking for partial results to resume")
+            existing_reports = await load_table_from_storage("community_reports", context.output_storage)
+            logger.info(f"Loaded {len(existing_reports)} existing community reports for resume")
+        except Exception as e:
+            logger.warning(
+                f"Failed to load existing community_reports: {e}, "
+                f"will process all communities from scratch"
+            )
+            existing_reports = None
+
     community_reports_llm_settings = config.get_language_model_config(
         config.community_reports.model_id
     )
@@ -79,6 +93,7 @@ async def run_workflow(
         summarization_strategy=summarization_strategy,
         async_mode=async_mode,
         num_threads=num_threads,
+        existing_reports=existing_reports,
     )
 
     await write_table_to_storage(output, "community_reports", context.output_storage)
@@ -97,6 +112,7 @@ async def create_community_reports(
     summarization_strategy: dict,
     async_mode: AsyncType = AsyncType.AsyncIO,
     num_threads: int = 4,
+    existing_reports: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """All the steps to transform community reports."""
     nodes = explode_communities(communities, entities)
@@ -133,6 +149,7 @@ async def create_community_reports(
         max_input_length=max_input_length,
         async_mode=async_mode,
         num_threads=num_threads,
+        existing_reports=existing_reports,
     )
 
     return finalize_community_reports(community_reports, communities)

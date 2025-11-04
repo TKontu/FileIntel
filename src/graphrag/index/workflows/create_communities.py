@@ -17,7 +17,11 @@ from graphrag.index.operations.cluster_graph import cluster_graph
 from graphrag.index.operations.create_graph import create_graph
 from graphrag.index.typing.context import PipelineRunContext
 from graphrag.index.typing.workflow import WorkflowFunctionOutput
-from graphrag.utils.storage import load_table_from_storage, write_table_to_storage
+from graphrag.utils.storage import (
+    load_table_from_storage,
+    storage_has_table,
+    write_table_to_storage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,44 @@ async def run_workflow(
 ) -> WorkflowFunctionOutput:
     """All the steps to transform final communities."""
     logger.info("Workflow started: create_communities")
+
+    # Check if communities already exist (for resume capability with cached community reports)
+    # This preserves community IDs so that cached LLM responses remain valid
+    if await storage_has_table("communities", context.output_storage):
+        try:
+            logger.info("Found existing communities - attempting to load for resume capability")
+            output = await load_table_from_storage("communities", context.output_storage)
+
+            # Validate schema - ensure all required columns exist
+            required_cols = ["community", "level", "title", "parent", "children"]
+            missing_cols = [col for col in required_cols if col not in output.columns]
+
+            if missing_cols:
+                logger.warning(
+                    f"Existing communities missing required columns {missing_cols}, "
+                    f"will regenerate community hierarchy"
+                )
+            elif len(output) == 0:
+                logger.warning("Existing communities file is empty, will regenerate community hierarchy")
+            elif output["community"].isna().all() or output["level"].isna().all():
+                logger.warning("Existing communities have null values in critical columns, will regenerate")
+            else:
+                # Validation passed - use existing communities
+                logger.info(
+                    f"Loaded {len(output)} existing communities - "
+                    f"preserves community IDs for cached report compatibility"
+                )
+                logger.info("Workflow completed: create_communities (resumed from existing)")
+                return WorkflowFunctionOutput(result=output)
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to load existing communities: {e}, "
+                f"will regenerate community hierarchy"
+            )
+
+    # If we reach here, either communities don't exist or validation failed
+    # Generate communities from scratch (backwards compatible path)
     entities = await load_table_from_storage("entities", context.output_storage)
     relationships = await load_table_from_storage(
         "relationships", context.output_storage

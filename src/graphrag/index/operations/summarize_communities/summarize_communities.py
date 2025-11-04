@@ -38,10 +38,54 @@ async def summarize_communities(
     max_input_length: int,
     async_mode: AsyncType = AsyncType.AsyncIO,
     num_threads: int = 4,
+    existing_reports: pd.DataFrame | None = None,
 ):
     """Generate community summaries."""
+    # Initialize reports list with existing reports if provided (for resume capability)
     reports: list[CommunityReport | None] = []
-    tick = progress_ticker(callbacks.progress, len(local_contexts))
+    existing_community_ids = set()
+
+    if existing_reports is not None and not existing_reports.empty:
+        # Validate existing reports have required columns
+        required_cols = [schemas.COMMUNITY_ID, schemas.COMMUNITY_LEVEL]
+        missing_cols = set(required_cols) - set(existing_reports.columns)
+        if missing_cols:
+            logger.warning(
+                f"Existing reports missing required columns {missing_cols}, ignoring partial results for safety"
+            )
+            existing_reports = None
+        else:
+            # Convert existing reports DataFrame to list of CommunityReport objects
+            for _, row in existing_reports.iterrows():
+                # Ensure type consistency: convert community ID to int to avoid type mismatch
+                community_id = int(row.get(schemas.COMMUNITY_ID))
+
+                # Create base report (TypedDict fields only)
+                report = CommunityReport(
+                    community=community_id,
+                    level=row.get(schemas.COMMUNITY_LEVEL),
+                    title=row.get("title", ""),
+                    summary=row.get("summary", ""),
+                    full_content=row.get("full_content", ""),
+                    full_content_json=row.get("full_content_json", ""),
+                    rank=row.get("rank", 0.0),
+                    rating_explanation=row.get("rating_explanation", ""),
+                    findings=row.get("findings", []),
+                )
+
+                # Preserve ID if it exists (TypedDict allows extra fields at runtime)
+                if "id" in row and pd.notna(row["id"]) and row["id"] != "":
+                    report["id"] = row["id"]  # type: ignore
+
+                reports.append(report)
+                existing_community_ids.add(community_id)
+
+            logger.info(f"Resume mode: Loaded {len(existing_community_ids)} existing community reports, will skip these during summarization")
+
+    # Calculate total work for progress tracking (accounting for skipped communities)
+    total_work = len(local_contexts) - len(existing_community_ids) if existing_community_ids else len(local_contexts)
+    tick = progress_ticker(callbacks.progress, total_work)
+
     strategy_exec = load_strategy(strategy["type"])
     strategy_config = {**strategy}
 
@@ -53,8 +97,10 @@ async def summarize_communities(
 
     levels = get_levels(nodes)
 
-    level_contexts = []
-    for level in levels:
+    # CRITICAL FIX: Build level contexts incrementally to use newly-generated reports
+    # This maintains the hierarchical design where parent levels use child summaries
+    for i, level in enumerate(levels):
+        # Rebuild context for this level with all reports generated so far
         level_context = level_context_builder(
             pd.DataFrame(reports),
             community_hierarchy_df=community_hierarchy,
@@ -62,9 +108,27 @@ async def summarize_communities(
             level=level,
             max_context_tokens=max_input_length,
         )
-        level_contexts.append(level_context)
 
-    for i, level_context in enumerate(level_contexts):
+        # Filter out communities that already have reports (resume capability)
+        if existing_community_ids:
+            original_count = len(level_context)
+            # Use .copy() to avoid SettingWithCopyWarning
+            level_context = level_context[
+                ~level_context[schemas.COMMUNITY_ID].isin(existing_community_ids)
+            ].copy()
+            filtered_count = len(level_context)
+            skipped_count = original_count - filtered_count
+
+            if skipped_count > 0:
+                logger.info(
+                    f"Resume mode: Skipping {skipped_count} already-completed communities at level {level}, "
+                    f"processing {filtered_count} remaining communities"
+                )
+
+        # Skip this level if all communities already have reports
+        if level_context.empty:
+            logger.info(f"Resume mode: All communities at level {level} already have reports, skipping")
+            continue
 
         async def run_generate(record):
             result = await _generate_report(
@@ -85,7 +149,7 @@ async def summarize_communities(
             callbacks=NoopWorkflowCallbacks(),
             num_threads=num_threads,
             async_type=async_mode,
-            progress_msg=f"level {levels[i]} summarize communities progress: ",
+            progress_msg=f"level {level} summarize communities progress: ",
         )
         reports.extend([lr for lr in local_reports if lr is not None])
 

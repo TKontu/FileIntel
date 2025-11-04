@@ -25,7 +25,17 @@ def finalize_community_reports(
 
     community_reports["community"] = community_reports["community"].astype(int)
     community_reports["human_readable_id"] = community_reports["community"]
-    community_reports["id"] = [uuid4().hex for _ in range(len(community_reports))]
+
+    # CRITICAL FIX: Preserve existing IDs when resuming from partial results
+    # Only generate new IDs for reports that don't already have one
+    if "id" in community_reports.columns:
+        # Fill missing IDs with new UUIDs (for new reports)
+        community_reports["id"] = community_reports["id"].apply(
+            lambda x: x if pd.notna(x) and x != "" else uuid4().hex
+        )
+    else:
+        # No existing IDs, generate for all (backwards compatible)
+        community_reports["id"] = [uuid4().hex for _ in range(len(community_reports))]
 
     return community_reports.loc[
         :,
