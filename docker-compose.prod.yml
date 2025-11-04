@@ -63,7 +63,7 @@ services:
       dockerfile: Dockerfile
     image: fileintel:latest
     entrypoint: ["./docker-entrypoint.sh"]
-    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "debug"]
+    command: ["uvicorn", "src.fileintel.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
     ports:
       - "${API_PORT:-8000}:8000"  # Only the API is exposed to the host network
     volumes:
@@ -120,7 +120,7 @@ services:
       - "-A"
       - "fileintel.celery_config:app"
       - "worker"
-      - "--loglevel=debug"
+      - "--loglevel=info"
       - "--pool=${CELERY_WORKER_POOL:-prefork}"
       - "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}"
       - "--queues=default,document_processing,embedding_processing,llm_processing,rag_processing"
@@ -199,7 +199,7 @@ services:
       - "-A"
       - "fileintel.celery_config:app"
       - "worker"
-      - "--loglevel=debug"
+      - "--loglevel=info"
       - "--pool=gevent"
       - "--concurrency=${CELERY_GRAPHRAG_CONCURRENCY:-200}"
       - "--queues=graphrag_indexing,graphrag_queries"
