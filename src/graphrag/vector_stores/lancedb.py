@@ -26,14 +26,26 @@ class LanceDBVectorStore(BaseVectorStore):
 
     def connect(self, **kwargs: Any) -> Any:
         """Connect to the vector storage."""
-        self.db_connection = lancedb.connect(kwargs["db_uri"])
+        import logging
+        logger = logging.getLogger(__name__)
+
+        db_uri = kwargs["db_uri"]
+        logger.debug(f"LanceDB connecting to: {db_uri}")
+        self.db_connection = lancedb.connect(db_uri)
+        logger.debug(f"LanceDB connected successfully")
+
+        logger.debug(f"Checking for existing table: {self.collection_name}")
         if (
             self.collection_name
             and self.collection_name in self.db_connection.table_names()
         ):
+            logger.debug(f"Table exists, opening: {self.collection_name}")
             self.document_collection = self.db_connection.open_table(
                 self.collection_name
             )
+            logger.debug(f"Table opened successfully")
+        else:
+            logger.debug(f"Table does not exist yet (will be created on first load)")
 
     def load_documents(
         self, documents: list[VectorStoreDocument], overwrite: bool = True

@@ -46,17 +46,26 @@ async def embed_text(
     title_column: str | None = None,
 ):
     """Embed a piece of text into a vector space. The operation outputs a new column containing a mapping between doc_id and vector."""
+    logger.debug(f"embed_text called for embedding_name={embedding_name}, input shape={input.shape}")
     vector_store_config = strategy.get("vector_store")
+    logger.debug(f"vector_store_config present: {vector_store_config is not None}")
 
     if vector_store_config:
+        logger.debug(f"Using vector store path for embeddings")
         collection_name = _get_collection_name(vector_store_config, embedding_name)
+        logger.debug(f"Collection name obtained: {collection_name}")
+
+        logger.debug(f"About to create vector store...")
         vector_store: BaseVectorStore = _create_vector_store(
             vector_store_config, collection_name
         )
+        logger.debug(f"Vector store created successfully")
+
         vector_store_workflow_config = vector_store_config.get(
             embedding_name, vector_store_config
         )
-        return await _text_embed_with_vector_store(
+        logger.debug(f"About to start embedding with vector store...")
+        result = await _text_embed_with_vector_store(
             input=input,
             callbacks=callbacks,
             cache=cache,
@@ -67,7 +76,10 @@ async def embed_text(
             id_column=id_column,
             title_column=title_column,
         )
+        logger.debug(f"Embedding with vector store completed")
+        return result
 
+    logger.debug(f"Using in-memory path for embeddings")
     return await _text_embed_in_memory(
         input=input,
         callbacks=callbacks,
@@ -105,7 +117,9 @@ async def _text_embed_with_vector_store(
     id_column: str = "id",
     title_column: str | None = None,
 ):
+    logger.debug(f"_text_embed_with_vector_store started, input shape: {input.shape}")
     strategy_type = strategy["type"]
+    logger.debug(f"Loading strategy: {strategy_type}")
     strategy_exec = load_strategy(strategy_type)
     strategy_config = {**strategy}
 
@@ -113,8 +127,10 @@ async def _text_embed_with_vector_store(
     insert_batch_size: int = (
         vector_store_config.get("batch_size") or DEFAULT_EMBEDDING_BATCH_SIZE
     )
+    logger.debug(f"Batch size: {insert_batch_size}")
 
     overwrite: bool = vector_store_config.get("overwrite", True)
+    logger.debug(f"Overwrite mode: {overwrite}")
 
     if embed_column not in input.columns:
         msg = f"Column {embed_column} not found in input dataframe with columns {input.columns}"
@@ -185,15 +201,22 @@ async def _text_embed_with_vector_store(
 def _create_vector_store(
     vector_store_config: dict, collection_name: str
 ) -> BaseVectorStore:
+    logger.debug(f"_create_vector_store called with collection_name={collection_name}")
     vector_store_type: str = str(vector_store_config.get("type"))
+    logger.debug(f"vector_store_type={vector_store_type}")
+
     if collection_name:
         vector_store_config.update({"collection_name": collection_name})
 
+    logger.debug(f"Creating vector store instance...")
     vector_store = VectorStoreFactory().create_vector_store(
         vector_store_type, kwargs=vector_store_config
     )
+    logger.debug(f"Vector store instance created: {type(vector_store)}")
 
+    logger.debug(f"Connecting to vector store...")
     vector_store.connect(**vector_store_config)
+    logger.debug(f"Vector store connected successfully")
     return vector_store
 
 
