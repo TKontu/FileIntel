@@ -56,8 +56,11 @@ async def embed_text(
         logger.debug(f"Collection name obtained: {collection_name}")
 
         logger.debug(f"About to create vector store...")
-        vector_store: BaseVectorStore = _create_vector_store(
-            vector_store_config, collection_name
+        # CRITICAL FIX: Run blocking I/O in executor to prevent event loop blocking
+        import asyncio
+        loop = asyncio.get_event_loop()
+        vector_store: BaseVectorStore = await loop.run_in_executor(
+            None, _create_vector_store, vector_store_config, collection_name
         )
         logger.debug(f"Vector store created successfully")
 
@@ -191,7 +194,12 @@ async def _text_embed_with_vector_store(
             )
             documents.append(document)
 
-        vector_store.load_documents(documents, overwrite and i == 0)
+        # CRITICAL FIX: Run blocking I/O in executor to prevent event loop blocking
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, vector_store.load_documents, documents, overwrite and i == 0
+        )
         starting_index += len(documents)
         i += 1
 

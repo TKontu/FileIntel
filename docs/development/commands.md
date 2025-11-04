@@ -17,6 +17,8 @@ fileintel collections get "my-collection"
 fileintel collections delete "my-collection"
 ```
 
+fileintel documents batch-upload "thesis_sources" ./input/thesis_source --process
+
 ### Document Management
 ```bash
 # Upload a single document to a collection
