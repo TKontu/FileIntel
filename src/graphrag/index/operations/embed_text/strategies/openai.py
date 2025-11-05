@@ -184,7 +184,10 @@ def _create_text_batches(
             len(current_batch) >= max_batch_size
             or current_batch_tokens + token_count > max_batch_tokens
         ):
-            result.append(current_batch)
+            # CRITICAL FIX: Only append if current_batch is not empty
+            # Prevents appending empty batch when first text exceeds token limit
+            if current_batch:
+                result.append(current_batch)
             current_batch = []
             current_batch_tokens = 0
 

@@ -368,8 +368,9 @@ class GraphRAGService:
 
         logger.info("🔍 Validating embedding completeness (CRITICAL)...")
 
-        output_dir = os.path.join(workspace_path, "output")
-        lancedb_dir = os.path.join(output_dir, "lancedb")
+        # CRITICAL FIX: workspace_path already points to the output directory
+        # (e.g., "/data/collection_id/output"), so don't add another "output" level
+        lancedb_dir = os.path.join(workspace_path, "lancedb")
 
         # Check if LanceDB directory exists
         if not os.path.exists(lancedb_dir):
