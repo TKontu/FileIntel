@@ -87,9 +87,27 @@ async def run(
 def _get_splitter(
     config: LanguageModelConfig, batch_max_tokens: int
 ) -> TokenTextSplitter:
+    # CRITICAL FIX: Pass embedding model for accurate token counting
+    # GraphRAG uses tiktoken (cl100k_base) for splitting, but embedding models
+    # use their own tokenizers (e.g., BERT for bge-large-en).
+    # We use BOTH tokenizers and take the MAX count for safety.
+    embedding_tokenizer_model = None
+
+    # Map common embedding models to their HuggingFace tokenizer
+    if config.model and 'bge' in config.model.lower():
+        if 'large' in config.model.lower():
+            embedding_tokenizer_model = 'BAAI/bge-large-en'
+        elif 'base' in config.model.lower():
+            embedding_tokenizer_model = 'BAAI/bge-base-en'
+        elif 'small' in config.model.lower():
+            embedding_tokenizer_model = 'BAAI/bge-small-en'
+
+    logger.debug(f"Creating TokenTextSplitter with tiktoken={config.encoding_model}, embedding_tokenizer={embedding_tokenizer_model}")
+
     return TokenTextSplitter(
         encoding_name=config.encoding_model,
         chunk_size=batch_max_tokens,
+        embedding_tokenizer_model=embedding_tokenizer_model,
     )
 
 

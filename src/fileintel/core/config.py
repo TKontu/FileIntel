@@ -139,6 +139,9 @@ class GraphRAGSettings(BaseModel):
     async_processing: AsyncProcessingSettings = Field(default_factory=AsyncProcessingSettings)
 
     # Embedding configuration
+    # GraphRAG now uses dual tokenizer approach (tiktoken + embedding model's tokenizer)
+    # Takes MAX of both counts to ensure we never exceed the embedding model's limit
+    # Safe to set to 450 tokens, the dual tokenizer will prevent exceeding bge-large-en's 512 limit
     embedding_batch_max_tokens: int = Field(default=450)
 
     # Checkpoint & Resume

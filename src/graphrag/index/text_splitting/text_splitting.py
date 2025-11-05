@@ -16,6 +16,13 @@ import graphrag.config.defaults as defs
 from graphrag.index.operations.chunk_text.typing import TextChunk
 from graphrag.logger.progress import ProgressTicker
 
+# Support for HuggingFace/BERT tokenizers
+try:
+    from transformers import AutoTokenizer
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
+
 EncodedText = list[int]
 DecodeFn = Callable[[EncodedText], str]
 EncodeFn = Callable[[str], EncodedText]
@@ -92,10 +99,13 @@ class TokenTextSplitter(TextSplitter):
         model_name: str | None = None,
         allowed_special: Literal["all"] | set[str] | None = None,
         disallowed_special: Literal["all"] | Collection[str] = "all",
+        embedding_tokenizer_model: str | None = None,  # NEW: HuggingFace model for embedding tokenizer
         **kwargs: Any,
     ):
         """Init method definition."""
         super().__init__(**kwargs)
+
+        # Initialize OpenAI tokenizer (for chunking compatibility)
         if model_name is not None:
             try:
                 enc = tiktoken.encoding_for_model(model_name)
@@ -110,6 +120,15 @@ class TokenTextSplitter(TextSplitter):
         self._allowed_special = allowed_special or set()
         self._disallowed_special = disallowed_special
 
+        # Initialize embedding tokenizer if specified (e.g., 'BAAI/bge-large-en')
+        self._embedding_tokenizer = None
+        if embedding_tokenizer_model and HAS_TRANSFORMERS:
+            try:
+                self._embedding_tokenizer = AutoTokenizer.from_pretrained(embedding_tokenizer_model)
+                logger.info(f"Loaded embedding tokenizer: {embedding_tokenizer_model} for accurate token counting")
+            except Exception as e:
+                logger.warning(f"Could not load embedding tokenizer '{embedding_tokenizer_model}': {e}. Using tiktoken only.")
+
     def encode(self, text: str) -> list[int]:
         """Encode the given text into an int-vector."""
         return self._tokenizer.encode(
@@ -119,8 +138,34 @@ class TokenTextSplitter(TextSplitter):
         )
 
     def num_tokens(self, text: str) -> int:
-        """Return the number of tokens in a string."""
-        return len(self.encode(text))
+        """
+        Return the number of tokens in a string.
+
+        Uses conservative approach: if embedding tokenizer is available,
+        returns MAX of tiktoken and embedding tokenizer counts to ensure
+        we never exceed the embedding model's token limit.
+        """
+        tiktoken_count = len(self.encode(text))
+
+        if self._embedding_tokenizer:
+            try:
+                # Count with embedding model's tokenizer
+                embedding_tokens = self._embedding_tokenizer(
+                    text,
+                    return_tensors=None,
+                    add_special_tokens=True,
+                    truncation=False
+                )
+                embedding_count = len(embedding_tokens['input_ids'])
+
+                # Return the higher count for safety (conservative approach)
+                # This ensures we never exceed the embedding model's limit
+                return max(tiktoken_count, embedding_count)
+            except Exception as e:
+                logger.warning(f"Embedding tokenizer counting failed: {e}, using tiktoken only")
+                return tiktoken_count
+
+        return tiktoken_count
 
     def split_text(self, text: str | list[str]) -> list[str]:
         """Split text method."""
