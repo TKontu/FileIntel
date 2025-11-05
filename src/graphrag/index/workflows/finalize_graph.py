@@ -31,7 +31,11 @@ async def run_workflow(
         "relationships", context.output_storage
     )
 
-    final_entities, final_relationships = finalize_graph(
+    # CRITICAL: Run CPU-intensive graph operations in thread pool for gevent compatibility
+    # finalize_graph() does create_graph(), embed_graph(), layout_graph(), compute_degree(), and DataFrame ops
+    import asyncio
+    final_entities, final_relationships = await asyncio.to_thread(
+        finalize_graph,
         entities,
         relationships,
         embed_config=config.embed_graph,
@@ -45,7 +49,10 @@ async def run_workflow(
 
     if config.snapshots.graphml:
         # todo: extract graphs at each level, and add in meta like descriptions
-        graph = create_graph(final_relationships, edge_attr=["weight"])
+        # CRITICAL: Run blocking NetworkX graph creation in thread pool for gevent compatibility
+        graph = await asyncio.to_thread(
+            create_graph, final_relationships, edge_attr=["weight"]
+        )
 
         await snapshot_graphml(
             graph,

@@ -30,7 +30,11 @@ async def run_workflow(
         "relationships", context.output_storage
     )
 
-    pruned_entities, pruned_relationships = prune_graph(
+    # CRITICAL: Run CPU-intensive graph operations in thread pool for gevent compatibility
+    # prune_graph() does create_graph(), prune_graph_operation(), graph analysis, and DataFrame merges
+    import asyncio
+    pruned_entities, pruned_relationships = await asyncio.to_thread(
+        prune_graph,
         entities,
         relationships,
         pruning_config=config.prune_graph,

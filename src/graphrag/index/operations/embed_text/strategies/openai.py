@@ -79,7 +79,10 @@ async def run(
 
     # Embed each chunk of snippets
     embeddings = await _execute(model, text_batches, ticker, semaphore)
-    embeddings = _reconstitute_embeddings(embeddings, input_sizes)
+
+    # CRITICAL: Run CPU-intensive numpy operations in thread pool for gevent compatibility
+    # _reconstitute_embeddings does np.average() and np.linalg.norm() which can block event loop
+    embeddings = await asyncio.to_thread(_reconstitute_embeddings, embeddings, input_sizes)
 
     return TextEmbeddingResult(embeddings=embeddings)
 

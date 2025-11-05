@@ -21,7 +21,10 @@ async def load_table_from_storage(name: str, storage: PipelineStorage) -> pd.Dat
         raise ValueError(msg)
     try:
         logger.info("reading table from storage: %s", filename)
-        return pd.read_parquet(BytesIO(await storage.get(filename, as_bytes=True)))
+        # CRITICAL: Run blocking pandas deserialization in thread pool for gevent compatibility
+        import asyncio
+        parquet_bytes = await storage.get(filename, as_bytes=True)
+        return await asyncio.to_thread(pd.read_parquet, BytesIO(parquet_bytes))
     except Exception:
         logger.exception("error loading table from storage: %s", filename)
         raise
@@ -31,7 +34,11 @@ async def write_table_to_storage(
     table: pd.DataFrame, name: str, storage: PipelineStorage
 ) -> None:
     """Write a table to storage."""
-    await storage.set(f"{name}.parquet", table.to_parquet())
+    # CRITICAL: Run blocking pandas serialization in thread pool for gevent compatibility
+    # to_parquet() can block for large DataFrames (e.g., 146K embeddings)
+    import asyncio
+    parquet_bytes = await asyncio.to_thread(table.to_parquet)
+    await storage.set(f"{name}.parquet", parquet_bytes)
 
 
 async def delete_table_from_storage(name: str, storage: PipelineStorage) -> None:

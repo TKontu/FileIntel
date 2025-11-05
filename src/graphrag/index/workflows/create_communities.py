@@ -80,7 +80,12 @@ async def run_workflow(
     seed = config.cluster_graph.seed
     resolution = config.cluster_graph.resolution
 
-    output = create_communities(
+    # CRITICAL: Run CPU-intensive clustering in thread pool for gevent compatibility
+    # create_communities() does hierarchical_leiden(), NetworkX operations, and heavy pandas ops
+    # With 75K entities, this can block event loop for extended periods
+    import asyncio
+    output = await asyncio.to_thread(
+        create_communities,
         entities,
         relationships,
         max_cluster_size=max_cluster_size,
