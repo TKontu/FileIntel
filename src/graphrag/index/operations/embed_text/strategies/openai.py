@@ -122,11 +122,39 @@ async def _execute(
 ) -> list[list[float]]:
     async def embed(chunk: list[str]):
         async with semaphore:
+            # CRITICAL: Validate chunk before embedding
+            # Empty chunks indicate a bug in the sanitization logic
+            if not chunk:
+                raise ValueError("Empty chunk passed to embedding - this indicates a bug in text preparation")
+
+            # Check for empty/invalid texts in the chunk
+            invalid_texts = [i for i, text in enumerate(chunk) if not text or not text.strip()]
+            if invalid_texts:
+                logger.error(f"Found {len(invalid_texts)} invalid texts in chunk at indices: {invalid_texts}")
+                logger.error(f"Chunk contents: {chunk}")
+                raise ValueError(
+                    f"Chunk contains {len(invalid_texts)} empty/invalid texts. "
+                    "This indicates text sanitization failed. Check _prepare_embed_texts logic."
+                )
+
             # CRITICAL DEBUG: Log chunk details before embedding
             chunk_lengths = [len(text) for text in chunk]
             logger.info(f"GRAPHRAG EMBEDDING: Processing chunk with {len(chunk)} texts, lengths: {chunk_lengths}")
 
-            chunk_embeddings = await model.aembed_batch(chunk)
+            # CRITICAL DEBUG: Log before API call to detect hangs
+            logger.info(f"GRAPHRAG EMBEDDING: About to call aembed_batch for chunk with {len(chunk)} texts")
+
+            try:
+                chunk_embeddings = await model.aembed_batch(chunk)
+            except Exception as e:
+                logger.error(f"GRAPHRAG EMBEDDING ERROR: aembed_batch failed with {type(e).__name__}: {e}")
+                logger.error(f"GRAPHRAG EMBEDDING ERROR: Chunk had {len(chunk)} texts with lengths: {[len(t) for t in chunk]}")
+                logger.error(f"GRAPHRAG EMBEDDING ERROR: First 200 chars of each text: {[t[:200] for t in chunk]}")
+                raise
+
+            # CRITICAL DEBUG: Log after API call completes
+            logger.info(f"GRAPHRAG EMBEDDING: Completed aembed_batch, got {len(chunk_embeddings)} embeddings")
+
             result = np.array(chunk_embeddings)
             tick(1)
         return result
@@ -169,6 +197,33 @@ def _create_text_batches(
     return result
 
 
+def _sanitize_text_for_embedding(text: str) -> str:
+    """
+    Sanitize text to prevent vLLM 400 Bad Request errors.
+
+    Removes null bytes, control characters, and ensures valid UTF-8.
+    """
+    if not text:
+        return ""
+
+    # Remove null bytes (common cause of vLLM errors)
+    text = text.replace('\x00', '')
+
+    # Remove other control characters except newlines, tabs, carriage returns
+    # Control characters are in range 0x00-0x1F and 0x7F-0x9F
+    text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t\r')
+
+    # Ensure valid UTF-8 by encoding/decoding with error handling
+    try:
+        text = text.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
+    except Exception:
+        logger.warning("Text encoding/decoding failed, returning empty string")
+        return ""
+
+    # Final strip
+    return text.strip()
+
+
 def _prepare_embed_texts(
     input: list[str], splitter: TokenTextSplitter
 ) -> tuple[list[str], list[int]]:
@@ -181,12 +236,25 @@ def _prepare_embed_texts(
         if split_texts is None:
             continue
 
-        # CRITICAL: Filter out empty/whitespace-only strings to prevent vLLM errors
-        # "ValueError: please provide at least one prompt"
-        split_texts = [t.strip() for t in split_texts if t and t.strip()]
+        # CRITICAL: Sanitize and filter texts to prevent vLLM 400 errors
+        # - Remove null bytes, control characters
+        # - Filter empty/whitespace-only strings
+        # - Ensure valid UTF-8
+        sanitized_texts = []
+        for t in split_texts:
+            if not t:
+                continue
+            sanitized = _sanitize_text_for_embedding(t)
+            # Check both falsy and stripped to catch whitespace-only strings
+            if sanitized and sanitized.strip():
+                sanitized_texts.append(sanitized)
 
-        sizes.append(len(split_texts))
-        snippets.extend(split_texts)
+        if sanitized_texts:  # Only add if we have valid texts after sanitization
+            sizes.append(len(sanitized_texts))
+            snippets.extend(sanitized_texts)
+        else:
+            # No valid texts after sanitization, add 0 size
+            sizes.append(0)
 
     return snippets, sizes
 
