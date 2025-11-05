@@ -177,7 +177,10 @@ def _prepare_embed_texts(
         split_texts = splitter.split_text(text)
         if split_texts is None:
             continue
-        split_texts = [text for text in split_texts if len(text) > 0]
+
+        # CRITICAL: Filter out empty/whitespace-only strings to prevent vLLM errors
+        # "ValueError: please provide at least one prompt"
+        split_texts = [t.strip() for t in split_texts if t and t.strip()]
 
         sizes.append(len(split_texts))
         snippets.extend(split_texts)
