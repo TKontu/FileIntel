@@ -313,6 +313,12 @@ class GraphRAGConfigAdapter:
             logger.debug(
                 "GRAPHRAG DEBUG: Config created successfully with explicit base URLs"
             )
+
+            # Attach FileIntel settings to config for runtime access (workflow timeout, etc.)
+            # This allows run_pipeline.py to access settings.graphrag.workflow_timeout
+            config.fileintel_settings = settings
+            logger.debug("Attached FileIntel settings to GraphRagConfig for runtime access")
+
             return config
 
         finally:

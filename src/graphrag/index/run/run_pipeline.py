@@ -297,7 +297,30 @@ async def _run_pipeline_from_index(
             context.callbacks.workflow_start(name, None)
             work_time = time.time()
 
-            result = await workflow_function(config, context)
+            # Add timeout to prevent infinite hangs (configurable via settings)
+            try:
+                import asyncio
+                # Get workflow timeout from FileIntel settings attached to config
+                fileintel_settings = getattr(config, 'fileintel_settings', None)
+                if fileintel_settings and hasattr(fileintel_settings, 'graphrag'):
+                    timeout_value = fileintel_settings.graphrag.workflow_timeout
+                else:
+                    timeout_value = None  # No timeout if not configured
+
+                if timeout_value:
+                    result = await asyncio.wait_for(
+                        workflow_function(config, context),
+                        timeout=timeout_value
+                    )
+                else:
+                    result = await workflow_function(config, context)
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Workflow '{name}' timed out after {timeout_value} seconds")
+                logger.error("This usually indicates a blocking operation that froze the event loop")
+                raise RuntimeError(
+                    f"Workflow '{name}' exceeded maximum execution time ({timeout_value} seconds). "
+                    "Consider increasing GRAPHRAG__WORKFLOW_TIMEOUT in settings or fixing blocking operations."
+                )
 
             context.callbacks.workflow_end(name, result)
             elapsed = time.time() - work_time
@@ -341,7 +364,32 @@ async def _run_pipeline(
             last_workflow = name
             context.callbacks.workflow_start(name, None)
             work_time = time.time()
-            result = await workflow_function(config, context)
+
+            # Add timeout to prevent infinite hangs (configurable via settings)
+            try:
+                import asyncio
+                # Get workflow timeout from FileIntel settings attached to config
+                fileintel_settings = getattr(config, 'fileintel_settings', None)
+                if fileintel_settings and hasattr(fileintel_settings, 'graphrag'):
+                    timeout_value = fileintel_settings.graphrag.workflow_timeout
+                else:
+                    timeout_value = None  # No timeout if not configured
+
+                if timeout_value:
+                    result = await asyncio.wait_for(
+                        workflow_function(config, context),
+                        timeout=timeout_value
+                    )
+                else:
+                    result = await workflow_function(config, context)
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Workflow '{name}' timed out after {timeout_value} seconds")
+                logger.error("This usually indicates a blocking operation that froze the event loop")
+                raise RuntimeError(
+                    f"Workflow '{name}' exceeded maximum execution time ({timeout_value} seconds). "
+                    "Consider increasing GRAPHRAG__WORKFLOW_TIMEOUT in settings or fixing blocking operations."
+                )
+
             context.callbacks.workflow_end(name, result)
             yield PipelineRunResult(
                 workflow=name, result=result.result, state=context.state, errors=None

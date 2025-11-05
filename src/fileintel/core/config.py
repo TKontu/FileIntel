@@ -150,6 +150,13 @@ class GraphRAGSettings(BaseModel):
     validate_completeness: bool = Field(default=True)
     completeness_threshold: float = Field(default=0.99)
 
+    # Workflow timeout (seconds, None = no timeout)
+    workflow_timeout: int | None = Field(
+        default=7200,
+        description="Maximum time in seconds for a single workflow to complete (None = no timeout). "
+        "Prevents infinite hangs from blocking operations. Default: 7200 (2 hours)"
+    )
+
 
 class ChunkingSettings(BaseModel):
     """Unified chunking configuration for all RAG operations."""

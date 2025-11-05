@@ -104,12 +104,30 @@ class GraphRAGService:
         # Rerank sources if enabled
         sources = await self._rerank_sources_if_enabled(query, sources)
 
+        # SERVER-SIDE: Trace citations and format answer with Harvard references
+        formatted_answer = answer
+        traced_sources = sources
+        try:
+            # Get workspace path for this collection
+            index_info = await asyncio.to_thread(
+                self.storage.get_graphrag_index_info, collection_id
+            )
+            if index_info and index_info.get("index_path"):
+                workspace_path = index_info["index_path"]
+                formatted_answer, traced_sources = await self._trace_and_format_citations(
+                    answer, collection_id, workspace_path, sources
+                )
+        except Exception as e:
+            logger.warning(f"Citation tracing failed: {e}. Using raw answer.")
+            # Fallback to raw answer if tracing fails
+
         # Calculate confidence based on result quality
-        confidence = self._calculate_confidence(raw_response, sources)
+        confidence = self._calculate_confidence(raw_response, traced_sources)
 
         return {
-            "answer": answer,
-            "sources": sources,
+            "answer": formatted_answer,      # Formatted with Harvard citations
+            "raw_answer": answer,            # Original with [Data: Reports (X)]
+            "sources": traced_sources,
             "confidence": confidence,
             "metadata": {"search_type": "global"},
         }
@@ -225,6 +243,13 @@ class GraphRAGService:
         if self.settings.graphrag.validate_completeness:
             self._validate_index_completeness(workspace_path)
 
+        # Critical validation: Ensure embeddings are complete before marking as ready
+        # Run in thread pool to avoid blocking event loop (LanceDB operations are blocking)
+        await asyncio.to_thread(
+            self._validate_embedding_completeness,
+            workspace_path
+        )
+
         return workspace_path
 
     def _count_graphrag_results(self, workspace_path: str) -> tuple[int, int, int]:
@@ -324,6 +349,151 @@ class GraphRAGService:
         except Exception as e:
             # Don't fail indexing if validation fails
             logger.error(f"Error validating index completeness: {e}", exc_info=True)
+
+    def _validate_embedding_completeness(self, workspace_path: str) -> None:
+        """Validate that embeddings were created for all expected items.
+
+        This is a CRITICAL validation that raises an exception if embeddings are incomplete.
+        Unlike _validate_index_completeness() which only logs warnings, this method will
+        prevent the index from being marked as "ready" if embeddings are missing.
+
+        Args:
+            workspace_path: Path to GraphRAG workspace directory (output dir)
+
+        Raises:
+            ValueError: If embeddings are incomplete
+        """
+        import os
+        import pandas as pd
+
+        logger.info("🔍 Validating embedding completeness (CRITICAL)...")
+
+        output_dir = os.path.join(workspace_path, "output")
+        lancedb_dir = os.path.join(output_dir, "lancedb")
+
+        # Check if LanceDB directory exists
+        if not os.path.exists(lancedb_dir):
+            raise ValueError(
+                f"LanceDB directory not found at {lancedb_dir}. "
+                "Embeddings were not created. This indicates the generate_text_embeddings "
+                "workflow did not complete successfully."
+            )
+
+        try:
+            import lancedb
+
+            # Connect to LanceDB
+            db = lancedb.connect(lancedb_dir)
+
+            # Validate text unit embeddings (most critical)
+            text_units_file = os.path.join(output_dir, "text_units.parquet")
+            if os.path.exists(text_units_file):
+                text_units_df = pd.read_parquet(text_units_file)
+                expected_count = len(text_units_df)
+
+                try:
+                    table = db.open_table("default-text_unit-text")
+                    actual_count = table.count_rows()
+
+                    completeness = actual_count / expected_count if expected_count > 0 else 0.0
+
+                    if completeness < 0.95:  # Less than 95% complete
+                        raise ValueError(
+                            f"Text unit embeddings INCOMPLETE: {actual_count:,}/{expected_count:,} "
+                            f"({completeness:.1%} complete). Missing {expected_count - actual_count:,} embeddings. "
+                            "This indicates the embedding workflow hung or was killed before completion. "
+                            "Status cannot be set to 'ready' with incomplete embeddings."
+                        )
+
+                    logger.info(
+                        f"✅ Text unit embeddings complete: {actual_count:,}/{expected_count:,} "
+                        f"({completeness:.1%})"
+                    )
+
+                except Exception as e:
+                    if "not found" in str(e).lower():
+                        raise ValueError(
+                            f"Text unit embedding table not found in LanceDB. "
+                            f"Expected table 'default-text_unit-text' does not exist. "
+                            "This indicates embeddings were never created."
+                        )
+                    raise
+
+            # Validate entity embeddings
+            entities_file = os.path.join(output_dir, "entities.parquet")
+            if os.path.exists(entities_file):
+                entities_df = pd.read_parquet(entities_file)
+                expected_count = len(entities_df)
+
+                try:
+                    table = db.open_table("default-entity-description")
+                    actual_count = table.count_rows()
+
+                    completeness = actual_count / expected_count if expected_count > 0 else 0.0
+
+                    if completeness < 0.95:
+                        raise ValueError(
+                            f"Entity embeddings INCOMPLETE: {actual_count:,}/{expected_count:,} "
+                            f"({completeness:.1%} complete)"
+                        )
+
+                    logger.info(
+                        f"✅ Entity embeddings complete: {actual_count:,}/{expected_count:,} "
+                        f"({completeness:.1%})"
+                    )
+
+                except Exception as e:
+                    if "not found" in str(e).lower():
+                        logger.warning(
+                            "Entity embedding table not found - may not be configured"
+                        )
+                    else:
+                        raise
+
+            # Validate community embeddings
+            communities_file = os.path.join(output_dir, "community_reports.parquet")
+            if os.path.exists(communities_file):
+                communities_df = pd.read_parquet(communities_file)
+                expected_count = len(communities_df)
+
+                try:
+                    table = db.open_table("default-community_report-summary")
+                    actual_count = table.count_rows()
+
+                    completeness = actual_count / expected_count if expected_count > 0 else 0.0
+
+                    if completeness < 0.95:
+                        raise ValueError(
+                            f"Community embeddings INCOMPLETE: {actual_count:,}/{expected_count:,} "
+                            f"({completeness:.1%} complete)"
+                        )
+
+                    logger.info(
+                        f"✅ Community embeddings complete: {actual_count:,}/{expected_count:,} "
+                        f"({completeness:.1%})"
+                    )
+
+                except Exception as e:
+                    if "not found" in str(e).lower():
+                        logger.warning(
+                            "Community embedding table not found - may not be configured"
+                        )
+                    else:
+                        raise
+
+            logger.info("✅ All embedding validations passed - index is complete")
+
+        except ImportError:
+            logger.warning(
+                "lancedb not installed - skipping embedding validation. "
+                "This is not recommended for production."
+            )
+        except Exception as e:
+            # Re-raise ValueError as-is (validation failures)
+            if isinstance(e, ValueError):
+                raise
+            # Wrap other exceptions
+            raise ValueError(f"Error validating embeddings: {e}") from e
 
     async def global_search(self, query: str, collection_id: str):
         """Performs a global search on the GraphRAG index."""
@@ -691,3 +861,305 @@ class GraphRAGService:
 
         # Return default confidence if we have sources, otherwise reduce confidence
         return default_confidence if sources else default_confidence * 0.5
+
+    async def _trace_and_format_citations(
+        self, answer: str, collection_id: str, workspace_path: str, reranked_sources: List[Dict[str, Any]]
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        """
+        SERVER-SIDE: Trace GraphRAG citations to source documents and format with Harvard citations.
+
+        Args:
+            answer: Raw GraphRAG answer with inline citations like [Data: Reports (6826)]
+            collection_id: Collection ID
+            workspace_path: Path to GraphRAG output directory (e.g., /data/.../output)
+            reranked_sources: Sources that have been reranked (if enabled)
+
+        Returns:
+            Tuple of (formatted_answer, traced_sources)
+        """
+        import re
+        import os
+        import pandas as pd
+
+        # 1. Parse citation IDs from answer
+        citation_ids = self._parse_citation_ids(answer)
+
+        if not citation_ids["report_ids"] and not citation_ids["entity_ids"]:
+            # No citations to trace
+            logger.debug("No GraphRAG citations found in answer")
+            return answer, reranked_sources
+
+        logger.info(f"Tracing GraphRAG citations: {len(citation_ids['report_ids'])} reports, {len(citation_ids['entity_ids'])} entities")
+
+        # 2. SERVER-SIDE: Trace citations to sources using direct parquet access
+        traced_sources = await asyncio.to_thread(
+            self._trace_citations_server_side,
+            citation_ids,
+            workspace_path
+        )
+
+        if not traced_sources:
+            logger.warning("No sources traced from citations")
+            return answer, reranked_sources
+
+        logger.info(f"Traced {len(traced_sources)} source documents from citations")
+
+        # 3. Format answer with Harvard citations
+        formatted_answer = await self._format_with_harvard_citations(
+            answer, traced_sources, collection_id, reranked_sources
+        )
+
+        return formatted_answer, traced_sources
+
+    def _trace_citations_server_side(self, citation_ids: Dict[str, set], workspace_path: str) -> List[Dict[str, Any]]:
+        """
+        SERVER-SIDE: Trace citations to source documents using direct parquet file access.
+        Simplified version that doesn't require API client.
+        """
+        import pandas as pd
+        import os
+
+        # Helper to safely load parquet files
+        def load_parquet_safe(filename):
+            path = os.path.join(workspace_path, filename)
+            if os.path.exists(path):
+                try:
+                    return pd.read_parquet(path)
+                except Exception as e:
+                    logger.warning(f"Failed to load {filename}: {e}")
+            return None
+
+        # Load required parquet files
+        communities_df = load_parquet_safe("communities.parquet")
+        entities_df = load_parquet_safe("entities.parquet")
+        text_units_df = load_parquet_safe("text_units.parquet")
+        documents_df = load_parquet_safe("documents.parquet")
+
+        if communities_df is None or entities_df is None:
+            logger.error(f"Required parquet files not found in {workspace_path}")
+            logger.error(f"  communities.parquet exists: {communities_df is not None}")
+            logger.error(f"  entities.parquet exists: {entities_df is not None}")
+            return []
+
+        if text_units_df is None:
+            logger.error(f"text_units.parquet not found in {workspace_path}")
+            return []
+
+        if documents_df is None:
+            logger.warning(f"documents.parquet not found in {workspace_path}, will skip document mapping")
+            # Can still return partial results without document details
+
+        # Trace: Report IDs → Community IDs → Entity IDs → Text Unit IDs → Chunks → Documents
+        text_unit_ids = set()
+
+        # From report IDs (community IDs)
+        report_ids = citation_ids.get("report_ids", [])
+        logger.debug(f"Tracing {len(report_ids)} report citations to text units")
+        for report_id in report_ids:
+            # Find community by ID
+            comm_rows = communities_df[communities_df["community"] == report_id]
+            for _, comm in comm_rows.iterrows():
+                entity_ids = comm.get("entity_ids", [])
+                if entity_ids is not None and len(entity_ids) > 0:
+                    # Get text units from entities
+                    for ent_id in entity_ids:
+                        ent_rows = entities_df[entities_df["id"] == ent_id]
+                        for _, ent in ent_rows.iterrows():
+                            tu_ids = ent.get("text_unit_ids", [])
+                            if tu_ids is not None and len(tu_ids) > 0:
+                                text_unit_ids.update(tu_ids)
+
+        # From entity IDs directly
+        entity_ids = citation_ids.get("entity_ids", [])
+        logger.debug(f"Tracing {len(entity_ids)} entity citations to text units")
+        for entity_id in entity_ids:
+            ent_rows = entities_df[entities_df["id"] == entity_id]
+            for _, ent in ent_rows.iterrows():
+                tu_ids = ent.get("text_unit_ids", [])
+                if tu_ids is not None and len(tu_ids) > 0:
+                    text_unit_ids.update(tu_ids)
+
+        if not text_unit_ids:
+            logger.warning(f"No text units found for {len(report_ids)} reports and {len(entity_ids)} entities")
+            return []
+
+        logger.debug(f"Found {len(text_unit_ids)} text units from citations")
+
+        # Map text units to chunk UUIDs
+        # Note: text_units.document_ids contains FileIntel chunk UUIDs (GraphRAG's "document" = FileIntel's "chunk")
+        chunk_uuids = set()
+        if text_units_df is not None:
+            for tu_id in text_unit_ids:
+                tu_rows = text_units_df[text_units_df["id"] == tu_id]
+                for _, tu in tu_rows.iterrows():
+                    doc_ids = tu.get("document_ids")
+                    if doc_ids is not None and len(doc_ids) > 0:
+                        chunk_uuids.update(doc_ids)
+
+        if not chunk_uuids:
+            logger.warning(f"No chunk UUIDs found from {len(text_unit_ids)} text units")
+            return []
+
+        logger.debug(f"Mapped to {len(chunk_uuids)} chunk UUIDs, querying document metadata")
+
+        if documents_df is None:
+            logger.warning("documents.parquet not available, skipping document grouping")
+            return []
+
+        # Group chunks by document and get metadata
+        doc_chunks = {}
+        for chunk_uuid in chunk_uuids:
+            doc_rows = documents_df[documents_df["id"] == str(chunk_uuid)]
+            if not doc_rows.empty:
+                doc_title = doc_rows.iloc[0].get("title", "Unknown")
+                if doc_title not in doc_chunks:
+                    doc_chunks[doc_title] = {"chunk_uuids": [], "pages": set()}
+                doc_chunks[doc_title]["chunk_uuids"].append(chunk_uuid)
+
+        # Get page numbers from storage
+        sources = []
+        for doc_title, info in doc_chunks.items():
+            pages = set()
+            document_id = None
+
+            # Query storage for chunk metadata
+            for chunk_uuid in info["chunk_uuids"][:10]:  # Limit to first 10 chunks
+                try:
+                    chunk = self.storage.get_chunk_by_id(str(chunk_uuid))
+                    if chunk and chunk.chunk_metadata:
+                        page = chunk.chunk_metadata.get("page_number")
+                        if page is not None:
+                            pages.add(page)
+                        if not document_id:
+                            document_id = chunk.document_id
+                except Exception as e:
+                    logger.debug(f"Could not get chunk {chunk_uuid}: {e}")
+                    continue
+
+            sources.append({
+                "document_name": doc_title,
+                "document_id": str(document_id) if document_id else None,
+                "pages": pages,
+                "chunk_uuids": [str(c) for c in info["chunk_uuids"]],
+                "chunk_count": len(info["chunk_uuids"])
+            })
+
+        logger.info(f"Citation tracing complete: found {len(sources)} source documents with page numbers")
+        return sources
+
+    def _parse_citation_ids(self, answer_text: str) -> Dict[str, set]:
+        """Parse inline GraphRAG citations and extract specific IDs."""
+        import re
+
+        citation_pattern = r'\[Data: (Reports|Entities|Relationships) \(([0-9, ]+)\)\]'
+        citations = re.findall(citation_pattern, answer_text)
+
+        parsed = {
+            "report_ids": set(),
+            "entity_ids": set(),
+            "relationship_ids": set()
+        }
+
+        for cit_type, ids_str in citations:
+            ids = [int(id.strip()) for id in ids_str.split(',')]
+
+            if cit_type == "Reports":
+                parsed["report_ids"].update(ids)
+            elif cit_type == "Entities":
+                parsed["entity_ids"].update(ids)
+            elif cit_type == "Relationships":
+                parsed["relationship_ids"].update(ids)
+
+        return parsed
+
+    async def _format_with_harvard_citations(
+        self, answer_text: str, sources: List[Dict], collection_id: str, reranked_sources: List[Dict]
+    ) -> str:
+        """Format answer by replacing inline citations with Harvard-style references."""
+        import re
+
+        # Find all citation contexts (sentence + citation)
+        citation_pattern = r'([^.!?]*\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+)\][^.!?]*[.!?])'
+        citation_contexts = list(re.finditer(citation_pattern, answer_text))
+
+        if not citation_contexts:
+            return answer_text
+
+        logger.info(f"Formatting {len(citation_contexts)} citations with Harvard style")
+
+        # Build mapping of citation marker to Harvard citation
+        citation_mappings = {}
+
+        for match in citation_contexts:
+            full_context = match.group(1)
+
+            # Extract the citation marker
+            marker_match = re.search(r'\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+)\]', full_context)
+            if not marker_match:
+                continue
+
+            citation_marker = marker_match.group(0)
+
+            if citation_marker in citation_mappings:
+                continue  # Already processed
+
+            # Get context text without citation for matching
+            context_text = full_context.replace(citation_marker, '').strip()
+
+            # Build citation from all available sources
+            # Since we traced all citations together, use combined source list
+            # Future improvement: map each specific citation ID to its sources
+            if sources:
+                # Use first source as primary, but indicate multiple sources if available
+                if len(sources) == 1:
+                    harvard_citation = self._build_harvard_citation(sources[0], reranked_sources)
+                else:
+                    # Multiple sources - build combined citation
+                    primary_source = sources[0]
+                    harvard_citation = self._build_harvard_citation(primary_source, reranked_sources)
+                    if len(sources) > 1:
+                        harvard_citation += f" et al. ({len(sources)} sources)"
+
+                citation_mappings[citation_marker] = harvard_citation
+            else:
+                logger.warning(f"No sources available for citation: {citation_marker}")
+
+        # Replace citations
+        result = answer_text
+        for marker, harvard_citation in citation_mappings.items():
+            escaped_marker = re.escape(marker)
+            result = re.sub(rf'\s*{escaped_marker}', f' ({harvard_citation})', result)
+
+        return result
+
+    def _build_harvard_citation(self, source: Dict, reranked_sources: List[Dict]) -> str:
+        """Build Harvard-style citation from source metadata."""
+        # Extract document info
+        document_name = source.get("document_name", "Unknown")
+        pages = source.get("pages", set())
+
+        # Check if this source has reranking score
+        reranked_score = None
+        if reranked_sources:
+            # Find matching source in reranked list
+            for rs in reranked_sources:
+                if rs.get("document_name") == document_name:
+                    reranked_score = rs.get("reranked_score")
+                    break
+
+        # Format page numbers
+        page_str = ""
+        if pages:
+            pages_list = sorted(list(pages))[:3]  # First 3 pages
+            if len(pages_list) == 1:
+                page_str = f", p. {pages_list[0]}"
+            else:
+                page_str = f", pp. {', '.join(map(str, pages_list))}"
+
+        # Add reranking score if available and enabled
+        score_str = ""
+        if reranked_score is not None and self.settings.rag.reranking.enabled:
+            score_str = f", relevance: {reranked_score:.2f}"
+
+        # Simplified citation format (can be enhanced with author/year parsing)
+        return f"{document_name}{page_str}{score_str}"

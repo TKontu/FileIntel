@@ -719,25 +719,42 @@ def build_graphrag_index_task(
             storage.update_graphrag_index_status(collection_id, "building")
             logger.info(f"Set GraphRAG index status to 'building' for collection {collection_id}")
 
-            # For gevent: Run async code using asyncio.run_coroutine_threadsafe
-            # This submits the coroutine to the event loop from outside
-            loop = asyncio.get_event_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                graphrag_service.build_index_with_resume(
-                    all_chunks,
-                    collection_id,
-                    enable_resume=enable_resume,
-                    validate_checkpoints=True,
-                ),
-                loop
-            )
-            workspace_path = future.result()  # Wait for completion
+            # Wrap indexing in try/except to ensure status is set correctly on failure
+            try:
+                # For gevent: Run async code using asyncio.run_coroutine_threadsafe
+                # This submits the coroutine to the event loop from outside
+                loop = asyncio.get_event_loop()
+                future = asyncio.run_coroutine_threadsafe(
+                    graphrag_service.build_index_with_resume(
+                        all_chunks,
+                        collection_id,
+                        enable_resume=enable_resume,
+                        validate_checkpoints=True,
+                    ),
+                    loop
+                )
+                workspace_path = future.result()  # Wait for completion
 
-            self.update_progress(4, 5, "GraphRAG index completed")
+                self.update_progress(4, 5, "GraphRAG index completed")
 
-            # Set status to "ready" when indexing completes successfully
-            storage.update_graphrag_index_status(collection_id, "ready")
-            logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
+                # Set status to "ready" ONLY if indexing completed successfully
+                # This includes passing embedding completeness validation
+                storage.update_graphrag_index_status(collection_id, "ready")
+                logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
+
+            except Exception as index_error:
+                # If indexing fails (timeout, incomplete embeddings, etc.), set status to "error"
+                logger.error(f"Indexing failed for collection {collection_id}: {index_error}")
+
+                # Protect status update - don't let it mask the original error
+                try:
+                    storage.update_graphrag_index_status(collection_id, "error")
+                    logger.info(f"Set GraphRAG index status to 'error' for collection {collection_id}")
+                except Exception as status_error:
+                    logger.error(f"Failed to update status to 'error': {status_error}")
+
+                # Re-raise original error (not status error)
+                raise index_error
 
             # Get final status
             future = asyncio.run_coroutine_threadsafe(

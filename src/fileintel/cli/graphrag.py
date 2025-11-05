@@ -98,75 +98,47 @@ def query_with_graphrag(
     cli_handler.console.print(f"[bold blue]RAG Type:[/bold blue] graph")
     cli_handler.console.print()
 
-    # Handle both "answer" (from service wrapper) and "response" (from direct GraphRAG)
-    answer = response_data.get("answer") or response_data.get("response", "No answer provided")
+    # SERVER NOW FORMATS THE ANSWER: Use formatted answer from server (with Harvard citations)
+    # If server provides formatted answer, use it; otherwise fallback to raw answer
+    answer = response_data.get("answer", "No answer provided")
 
     # If answer is a dict (raw GraphRAG response), extract the response text
     if isinstance(answer, dict):
         answer = answer.get("response", str(answer))
 
-    # Convert citations if show_sources is enabled
-    display_answer = answer
-    sources = None
-    citation_ids = None
-    if show_sources:
-        converted_answer, sources, citation_ids = _display_source_documents(answer, collection_identifier, cli_handler)
-        if converted_answer:
-            display_answer = converted_answer
+    # Get sources from response (already traced by server)
+    sources = response_data.get("sources", [])
 
     # 1. ANSWER FIRST (matching vector query format)
-    cli_handler.console.print(f"[bold green]Answer:[/bold green] {display_answer}")
+    cli_handler.console.print(f"[bold green]Answer:[/bold green] {answer}")
 
     # 2. SOURCES SECOND (matching vector query format)
     if show_sources and sources:
         cli_handler.console.print(f"\n[bold blue]Sources ({len(sources)}):[/bold blue]")
         for i, source in enumerate(sources, 1):
-            doc = source.get("document", "Unknown")
-            metadata = source.get("metadata", {})
+            # Server now returns: document_name, pages, chunk_count
+            doc_name = source.get("document_name", "Unknown")
+            pages = source.get("pages", set())
             chunk_count = source.get("chunk_count", 0)
 
-            # Build in-text citation
-            authors = metadata.get("author_surnames", []) or metadata.get("authors", [])
-            year = metadata.get("publication_year") or metadata.get("year")
-
-            if authors and year:
-                if len(authors) == 1:
-                    in_text = f"({authors[0]}, {year})"
-                elif len(authors) == 2:
-                    in_text = f"({authors[0]} & {authors[1]}, {year})"
+            # Format pages
+            if pages:
+                pages_list = sorted(list(pages))[:5]  # Show first 5 pages
+                if len(pages_list) == 1:
+                    page_str = f", p. {pages_list[0]}"
                 else:
-                    in_text = f"({authors[0]} et al., {year})"
-            elif year:
-                title = metadata.get("title", doc.replace('.pdf', ''))
-                in_text = f"({title}, {year})"
+                    page_str = f", pp. {', '.join(map(str, pages_list))}"
             else:
-                in_text = f"({doc.replace('.pdf', '')})"
+                page_str = ""
 
-            # Add page info if available
-            page_numbers = source.get("page_numbers", "")
-            if page_numbers:
-                in_text = f"{in_text[:-1]}, {page_numbers})"
+            # Build citation
+            citation = f"({doc_name}{page_str})"
 
-            # Build full citation (document name)
-            full_citation = doc
-
-            # Show chunk count as relevance indicator
-            max_chunk_count = max([s.get('chunk_count', 1) for s in sources])
-            relevance = chunk_count / max_chunk_count if max_chunk_count > 0 else 0.0
-            cli_handler.console.print(f"  {i}. {in_text} - {full_citation} (relevance: {relevance:.3f})")
+            # Show chunk count as context indicator
+            cli_handler.console.print(f"  {i}. {citation} - {chunk_count} chunks referenced")
 
     # 3. ADDITIONAL CONTEXT AT THE END (GraphRAG-specific information)
-
-    # Show citation summary first (if available)
-    if show_sources and citation_ids:
-        if citation_ids["report_ids"] or citation_ids["entity_ids"] or citation_ids["relationship_ids"]:
-            cli_handler.console.print("\n[bold blue]GraphRAG Source References:[/bold blue]")
-            if citation_ids["report_ids"]:
-                cli_handler.console.print(f"  • Community Reports: {len(citation_ids['report_ids'])} referenced")
-            if citation_ids["entity_ids"]:
-                cli_handler.console.print(f"  • Entities: {len(citation_ids['entity_ids'])} referenced")
-            if citation_ids["relationship_ids"]:
-                cli_handler.console.print(f"  • Relationships: {len(citation_ids['relationship_ids'])} referenced")
+    # Citations are now formatted in the answer text by the server
 
     # Show context information if available (from GraphRAG response)
     context = response_data.get("context", {})
