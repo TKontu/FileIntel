@@ -323,8 +323,8 @@ class GraphRAGConfigAdapter:
             return config
 
         finally:
-            # Restore original environment variables
-            if original_openai_base_url is not None:
-                os.environ["OPENAI_BASE_URL"] = original_openai_base_url
-            if original_openai_api_base is not None:
-                os.environ["OPENAI_API_BASE"] = original_openai_api_base
+            # DO NOT restore environment variables here!
+            # fnllm reads environment variables when making HTTP requests, not just during config creation.
+            # Restoring them here would cause the wrong URL to be used at runtime.
+            # Leave OPENAI_BASE_URL set to embedding_base_url for the lifetime of the process.
+            pass
