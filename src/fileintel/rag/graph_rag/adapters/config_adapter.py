@@ -316,7 +316,8 @@ class GraphRAGConfigAdapter:
 
             # Attach FileIntel settings to config for runtime access (workflow timeout, etc.)
             # This allows run_pipeline.py to access settings.graphrag.workflow_timeout
-            config.fileintel_settings = settings
+            # Use object.__setattr__() to bypass Pydantic validation (GraphRagConfig is a Pydantic model)
+            object.__setattr__(config, 'fileintel_settings', settings)
             logger.debug("Attached FileIntel settings to GraphRagConfig for runtime access")
 
             return config
