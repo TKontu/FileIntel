@@ -108,10 +108,22 @@ class GraphRAGService:
         # Extract response from dict (global_search returns a dict from data_adapter)
         if isinstance(raw_response, dict):
             answer = raw_response.get("response", str(raw_response))
-            sources = raw_response.get("context", {}).get("data", [])
+
+            # Debug: Log what's in the context
+            context = raw_response.get("context", {})
+            logger.info(f"GraphRAG context type: {type(context)}, keys: {context.keys() if isinstance(context, dict) else 'N/A'}")
+
+            # Try different ways to extract sources from context
+            if isinstance(context, dict):
+                sources = context.get("data", []) or context.get("reports", []) or context.get("sources", [])
+            else:
+                # Context might be a SearchResult object
+                sources = getattr(context, "data", []) or getattr(context, "reports", []) or []
         else:
             answer = getattr(raw_response, "response", str(raw_response))
             sources = getattr(raw_response, "context_data", [])
+
+        logger.info(f"GraphRAG returned {len(sources)} sources for reranking")
 
         # Rerank sources if enabled
         sources = await self._rerank_sources_if_enabled(query, sources)
@@ -1075,21 +1087,30 @@ class GraphRAGService:
             logger.warning(f"No chunk UUIDs found from {len(text_unit_ids)} text units")
             return []
 
-        logger.info(f"Mapped to {len(chunk_uuids)} chunks, querying storage for page numbers...")
+        logger.info(f"Mapped to {len(chunk_uuids)} chunks, grouping by document...")
 
         if documents_df is None:
             logger.warning("documents.parquet not available, skipping document grouping")
             return []
 
-        # Group chunks by document and get metadata
+        # Step 4: Batch lookup - Group chunks by document
+        # Convert chunk UUIDs to strings for matching
+        chunk_uuid_strs = [str(uuid) for uuid in chunk_uuids]
+
+        # Batch filter: Get all matching documents at once
+        doc_mask = documents_df["id"].isin(chunk_uuid_strs)
+        matched_docs = documents_df[doc_mask]
+
+        # Group by document title
         doc_chunks = {}
-        for chunk_uuid in chunk_uuids:
-            doc_rows = documents_df[documents_df["id"] == str(chunk_uuid)]
-            if not doc_rows.empty:
-                doc_title = doc_rows.iloc[0].get("title", "Unknown")
-                if doc_title not in doc_chunks:
-                    doc_chunks[doc_title] = {"chunk_uuids": [], "pages": set()}
-                doc_chunks[doc_title]["chunk_uuids"].append(chunk_uuid)
+        for _, row in matched_docs.iterrows():
+            doc_title = row.get("title", "Unknown")
+            chunk_id = row.get("id")
+            if doc_title not in doc_chunks:
+                doc_chunks[doc_title] = {"chunk_uuids": [], "pages": set()}
+            doc_chunks[doc_title]["chunk_uuids"].append(chunk_id)
+
+        logger.info(f"Grouped {len(chunk_uuids)} chunks into {len(doc_chunks)} documents")
 
         # Extract relevant document names from reranked sources (these are the ACTUAL sources used in the answer)
         relevant_doc_names = set()
@@ -1100,11 +1121,11 @@ class GraphRAGService:
                     relevant_doc_names.add(doc_name)
 
         # Sort documents by relevance:
-        # 1. Documents that appear in reranked_sources (actually used in answer)
-        # 2. Documents with most cited chunks
+        # 1. Documents that appear in reranked_sources (actually used in answer) - if available
+        # 2. Documents with most cited chunks (fallback when GraphRAG doesn't return sources)
         def doc_relevance_score(item):
             doc_name, info = item
-            in_reranked = 1 if doc_name in relevant_doc_names else 0
+            in_reranked = 1 if (relevant_doc_names and doc_name in relevant_doc_names) else 0
             chunk_count = len(info["chunk_uuids"])
             return (in_reranked, chunk_count)  # Sort by (reranked first, then chunk count)
 
@@ -1112,7 +1133,10 @@ class GraphRAGService:
 
         # Limit to top 10 most relevant documents to avoid slow storage queries
         top_docs = sorted_docs[:10]
-        logger.info(f"Selected top {len(top_docs)} most relevant documents from {len(doc_chunks)} total (reranked sources: {len(relevant_doc_names)})")
+        if relevant_doc_names:
+            logger.info(f"Selected top {len(top_docs)} documents from {len(doc_chunks)} total (prioritized by reranked sources: {len(relevant_doc_names)})")
+        else:
+            logger.info(f"Selected top {len(top_docs)} documents from {len(doc_chunks)} total (prioritized by chunk frequency - no reranked sources available)")
 
         # Get page numbers from storage
         sources = []
