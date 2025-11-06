@@ -169,8 +169,8 @@ async def _submit_query_task(
                 if use_local:
                     task_result = chain(
                         query_graph_local.s(request.question, collection.id),
-                        # Use .si() (immutable signature) with explicit kwargs for clarity and type safety
-                        enhance_adaptive_result.si(
+                        # Use .s() to accept the result from previous task as first argument
+                        enhance_adaptive_result.s(
                             strategy=search_type,
                             local_score=local_score,
                             global_score=global_score,
@@ -181,8 +181,8 @@ async def _submit_query_task(
                 else:
                     task_result = chain(
                         query_graph_global.s(request.question, collection.id),
-                        # Use .si() (immutable signature) with explicit kwargs for clarity and type safety
-                        enhance_adaptive_result.si(
+                        # Use .s() to accept the result from previous task as first argument
+                        enhance_adaptive_result.s(
                             strategy=search_type,
                             local_score=local_score,
                             global_score=global_score,
@@ -437,17 +437,28 @@ async def get_query_status(
         import asyncio
 
         collections = await asyncio.to_thread(storage.get_all_collections)
-        collection_info = []
 
+        # Parallelize all collection data queries using asyncio.gather
+        collection_data_tasks = []
         for collection in collections:
-            # Wrap blocking storage calls
-            documents = await asyncio.to_thread(
-                storage.get_documents_by_collection, collection.id
-            )
-            chunks = await asyncio.to_thread(
-                storage.get_all_chunks_for_collection, collection.id
+            # Create parallel tasks for documents and chunks
+            collection_data_tasks.append(
+                asyncio.gather(
+                    asyncio.to_thread(
+                        storage.get_documents_by_collection, collection.id
+                    ),
+                    asyncio.to_thread(
+                        storage.get_all_chunks_for_collection, collection.id
+                    )
+                )
             )
 
+        # Execute all collection queries in parallel
+        all_collection_data = await asyncio.gather(*collection_data_tasks)
+
+        # Build collection info from parallel results
+        collection_info = []
+        for collection, (documents, chunks) in zip(collections, all_collection_data):
             collection_info.append(
                 {
                     "id": collection.id,

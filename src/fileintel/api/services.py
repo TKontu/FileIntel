@@ -86,7 +86,7 @@ class DocumentUploadService:
 
         return file_path, file_hash.hexdigest(), file_size
 
-    def check_duplicate_document(
+    async def check_duplicate_document(
         self, content_hash: str, collection_id: str, file_path: str
     ) -> Optional[Document]:
         """
@@ -95,7 +95,11 @@ class DocumentUploadService:
         Returns:
             Document: Existing document if duplicate found, None otherwise
         """
-        existing_doc = self.storage.get_document_by_hash_and_collection(
+        import asyncio
+
+        # Wrap blocking storage call
+        existing_doc = await asyncio.to_thread(
+            self.storage.get_document_by_hash_and_collection,
             content_hash, collection_id
         )
         if existing_doc:
@@ -169,7 +173,7 @@ class DocumentUploadService:
         )
 
         # Check for duplicates
-        existing_doc = self.check_duplicate_document(
+        existing_doc = await self.check_duplicate_document(
             content_hash, collection.id, file_path
         )
         if existing_doc:
@@ -219,7 +223,7 @@ class DocumentUploadService:
             )
 
             # Check for duplicates - return skip info if found
-            existing_doc = self.check_duplicate_document(
+            existing_doc = await self.check_duplicate_document(
                 content_hash, collection.id, file_path
             )
             if existing_doc:

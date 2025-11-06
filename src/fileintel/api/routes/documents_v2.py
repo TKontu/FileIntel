@@ -370,10 +370,13 @@ async def get_chunk_by_id(
     storage: PostgreSQLStorage = Depends(get_storage)
 ):
     """Get a single chunk by its UUID for GraphRAG source tracing."""
+    import asyncio
+
     # Log request
     logger.info(f"Chunk requested: chunk_id={chunk_id}")
 
-    chunk = storage.get_chunk_by_id(chunk_id)
+    # Wrap blocking storage call
+    chunk = await asyncio.to_thread(storage.get_chunk_by_id, chunk_id)
 
     if not chunk:
         raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")

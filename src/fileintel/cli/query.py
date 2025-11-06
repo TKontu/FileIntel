@@ -39,12 +39,33 @@ def query_collection(
     result = cli_handler.handle_api_call(_query, "query collection")
     response_data = result.get("data", result)
 
+    # Check if this is an async response (contains task_id)
+    if "task_id" in response_data:
+        task_id = response_data["task_id"]
+        cli_handler.console.print(
+            f"[blue]Query submitted as task {task_id[:8]}... Waiting for completion...[/blue]"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        task_data = task_result.get("data", {})
+        if task_data.get("status") == "SUCCESS":
+            response_data = task_data.get("result", {})
+        else:
+            cli_handler.console.print(
+                f"[bold red]Query task failed:[/bold red] {task_data.get('error', 'Unknown error')}"
+            )
+            raise typer.Exit(1)
+
     cli_handler.console.print(f"[bold blue]Query:[/bold blue] {question}")
     cli_handler.console.print(
         f"[bold blue]Collection:[/bold blue] {collection_identifier}"
     )
     cli_handler.console.print(
-        f"[bold blue]RAG Type:[/bold blue] {response_data.get('rag_type', rag_type)}"
+        f"[bold blue]RAG Type:[/bold blue] {response_data.get('rag_type', response_data.get('query_type', rag_type))}"
     )
     cli_handler.console.print()
 
@@ -91,6 +112,27 @@ def query_document(
 
     result = cli_handler.handle_api_call(_query_doc, "query document")
     response_data = result.get("data", result)
+
+    # Check if this is an async response (contains task_id)
+    if "task_id" in response_data:
+        task_id = response_data["task_id"]
+        cli_handler.console.print(
+            f"[blue]Query submitted as task {task_id[:8]}... Waiting for completion...[/blue]"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        task_data = task_result.get("data", {})
+        if task_data.get("status") == "SUCCESS":
+            response_data = task_data.get("result", {})
+        else:
+            cli_handler.console.print(
+                f"[bold red]Query task failed:[/bold red] {task_data.get('error', 'Unknown error')}"
+            )
+            raise typer.Exit(1)
 
     cli_handler.console.print(f"[bold blue]Query:[/bold blue] {question}")
     cli_handler.console.print(
@@ -140,6 +182,26 @@ def test_query_system(
 
         result = cli_handler.handle_api_call(_test_query, "test query")
         response_data = result.get("data", result)
+
+        # Check if this is an async response (contains task_id)
+        if "task_id" in response_data:
+            task_id = response_data["task_id"]
+            cli_handler.console.print(
+                f"[blue]Test query submitted as task {task_id[:8]}... Waiting for completion...[/blue]"
+            )
+
+            # Wait for task to complete
+            api = cli_handler.get_api_client()
+            task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+            # Extract result from completed task
+            task_data = task_result.get("data", {})
+            if task_data.get("status") == "SUCCESS":
+                response_data = task_data.get("result", {})
+            else:
+                raise Exception(
+                    f"Query task failed: {task_data.get('error', 'Unknown error')}"
+                )
 
         cli_handler.display_success("Query system is working correctly")
         cli_handler.console.print(

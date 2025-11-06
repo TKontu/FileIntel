@@ -742,8 +742,10 @@ async def add_documents_to_collection(
             f"new_files={len(request.file_paths)}"
         )
 
-        # Get existing embeddings for incremental update
-        existing_documents = storage.get_documents_by_collection(collection.id)
+        # Get existing embeddings for incremental update (wrap blocking call)
+        existing_documents = await asyncio.to_thread(
+            storage.get_documents_by_collection, collection.id
+        )
         existing_embeddings = []
         # Note: In a real implementation, you'd fetch actual embeddings from storage
         # For now, we'll pass None and let the task handle it
@@ -966,9 +968,11 @@ async def get_collection_processing_status(
         # Log status check request
         logger.info(f"Status check requested: collection='{collection.name}' ({collection.id})")
 
-        # Get collection status and related information
-        documents = storage.get_documents_by_collection(collection.id)
-        chunks = storage.get_all_chunks_for_collection(collection.id)
+        # Get collection status and related information (parallel queries for better performance)
+        documents, chunks = await asyncio.gather(
+            asyncio.to_thread(storage.get_documents_by_collection, collection.id),
+            asyncio.to_thread(storage.get_all_chunks_for_collection, collection.id)
+        )
 
         # Count chunks with embeddings
         chunks_with_embeddings = (

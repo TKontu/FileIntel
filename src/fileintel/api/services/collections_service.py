@@ -31,15 +31,19 @@ class CollectionsService:
         self.storage = storage
         self.config = get_config()
 
-    def create_collection(
+    async def create_collection(
         self, name: str, description: Optional[str] = None
     ) -> Collection:
         """Create a new collection."""
-        return self.storage.create_collection(name, description)
+        import asyncio
+        return await asyncio.to_thread(
+            self.storage.create_collection, name, description
+        )
 
-    def get_all_collections(self) -> List[Dict[str, Any]]:
+    async def get_all_collections(self) -> List[Dict[str, Any]]:
         """Get all collections with formatted data."""
-        collections = self.storage.get_all_collections()
+        import asyncio
+        collections = await asyncio.to_thread(self.storage.get_all_collections)
         return [
             {
                 "id": c.id,
@@ -59,9 +63,12 @@ class CollectionsService:
             for c in collections
         ]
 
-    def get_collection_details(self, collection: Collection) -> Dict[str, Any]:
+    async def get_collection_details(self, collection: Collection) -> Dict[str, Any]:
         """Get detailed collection information."""
-        documents = self.storage.get_documents_by_collection(collection.id)
+        import asyncio
+        documents = await asyncio.to_thread(
+            self.storage.get_documents_by_collection, collection.id
+        )
 
         return {
             "id": collection.id,
@@ -120,10 +127,9 @@ class CollectionsService:
 
         content_hash = await asyncio.to_thread(_calculate_hash)
 
-        # Store document in database
-        # Note: Keeping synchronous for now to avoid SQLAlchemy session thread-safety issues
-        # The session is created in the request thread and shouldn't be accessed from other threads
-        document = self.storage.create_document(
+        # Store document in database (wrap blocking call)
+        document = await asyncio.to_thread(
+            self.storage.create_document,
             filename=unique_filename,
             content_hash=content_hash,
             file_size=len(file_content),
@@ -132,8 +138,10 @@ class CollectionsService:
             original_filename=file.filename,
         )
 
-        # Link document to collection
-        self.storage.add_document_to_collection(document.id, collection.id)
+        # Link document to collection (wrap blocking call)
+        await asyncio.to_thread(
+            self.storage.add_document_to_collection, document.id, collection.id
+        )
 
         logger.info(f"Document {document.id} uploaded and linked to collection {collection.id}")
 
@@ -146,23 +154,29 @@ class CollectionsService:
             "file_path": str(file_path),
         }
 
-    def submit_collection_processing_task(
+    async def submit_collection_processing_task(
         self,
         collection_id: str,
         include_embeddings: bool = True,
         task_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Submit collection processing task."""
-        collection = self.storage.get_collection(collection_id)
+        import asyncio
+
+        collection = await asyncio.to_thread(self.storage.get_collection, collection_id)
         if not collection:
             raise ValueError(f"Collection {collection_id} not found")
 
-        documents = self.storage.get_documents_by_collection(collection_id)
+        documents = await asyncio.to_thread(
+            self.storage.get_documents_by_collection, collection_id
+        )
         if not documents:
             raise ValueError(f"No documents found in collection {collection_id}")
 
         # Update collection status
-        self.storage.update_collection_status(collection_id, "processing")
+        await asyncio.to_thread(
+            self.storage.update_collection_status, collection_id, "processing"
+        )
 
         # Get file paths from documents (file_path is required field)
         file_paths = []
@@ -196,11 +210,13 @@ class CollectionsService:
             "status": "submitted",
         }
 
-    def submit_incremental_update_task(
+    async def submit_incremental_update_task(
         self, collection_id: str, new_documents_only: bool = True
     ) -> Dict[str, Any]:
         """Submit incremental collection update task."""
-        collection = self.storage.get_collection(collection_id)
+        import asyncio
+
+        collection = await asyncio.to_thread(self.storage.get_collection, collection_id)
         if not collection:
             raise ValueError(f"Collection {collection_id} not found")
 
@@ -209,7 +225,9 @@ class CollectionsService:
             collection_id=collection_id, new_documents_only=new_documents_only
         )
 
-        documents = self.storage.get_documents_by_collection(collection_id)
+        documents = await asyncio.to_thread(
+            self.storage.get_documents_by_collection, collection_id
+        )
         estimated_duration = self._estimate_incremental_time(len(documents))
 
         logger.info(
@@ -225,17 +243,23 @@ class CollectionsService:
             "status": "submitted",
         }
 
-    def get_processing_status(self, collection_id: str) -> Dict[str, Any]:
+    async def get_processing_status(self, collection_id: str) -> Dict[str, Any]:
         """Get collection processing status."""
-        collection = self.storage.get_collection(collection_id)
+        import asyncio
+
+        collection = await asyncio.to_thread(self.storage.get_collection, collection_id)
         if not collection:
             raise ValueError(f"Collection {collection_id} not found")
 
         status = getattr(collection, "processing_status", "unknown")
-        documents = self.storage.get_documents_by_collection(collection_id)
+        documents = await asyncio.to_thread(
+            self.storage.get_documents_by_collection, collection_id
+        )
 
         # Get embedding statistics
-        embedding_stats = self.storage.get_embedding_statistics(collection_id)
+        embedding_stats = await asyncio.to_thread(
+            self.storage.get_embedding_statistics, collection_id
+        )
 
         return {
             "collection_id": collection_id,

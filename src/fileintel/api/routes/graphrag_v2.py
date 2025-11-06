@@ -78,18 +78,27 @@ async def create_graphrag_index(
                     timestamp=datetime.utcnow()
                 )
 
-        # Get documents for indexing
-        documents = storage.get_documents_by_collection(collection.id)
+        # Get documents for indexing (wrap blocking call)
+        import asyncio
+        documents = await asyncio.to_thread(
+            storage.get_documents_by_collection, collection.id
+        )
         if not documents:
             raise HTTPException(
                 status_code=400,
                 detail=f"No documents found in collection '{request.collection_id}'",
             )
 
-        # Get processed chunks
+        # Get processed chunks in parallel for all documents
+        chunk_tasks = [
+            asyncio.to_thread(storage.get_all_chunks_for_document, doc.id)
+            for doc in documents
+        ]
+        all_chunks = await asyncio.gather(*chunk_tasks)
+
+        # Flatten results
         chunks = []
-        for doc in documents:
-            doc_chunks = storage.get_all_chunks_for_document(doc.id)
+        for doc_chunks in all_chunks:
             chunks.extend(doc_chunks)
 
         if not chunks:

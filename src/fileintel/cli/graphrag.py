@@ -90,6 +90,27 @@ def query_with_graphrag(
     result = cli_handler.handle_api_call(_graphrag_query, "GraphRAG query")
     response_data = result.get("data", result)
 
+    # Check if this is an async response (contains task_id)
+    if "task_id" in response_data:
+        task_id = response_data["task_id"]
+        cli_handler.console.print(
+            f"[blue]GraphRAG query submitted as task {task_id[:8]}... Waiting for completion...[/blue]"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        task_data = task_result.get("data", {})
+        if task_data.get("status") == "SUCCESS":
+            response_data = task_data.get("result", {})
+        else:
+            cli_handler.console.print(
+                f"[bold red]GraphRAG query task failed:[/bold red] {task_data.get('error', 'Unknown error')}"
+            )
+            raise typer.Exit(1)
+
     # Header (matching vector query format)
     cli_handler.console.print(f"[bold blue]Query:[/bold blue] {question}")
     cli_handler.console.print(
