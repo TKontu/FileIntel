@@ -30,12 +30,17 @@ logger = logging.getLogger(__name__)
 
 def clean_value(value):
     """Clean values for database storage."""
+    # Handle lists and arrays first (before pd.isna check)
+    if isinstance(value, (list, np.ndarray)):
+        return value.tolist() if isinstance(value, np.ndarray) else value
+
+    # Now safe to check pd.isna on scalar values
     if pd.isna(value):
         return None
+
     if isinstance(value, (np.integer, np.floating)):
         return int(value) if isinstance(value, np.integer) else float(value)
-    if isinstance(value, list):
-        return value
+
     return str(value)
 
 
