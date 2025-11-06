@@ -387,7 +387,7 @@ class GraphRAGService:
             db = lancedb.connect(lancedb_dir)
 
             # Validate text unit embeddings (most critical)
-            text_units_file = os.path.join(output_dir, "text_units.parquet")
+            text_units_file = os.path.join(workspace_path, "text_units.parquet")
             if os.path.exists(text_units_file):
                 text_units_df = pd.read_parquet(text_units_file)
                 expected_count = len(text_units_df)
@@ -421,7 +421,7 @@ class GraphRAGService:
                     raise
 
             # Validate entity embeddings
-            entities_file = os.path.join(output_dir, "entities.parquet")
+            entities_file = os.path.join(workspace_path, "entities.parquet")
             if os.path.exists(entities_file):
                 entities_df = pd.read_parquet(entities_file)
                 expected_count = len(entities_df)
@@ -452,7 +452,7 @@ class GraphRAGService:
                         raise
 
             # Validate community embeddings
-            communities_file = os.path.join(output_dir, "community_reports.parquet")
+            communities_file = os.path.join(workspace_path, "community_reports.parquet")
             if os.path.exists(communities_file):
                 communities_df = pd.read_parquet(communities_file)
                 expected_count = len(communities_df)
