@@ -994,6 +994,7 @@ class GraphRAGService:
         entities_df = load_parquet_safe("entities.parquet")
         text_units_df = load_parquet_safe("text_units.parquet")
         documents_df = load_parquet_safe("documents.parquet")
+        logger.info(f"Loaded parquet files: communities={communities_df is not None}, entities={entities_df is not None}, text_units={text_units_df is not None}, documents={documents_df is not None}")
 
         if communities_df is None or entities_df is None:
             logger.error(f"Required parquet files not found in {workspace_path}")
@@ -1041,6 +1042,8 @@ class GraphRAGService:
             logger.warning(f"No text units found for {len(report_ids)} reports and {len(entity_ids)} entities")
             return []
 
+        logger.info(f"Found {len(text_unit_ids)} text units, mapping to chunks...")
+
         # Map text units to chunk UUIDs
         # Note: text_units.document_ids contains FileIntel chunk UUIDs (GraphRAG's "document" = FileIntel's "chunk")
         chunk_uuids = set()
@@ -1056,7 +1059,7 @@ class GraphRAGService:
             logger.warning(f"No chunk UUIDs found from {len(text_unit_ids)} text units")
             return []
 
-        logger.debug(f"Mapped to {len(chunk_uuids)} chunk UUIDs, querying document metadata")
+        logger.info(f"Mapped to {len(chunk_uuids)} chunks, querying storage for page numbers...")
 
         if documents_df is None:
             logger.warning("documents.parquet not available, skipping document grouping")
