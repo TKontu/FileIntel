@@ -1264,16 +1264,23 @@ class GraphRAGService:
         # Replace citations
         result = answer_text
         for marker, harvard_citation in citation_mappings.items():
+            # Escape special regex characters in the marker
             escaped_marker = re.escape(marker)
-            result = re.sub(rf'\s*{escaped_marker}', f' ({harvard_citation})', result)
+            # Use plain f-string, not raw f-string (rf causes issues with escaped chars)
+            pattern = f'\\s*{escaped_marker}'
+            replacement = f' ({harvard_citation})'
+            result = re.sub(pattern, replacement, result)
+            logger.debug(f"Replaced '{marker}' with '{replacement}'")
 
         return result
 
     def _build_harvard_citation(self, source: Dict, reranked_sources: List[Dict]) -> str:
         """Build Harvard-style citation from source metadata."""
         # Extract document info
-        document_name = source.get("document_name", "Unknown")
+        document_name = source.get("document_name") or source.get("title") or "Unknown"
         pages = source.get("pages", set())
+
+        logger.debug(f"Building citation for: {document_name}, pages: {pages}")
 
         # Check if this source has reranking score
         reranked_score = None
