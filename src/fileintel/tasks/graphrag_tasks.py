@@ -72,6 +72,12 @@ def prepare_graphrag_data(
 
 def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
     """
+    DEPRECATED: Use GraphRAGConfigAdapter.adapt_config() instead.
+
+    This function creates a dictionary config that was meant to be used with
+    GraphRagConfig.from_dict(), but that method is not the correct way to create
+    GraphRAG configs. Use the config adapter instead.
+
     Pure function to create GraphRAG configuration for a collection.
 
     Args:
@@ -79,7 +85,7 @@ def create_graphrag_config(collection_id: str, root_dir: str) -> Dict[str, Any]:
         root_dir: Root directory for GraphRAG data
 
     Returns:
-        GraphRAG configuration dictionary
+        GraphRAG configuration dictionary (DEPRECATED)
     """
     config = get_config()
 
@@ -165,11 +171,6 @@ def build_graph_index(
 
         self.update_progress(1, 5, "Creating GraphRAG configuration")
 
-        # Create GraphRAG configuration
-        graphrag_config = create_graphrag_config(collection_id, root_dir)
-
-        self.update_progress(2, 5, "Initializing GraphRAG indexing")
-
         # Import GraphRAG components (with fallback handling)
         try:
             from fileintel.rag.graph_rag._graphrag_imports import (
@@ -184,11 +185,18 @@ def build_graph_index(
                 "status": "failed",
             }
 
+        self.update_progress(2, 5, "Initializing GraphRAG indexing")
+
+        # Create configuration using the config adapter (correct approach)
+        from fileintel.rag.graph_rag.adapters.config_adapter import GraphRAGConfigAdapter
+        config = get_config()
+        config_adapter = GraphRAGConfigAdapter()
+        config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
+
         # Build the index
         self.update_progress(3, 5, "Building GraphRAG index (this may take a while)")
 
-        # Create config object and run indexing
-        config_obj = GraphRagConfig.from_dict(graphrag_config)
+        # Run indexing
         index_result = build_index(config=config_obj)
 
         self.update_progress(4, 5, "Processing index results")
@@ -306,9 +314,10 @@ def query_graph_global(
                 "status": "failed",
             }
 
-        # Create configuration for querying
-        graphrag_config = create_graphrag_config(collection_id, str(root_dir))
-        config_obj = GraphRagConfig.from_dict(graphrag_config)
+        # Create configuration using the config adapter (correct approach)
+        from fileintel.rag.graph_rag.adapters.config_adapter import GraphRAGConfigAdapter
+        config_adapter = GraphRAGConfigAdapter()
+        config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
 
         # Perform global search
         search_result = global_search(query=query, config=config_obj, **kwargs)
@@ -401,9 +410,10 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
                 "status": "failed",
             }
 
-        # Create configuration for querying
-        graphrag_config = create_graphrag_config(collection_id, str(root_dir))
-        config_obj = GraphRagConfig.from_dict(graphrag_config)
+        # Create configuration using the config adapter (correct approach)
+        from fileintel.rag.graph_rag.adapters.config_adapter import GraphRAGConfigAdapter
+        config_adapter = GraphRAGConfigAdapter()
+        config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
 
         # Perform local search
         search_result = local_search(query=query, config=config_obj, **kwargs)
