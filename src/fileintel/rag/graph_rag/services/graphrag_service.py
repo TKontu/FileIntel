@@ -1216,7 +1216,7 @@ class GraphRAGService:
         import re
 
         # Find all citation contexts (sentence + citation)
-        citation_pattern = r'([^.!?]*\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+)\][^.!?]*[.!?])'
+        citation_pattern = r'([^.!?]*\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+\)\][^.!?]*[.!?])'
         citation_contexts = list(re.finditer(citation_pattern, answer_text))
 
         if not citation_contexts:
