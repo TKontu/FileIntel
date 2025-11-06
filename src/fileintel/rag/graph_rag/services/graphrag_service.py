@@ -1235,7 +1235,7 @@ class GraphRAGService:
             full_context = match.group(1)
 
             # Extract the citation marker
-            marker_match = re.search(r'\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+)\]', full_context)
+            marker_match = re.search(r'\[Data: (?:Reports|Entities|Relationships) \([0-9, ]+\)\]', full_context)
             if not marker_match:
                 continue
 
