@@ -1011,49 +1011,52 @@ class GraphRAGService:
             # Can still return partial results without document details
 
         # Trace: Report IDs → Community IDs → Entity IDs → Text Unit IDs → Chunks → Documents
-        text_unit_ids = set()
+        # OPTIMIZED: Use batch lookups instead of row-by-row iteration
 
-        # From report IDs (community IDs)
+        # Step 1: Collect all entity IDs from communities
+        all_entity_ids = set()
         report_ids = citation_ids.get("report_ids", [])
-        for report_id in report_ids:
-            # Find community by ID
-            comm_rows = communities_df[communities_df["community"] == report_id]
-            for _, comm in comm_rows.iterrows():
-                entity_ids = comm.get("entity_ids", [])
-                if entity_ids is not None and len(entity_ids) > 0:
-                    # Get text units from entities
-                    for ent_id in entity_ids:
-                        ent_rows = entities_df[entities_df["id"] == ent_id]
-                        for _, ent in ent_rows.iterrows():
-                            tu_ids = ent.get("text_unit_ids", [])
-                            if tu_ids is not None and len(tu_ids) > 0:
-                                text_unit_ids.update(tu_ids)
 
-        # From entity IDs directly
-        entity_ids = citation_ids.get("entity_ids", [])
-        for entity_id in entity_ids:
-            ent_rows = entities_df[entities_df["id"] == entity_id]
-            for _, ent in ent_rows.iterrows():
-                tu_ids = ent.get("text_unit_ids", [])
-                if tu_ids is not None and len(tu_ids) > 0:
-                    text_unit_ids.update(tu_ids)
+        if report_ids:
+            # Batch lookup: Find all communities at once
+            comm_mask = communities_df["community"].isin(report_ids)
+            for entity_list in communities_df[comm_mask]["entity_ids"]:
+                if entity_list is not None and len(entity_list) > 0:
+                    all_entity_ids.update(entity_list)
+
+        # Add directly cited entities
+        direct_entity_ids = citation_ids.get("entity_ids", [])
+        if direct_entity_ids:
+            all_entity_ids.update(direct_entity_ids)
+
+        if not all_entity_ids:
+            logger.warning(f"No entities found for {len(report_ids)} reports")
+            return []
+
+        logger.info(f"Found {len(all_entity_ids)} entities from citations, extracting text units...")
+
+        # Step 2: Batch lookup: Get text units from all entities at once
+        text_unit_ids = set()
+        entity_mask = entities_df["id"].isin(all_entity_ids)
+        for tu_list in entities_df[entity_mask]["text_unit_ids"]:
+            if tu_list is not None and len(tu_list) > 0:
+                text_unit_ids.update(tu_list)
 
         if not text_unit_ids:
-            logger.warning(f"No text units found for {len(report_ids)} reports and {len(entity_ids)} entities")
+            logger.warning(f"No text units found for {len(all_entity_ids)} entities")
             return []
 
         logger.info(f"Found {len(text_unit_ids)} text units, mapping to chunks...")
 
-        # Map text units to chunk UUIDs
+        # Step 3: Batch lookup: Map text units to chunk UUIDs
         # Note: text_units.document_ids contains FileIntel chunk UUIDs (GraphRAG's "document" = FileIntel's "chunk")
         chunk_uuids = set()
         if text_units_df is not None:
-            for tu_id in text_unit_ids:
-                tu_rows = text_units_df[text_units_df["id"] == tu_id]
-                for _, tu in tu_rows.iterrows():
-                    doc_ids = tu.get("document_ids")
-                    if doc_ids is not None and len(doc_ids) > 0:
-                        chunk_uuids.update(doc_ids)
+            # Batch lookup: Filter all text units at once
+            tu_mask = text_units_df["id"].isin(text_unit_ids)
+            for doc_id_list in text_units_df[tu_mask]["document_ids"]:
+                if doc_id_list is not None and len(doc_id_list) > 0:
+                    chunk_uuids.update(doc_id_list)
 
         if not chunk_uuids:
             logger.warning(f"No chunk UUIDs found from {len(text_unit_ids)} text units")
