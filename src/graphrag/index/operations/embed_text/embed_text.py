@@ -173,11 +173,10 @@ async def _text_embed_with_vector_store(
         titles: list[str] = batch[title].to_numpy().tolist()
         ids: list[str] = batch[id_column].to_numpy().tolist()
         result = await strategy_exec(texts, callbacks, cache, strategy_config)
+        # CRITICAL: Preserve None embeddings to maintain length alignment with input DataFrame
+        # The vector store loading will skip None values, but the returned list must match input length
         if result.embeddings:
-            embeddings = [
-                embedding for embedding in result.embeddings if embedding is not None
-            ]
-            all_results.extend(embeddings)
+            all_results.extend(result.embeddings)
 
         vectors = result.embeddings or []
         documents: list[VectorStoreDocument] = []
