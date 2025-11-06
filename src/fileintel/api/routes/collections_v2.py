@@ -73,7 +73,14 @@ async def create_collection(
     request: CollectionCreateRequest, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Create a new collection."""
-    collection = storage.create_collection(request.name, request.description)
+    import asyncio
+
+    # Wrap in to_thread to avoid blocking event loop
+    collection = await asyncio.to_thread(
+        storage.create_collection,
+        request.name,
+        request.description
+    )
 
     # Log collection creation
     logger.info(f"Collection created: name='{collection.name}' id={collection.id}")
@@ -93,7 +100,10 @@ async def list_collections(
     storage: PostgreSQLStorage = Depends(get_storage),
 ) -> ApiResponseV2:
     """List all collections."""
-    collections = storage.get_all_collections()
+    import asyncio
+
+    # Wrap in to_thread to avoid blocking event loop
+    collections = await asyncio.to_thread(storage.get_all_collections)
 
     # Log collections list request
     logger.info(f"Collections list requested: found {len(collections)} collections")
@@ -116,8 +126,11 @@ async def get_collection(
     collection_identifier: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Get collection by ID or name."""
-    collection = validate_collection_exists(
-        collection_identifier, storage, "get collection"
+    import asyncio
+
+    # Wrap blocking validation (which calls storage methods)
+    collection = await asyncio.to_thread(
+        validate_collection_exists, collection_identifier, storage, "get collection"
     )
 
     # Log collection retrieval
@@ -147,14 +160,18 @@ async def delete_collection(
     collection_identifier: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Delete a collection."""
-    collection = validate_collection_exists(
-        collection_identifier, storage, "delete collection"
+    import asyncio
+
+    # Wrap blocking validation (which calls storage methods)
+    collection = await asyncio.to_thread(
+        validate_collection_exists, collection_identifier, storage, "delete collection"
     )
 
     # Log collection deletion
     logger.info(f"Collection deleted: name='{collection.name}' id={collection.id}")
 
-    storage.delete_collection(collection.id)
+    # Wrap blocking delete operation
+    await asyncio.to_thread(storage.delete_collection, collection.id)
     return create_success_response(
         {"message": f"Collection '{collection.name}' deleted successfully"}
     )
@@ -220,8 +237,10 @@ async def upload_document_to_collection(
         logger.debug(f"File fingerprint: {content_fingerprint} (hash: {content_hash[:16]}...)")
 
         # Check for duplicate by fingerprint BEFORE saving to disk (global deduplication)
-        # This finds the same content even if uploaded to different collections
-        existing_document = storage.get_document_by_fingerprint(content_fingerprint)
+        # This finds the same content even if uploaded to different collections (wrap blocking call)
+        existing_document = await asyncio.to_thread(
+            storage.get_document_by_fingerprint, content_fingerprint
+        )
 
         if existing_document:
             # Get list of collections this document is already in
@@ -231,8 +250,10 @@ async def upload_document_to_collection(
                 f"already exists as document {existing_document.id} in collections: {existing_collections}"
             )
 
-            # Add existing document to the new collection (many-to-many)
-            storage.add_document_to_collection(existing_document.id, collection.id)
+            # Add existing document to the new collection (many-to-many - wrap blocking call)
+            await asyncio.to_thread(
+                storage.add_document_to_collection, existing_document.id, collection.id
+            )
             document = existing_document
             duplicate_detected = True
 
@@ -307,21 +328,26 @@ async def get_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Get a specific document by ID or ID prefix."""
+    import asyncio
+
     # Log document retrieval request
     logger.info(f"Document retrieval requested: document_id={document_id}")
 
-    # Try exact match first
-    document = storage.get_document(document_id)
+    # Try exact match first (wrap blocking storage call)
+    document = await asyncio.to_thread(storage.get_document, document_id)
 
     # If not found and looks like a prefix (< 36 chars), try prefix search
     if not document and len(document_id) < 36:
         from sqlalchemy import or_
         from fileintel.storage.models import Document
 
-        # Search for documents starting with this prefix
-        matching_docs = storage.db.query(Document).filter(
-            Document.id.like(f"{document_id}%")
-        ).all()
+        # Search for documents starting with this prefix (wrap blocking query)
+        def _query_prefix():
+            return storage.db.query(Document).filter(
+                Document.id.like(f"{document_id}%")
+            ).all()
+
+        matching_docs = await asyncio.to_thread(_query_prefix)
 
         if len(matching_docs) == 1:
             document = matching_docs[0]
@@ -356,19 +382,25 @@ async def delete_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Delete a specific document by ID or ID prefix."""
+    import asyncio
+
     # Log document deletion request
     logger.info(f"Document deletion requested: document_id={document_id}")
 
-    # Try exact match first
-    document = storage.get_document(document_id)
+    # Try exact match first (wrap blocking storage call)
+    document = await asyncio.to_thread(storage.get_document, document_id)
 
     # If not found and looks like a prefix (< 36 chars), try prefix search
     if not document and len(document_id) < 36:
         from fileintel.storage.models import Document
 
-        matching_docs = storage.db.query(Document).filter(
-            Document.id.like(f"{document_id}%")
-        ).all()
+        # Wrap blocking query
+        def _query_prefix():
+            return storage.db.query(Document).filter(
+                Document.id.like(f"{document_id}%")
+            ).all()
+
+        matching_docs = await asyncio.to_thread(_query_prefix)
 
         if len(matching_docs) == 1:
             document = matching_docs[0]
@@ -387,7 +419,8 @@ async def delete_document(
     # Log document deletion
     logger.info(f"Document deleted: document_id={document_id} filename='{filename}'")
 
-    storage.delete_document(document_id)
+    # Wrap blocking delete operation
+    await asyncio.to_thread(storage.delete_document, document_id)
     return create_success_response(
         {"message": f"Document '{filename}' deleted successfully"}
     )
@@ -402,19 +435,25 @@ async def get_document_chunks(
     storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
     """Get chunks for a specific document by ID or ID prefix."""
+    import asyncio
+
     # Log chunks retrieval request
     logger.info(f"Document chunks requested: document_id={document_id} limit={limit} offset={offset}")
 
-    # Try exact match first
-    document = storage.get_document(document_id)
+    # Try exact match first (wrap blocking storage call)
+    document = await asyncio.to_thread(storage.get_document, document_id)
 
     # If not found and looks like a prefix (< 36 chars), try prefix search
     if not document and len(document_id) < 36:
         from fileintel.storage.models import Document
 
-        matching_docs = storage.db.query(Document).filter(
-            Document.id.like(f"{document_id}%")
-        ).all()
+        # Wrap blocking query
+        def _query_prefix():
+            return storage.db.query(Document).filter(
+                Document.id.like(f"{document_id}%")
+            ).all()
+
+        matching_docs = await asyncio.to_thread(_query_prefix)
 
         if len(matching_docs) == 1:
             document = matching_docs[0]
@@ -428,8 +467,8 @@ async def get_document_chunks(
     if not document:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
-    # Get chunks for the document
-    chunks = storage.get_all_chunks_for_document(document_id)
+    # Get chunks for the document (wrap blocking storage call)
+    chunks = await asyncio.to_thread(storage.get_all_chunks_for_document, document_id)
 
     # Apply pagination
     total_chunks = len(chunks)
@@ -484,6 +523,7 @@ async def submit_collection_processing_task(
             )
 
         # Validate collection has documents and file paths
+        import asyncio
         from fileintel.core.validation import (
             validate_collection_has_documents,
             validate_file_paths,
@@ -492,18 +532,31 @@ async def submit_collection_processing_task(
         )
 
         try:
-            documents = validate_collection_has_documents(collection.id, storage)
+            # Wrap blocking validation (which calls storage methods)
+            documents = await asyncio.to_thread(
+                validate_collection_has_documents, collection.id, storage
+            )
             all_file_paths = validate_file_paths(documents)
         except CollectionValidationError as e:
             raise to_http_exception(e)
 
         # Filter out documents that already have chunks (skip re-processing)
+        # Parallelize chunk checks using asyncio.gather for better performance
         file_paths = []
         documents_with_chunks = []
         documents_without_chunks = []
 
-        for doc in documents:
-            doc_chunks = storage.get_all_chunks_for_document(doc.id)
+        # Create parallel tasks to check chunks for all documents
+        chunk_check_tasks = [
+            asyncio.to_thread(storage.get_all_chunks_for_document, doc.id)
+            for doc in documents
+        ]
+
+        # Execute all chunk checks concurrently
+        all_chunks = await asyncio.gather(*chunk_check_tasks)
+
+        # Process results
+        for doc, doc_chunks in zip(documents, all_chunks):
             if doc_chunks:
                 # Document already has chunks - skip processing
                 documents_with_chunks.append({
@@ -572,8 +625,12 @@ async def submit_collection_processing_task(
                 collection_id=str(collection.id)
             )
 
-            storage.update_collection_status(
-                collection.id, "processing", task_id=task.id
+            # Wrap blocking storage call
+            await asyncio.to_thread(
+                storage.update_collection_status,
+                collection.id,
+                "processing",
+                task_id=task.id
             )
 
             return ApiResponseV2(
@@ -614,9 +671,12 @@ async def submit_collection_processing_task(
                 detail=f"Unsupported operation type: {request.operation_type}"
             )
 
-        # Store task ID in collection for tracking
-        storage.update_collection_status(
-            collection.id, "processing", task_id=task.id
+        # Store task ID in collection for tracking (wrap blocking storage call)
+        await asyncio.to_thread(
+            storage.update_collection_status,
+            collection.id,
+            "processing",
+            task_id=task.id
         )
 
         # Log task submission
@@ -755,8 +815,10 @@ async def submit_batch_processing_tasks(
 
         for task_request in request.tasks:
             try:
-                # Validate collection exists
-                collection = get_collection_by_id_or_name(
+                import asyncio
+
+                # Validate collection exists (now async)
+                collection = await get_collection_by_id_or_name(
                     task_request.collection_identifier, storage
                 )
                 if not collection:
@@ -769,8 +831,10 @@ async def submit_batch_processing_tasks(
                     )
                     continue
 
-                # Get documents for this collection
-                documents = storage.get_documents_by_collection(collection.id)
+                # Get documents for this collection (wrap blocking storage call)
+                documents = await asyncio.to_thread(
+                    storage.get_documents_by_collection, collection.id
+                )
                 # Extract file paths from documents
                 file_paths = []
                 for doc in documents:
@@ -1046,62 +1110,184 @@ async def upload_and_process_documents(
             # Normalize to absolute path to ensure consistent matching in workflows
             file_path = (Path(config.paths.uploads) / unique_filename).resolve()
 
-            # Ensure upload directory exists
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            # Track whether document was successfully created
+            # (determines if file should be cleaned up on error)
+            file_saved = False
+            document_created = False
 
-            # Save file and calculate metadata
-            async with aiofiles.open(file_path, "wb") as f:
-                content = await file.read()
-                await f.write(content)
+            try:
+                # Ensure upload directory exists
+                file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Calculate file metadata
-            import hashlib
+                # Save file and calculate metadata
+                async with aiofiles.open(file_path, "wb") as f:
+                    content = await file.read()
+                    await f.write(content)
+                    file_saved = True
 
-            content_hash = hashlib.sha256(content).hexdigest()
-            file_size = len(content)
-            mime_type = file.content_type or "application/octet-stream"
+                # Early file size validation to prevent blocking operations on oversized files
+                file_size = len(content)
+                max_file_size_bytes = config.paths.max_file_size_mb * 1024 * 1024
 
-            # Check for duplicate in this collection
-            existing_document = storage.get_document_by_hash_and_collection(
-                content_hash, collection.id
-            )
+                if file_size > max_file_size_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File '{file.filename}' size ({file_size / (1024*1024):.2f} MB) exceeds maximum "
+                            f"allowed size ({config.paths.max_file_size_mb} MB). "
+                            "Please split large files or contact admin to increase limit."
+                        )
+                    )
 
-            if existing_document:
-                logger.info(
-                    f"Duplicate detected in batch: {file.filename} (hash: {content_hash[:16]}...) "
-                    f"already exists as document {existing_document.id}"
+                # Calculate file metadata
+                import hashlib
+                import asyncio
+
+                # Move hash calculation to thread pool to avoid blocking API for large files
+                # Calculate timeout based on file size with conservative assumptions:
+                # - Base rate: 100MB/s (works for spinning disks and busy systems)
+                # - Load factor: 2x (account for system load)
+                # - Buffer: 10s (startup overhead)
+                # - Minimum: 15s (even small files need time on slow systems)
+                base_processing_rate = 100 * 1024 * 1024  # 100 MB/s
+                load_factor = 2.0  # 2x slower under load
+                buffer_seconds = 10.0
+                timeout_seconds = max(
+                    15.0,  # Minimum 15 seconds
+                    (file_size / base_processing_rate) * load_factor + buffer_seconds
                 )
 
-                # Track duplicate but don't create new document
-                duplicate_files.append({
-                    "filename": file.filename,
-                    "existing_document_id": str(existing_document.id),
-                    "content_hash": content_hash,
-                    "file_size": file_size,
-                    "reason": "Duplicate file already exists in collection"
-                })
+                def calculate_hash(data: bytes) -> str:
+                    return hashlib.sha256(data).hexdigest()
 
-                # Remove the uploaded file since it's a duplicate
-                file_path.unlink(missing_ok=True)
+                try:
+                    content_hash = await asyncio.wait_for(
+                        asyncio.to_thread(calculate_hash, content),
+                        timeout=timeout_seconds
+                    )
+                except asyncio.TimeoutError:
+                    # Hash calculation took too long - system may be overloaded
+                    # REJECT rather than falling back to sync (which would block event loop)
+                    logger.error(
+                        f"Hash calculation timed out after {timeout_seconds:.1f}s for {file.filename} "
+                        f"({file_size / (1024*1024):.2f} MB). System may be overloaded."
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            f"File processing timeout for '{file.filename}'. "
+                            "System may be overloaded. Please try again later or contact admin."
+                        )
+                    )
 
-                # Skip to next file
-                continue
-            else:
-                # Store document in database
-                document = storage.create_document(
-                    filename=unique_filename,
-                    original_filename=file.filename,
-                    content_hash=content_hash,
-                    file_size=file_size,
-                    mime_type=mime_type,
-                    file_path=str(file_path),
-                    metadata={"uploaded_via": "api_v2"},
+                mime_type = file.content_type or "application/octet-stream"
+
+                # Check for duplicate in this collection
+                # Wrap in to_thread to avoid blocking event loop
+                existing_document = await asyncio.to_thread(
+                    storage.get_document_by_hash_and_collection,
+                    content_hash,
+                    collection.id
                 )
 
-                # Link document to collection
-                storage.add_document_to_collection(document.id, collection.id)
+                if existing_document:
+                    logger.info(
+                        f"Duplicate detected in batch: {file.filename} (hash: {content_hash[:16]}...) "
+                        f"already exists as document {existing_document.id}"
+                    )
 
-                uploaded_files.append(str(file_path))
+                    # Track duplicate but don't create new document
+                    duplicate_files.append({
+                        "filename": file.filename,
+                        "existing_document_id": str(existing_document.id),
+                        "content_hash": content_hash,
+                        "file_size": file_size,
+                        "reason": "Duplicate file already exists in collection"
+                    })
+
+                    # Remove the uploaded file since it's a duplicate
+                    file_path.unlink(missing_ok=True)
+
+                    # Skip to next file
+                    continue
+
+                # Not a duplicate (at time of check), create document and add to collection
+                # Inner try-except to handle race condition where another request
+                # creates the same document concurrently
+                try:
+                    # Store document in database
+                    # Wrap in to_thread to avoid blocking event loop
+                    document = await asyncio.to_thread(
+                        storage.create_document,
+                        filename=unique_filename,
+                        original_filename=file.filename,
+                        content_hash=content_hash,
+                        file_size=file_size,
+                        mime_type=mime_type,
+                        file_path=str(file_path),
+                        metadata={"uploaded_via": "api_v2"},
+                    )
+
+                    # Link document to collection
+                    # This can raise IntegrityError if document already in collection
+                    # (race condition between check and insert)
+                    await asyncio.to_thread(
+                        storage.add_document_to_collection,
+                        document.id,
+                        collection.id
+                    )
+                    document_created = True  # Document owns the file now
+
+                    uploaded_files.append(str(file_path))
+                    logger.info(f"Successfully uploaded: {file.filename} → document {document.id}")
+
+                except Exception as e:
+                    # Check if this is a duplicate error (race condition)
+                    # Re-check for duplicate after catching exception
+                    existing_document = await asyncio.to_thread(
+                        storage.get_document_by_hash_and_collection,
+                        content_hash,
+                        collection.id
+                    )
+
+                    if existing_document:
+                        logger.warning(
+                            f"Race condition detected: {file.filename} was added by concurrent request. "
+                            f"Existing document: {existing_document.id}"
+                        )
+
+                        # Track as duplicate
+                        duplicate_files.append({
+                            "filename": file.filename,
+                            "existing_document_id": str(existing_document.id),
+                            "content_hash": content_hash,
+                            "file_size": file_size,
+                            "reason": "Duplicate created by concurrent request (race condition)"
+                        })
+
+                        # Remove the uploaded file since it's a duplicate
+                        file_path.unlink(missing_ok=True)
+                    else:
+                        # Not a duplicate error, something else failed
+                        logger.error(f"Failed to create document for {file.filename}: {e}")
+                        raise  # Re-raise to outer except/finally
+
+            except Exception:
+                # Outer exception handler - will be caught by finally for cleanup
+                raise
+
+            finally:
+                # Comprehensive file cleanup: Remove orphaned files
+                # File should be cleaned up if:
+                # 1. It was saved to disk (file_saved=True)
+                # 2. Document was NOT successfully created (document_created=False)
+                # If document was created, the document owns the file - don't delete
+                if file_saved and not document_created and file_path.exists():
+                    try:
+                        file_path.unlink()
+                        logger.info(f"Cleaned up orphaned file: {file_path}")
+                    except Exception as cleanup_error:
+                        logger.error(f"Failed to clean up orphaned file {file_path}: {cleanup_error}")
 
         if not uploaded_files and not duplicate_files:
             raise HTTPException(status_code=400, detail="No files were uploaded")

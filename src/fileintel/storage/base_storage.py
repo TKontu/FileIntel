@@ -89,6 +89,45 @@ class BaseStorageInfrastructure:
         except SQLAlchemyError as e:
             self._handle_session_error(e)
 
+    def transaction(self):
+        """
+        Context manager for database transactions.
+
+        Ensures atomic operations - either all succeed or all rollback.
+        Use for multi-step operations that must be atomic.
+
+        Example:
+            with storage.base.transaction():
+                document = storage.create_document(...)
+                storage.add_document_to_collection(document.id, collection_id)
+                # Both succeed or both rollback
+
+        Returns:
+            Context manager that commits on success, rolls back on exception
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _transaction_context():
+            """Inner context manager for transaction."""
+            try:
+                # Transaction starts automatically with first operation
+                yield self.db
+                # Commit if no exceptions
+                self._safe_commit()
+                logger.debug("Transaction committed successfully")
+            except Exception as e:
+                # Rollback on any exception
+                logger.error(f"Transaction failed, rolling back: {e}")
+                try:
+                    self.db.rollback()
+                    logger.debug("Transaction rolled back successfully")
+                except Exception as rollback_error:
+                    logger.error(f"Rollback failed: {rollback_error}")
+                raise e
+
+        return _transaction_context()
+
     def _validate_collection_name(self, name: str) -> str:
         """Validate and sanitize collection name."""
         if not name or not name.strip():

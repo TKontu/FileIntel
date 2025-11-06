@@ -460,20 +460,23 @@ async def get_collection_by_identifier(
     Returns:
         Collection if found, None otherwise
     """
+    import asyncio
+
     # First try to get by ID (assuming UUID format)
     try:
         import uuid
 
         uuid.UUID(identifier)  # This will raise ValueError if not a valid UUID
-        collection = storage.get_collection(identifier)
+        # Wrap blocking storage call in asyncio.to_thread
+        collection = await asyncio.to_thread(storage.get_collection, identifier)
         if collection:
             return collection
     except (ValueError, TypeError):
         # Not a valid UUID, continue to try by name
         pass
 
-    # Try to get by name
-    collections = storage.get_all_collections()
+    # Try to get by name - wrap blocking storage call
+    collections = await asyncio.to_thread(storage.get_all_collections)
     for collection in collections:
         if collection.name == identifier:
             return collection

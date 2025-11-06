@@ -238,6 +238,85 @@ class DocumentStorage:
             self.base._handle_session_error(e)
             return False
 
+    def create_document_in_collection_atomic(
+        self,
+        collection_id: str,
+        filename: str,
+        original_filename: str,
+        content_hash: str,
+        file_size: int,
+        mime_type: str,
+        file_path: str,
+        metadata: Dict[str, Any] = None,
+        content_fingerprint: str = None
+    ) -> Document:
+        """
+        Atomically create document and add it to collection in single transaction.
+
+        This prevents race conditions and partial failures where document is created
+        but not added to collection.
+
+        Args:
+            collection_id: Collection to add document to
+            filename, original_filename, content_hash, file_size, mime_type, file_path: Document fields
+            metadata: Optional document metadata
+            content_fingerprint: Optional content fingerprint
+
+        Returns:
+            Created document that is already associated with collection
+
+        Raises:
+            Exception: If document creation or association fails (transaction rolled back)
+        """
+        import uuid
+
+        try:
+            with self.base.transaction():
+                # Validate inputs
+                filename = self.base._validate_input_security(filename, "filename")
+                content_hash = self.base._validate_input_security(content_hash, "content_hash")
+                mime_type = self.base._validate_input_security(mime_type, "mime_type")
+                file_path = self.base._validate_input_security(file_path, "file_path")
+
+                if original_filename:
+                    original_filename = self.base._validate_input_security(original_filename, "original_filename")
+
+                # Get collection (verify it exists)
+                collection = self.get_collection(collection_id)
+                if not collection:
+                    raise ValueError(f"Collection {collection_id} not found")
+
+                # Create document (without commit)
+                document_id = str(uuid.uuid4())
+                document = Document(
+                    id=document_id,
+                    filename=filename,
+                    content_hash=content_hash,
+                    content_fingerprint=content_fingerprint,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    file_path=file_path,
+                    original_filename=original_filename,
+                    document_metadata=metadata or {},
+                )
+                self.db.add(document)
+
+                # Add to collection (without commit)
+                document.collections.append(collection)
+
+                # Transaction commits here automatically (on exit from with block)
+                # If any exception occurred, transaction would have rolled back
+                logger.info(
+                    f"Atomically created document {document.id} and added to collection {collection_id}"
+                )
+
+                return document
+
+        except Exception as e:
+            logger.error(f"Atomic document creation failed: {e}")
+            # Transaction already rolled back by context manager
+            raise
+
     def get_document(self, document_id: str) -> Document:
         """Get document by ID."""
         return self.db.query(Document).filter(Document.id == document_id).first()

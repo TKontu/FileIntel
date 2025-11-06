@@ -106,6 +106,9 @@ class GraphRAGStorage:
         """
         Update GraphRAG index status.
 
+        NOTE: This method does NOT use row locking. For concurrent-safe updates
+        with atomicity guarantees, use update_graphrag_index_status_atomic().
+
         Args:
             collection_id: Collection ID
             status: New status (building, ready, failed, updating)
@@ -135,6 +138,78 @@ class GraphRAGStorage:
 
         except Exception as e:
             logger.error(f"Error updating GraphRAG index status: {e}")
+            self.base._handle_session_error(e)
+            return False
+
+    def update_graphrag_index_status_atomic(
+        self,
+        collection_id: str,
+        status: str,
+        error_message: str = None
+    ) -> bool:
+        """
+        Atomically update GraphRAG index status with row-level locking.
+
+        This method ensures concurrent-safe status updates by:
+        1. Using SELECT FOR UPDATE to lock the row
+        2. Updating status within explicit transaction
+        3. Updating timestamp and optional error message
+        4. Committing atomically
+
+        Use this instead of update_graphrag_index_status() when concurrent
+        access is possible (e.g., during index build with status polling).
+
+        Args:
+            collection_id: Collection ID
+            status: New status (building, ready, error, updating)
+            error_message: Optional error message (set when status='error')
+
+        Returns:
+            True if successful, False otherwise
+
+        Raises:
+            ValueError: If index info not found for collection
+        """
+        from datetime import datetime
+
+        try:
+            # Explicit transaction with row-level locking
+            # This prevents concurrent status updates from causing inconsistencies
+            index_info = (
+                self.db.query(GraphRAGIndex)
+                .filter(GraphRAGIndex.collection_id == collection_id)
+                .with_for_update()  # SELECT FOR UPDATE - lock the row
+                .first()
+            )
+
+            if not index_info:
+                error_msg = f"Cannot update status: No GraphRAG index found for collection {collection_id}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # Update status and timestamp atomically
+            old_status = index_info.index_status
+            index_info.index_status = status
+            index_info.updated_at = datetime.utcnow()
+
+            # Set error message if status is 'error'
+            if error_message:
+                index_info.error_message = error_message
+
+            # Commit transaction (releases row lock)
+            self.base._safe_commit()
+
+            logger.info(
+                f"Atomically updated GraphRAG index status: {old_status} → {status} "
+                f"for collection {collection_id}"
+            )
+            return True
+
+        except ValueError:
+            # Re-raise ValueError (index not found)
+            raise
+        except Exception as e:
+            logger.error(f"Error in atomic status update: {e}")
             self.base._handle_session_error(e)
             return False
 

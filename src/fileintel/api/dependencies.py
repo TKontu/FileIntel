@@ -29,16 +29,19 @@ def get_storage() -> Generator[PostgreSQLStorage, None, None]:
         db.close()
 
 
-def get_collection_by_id_or_name(
+async def get_collection_by_id_or_name(
     collection_identifier: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> Collection:
+    import asyncio
+
     try:
         # Try to interpret as UUID
         uuid.UUID(collection_identifier)
-        collection = storage.get_collection(collection_identifier)
+        # Wrap blocking storage call
+        collection = await asyncio.to_thread(storage.get_collection, collection_identifier)
     except ValueError:
-        # If not a UUID, treat as a name
-        collection = storage.get_collection_by_name(collection_identifier)
+        # If not a UUID, treat as a name (wrap blocking storage call)
+        collection = await asyncio.to_thread(storage.get_collection_by_name, collection_identifier)
 
     if not collection:
         raise HTTPException(

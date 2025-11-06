@@ -220,12 +220,12 @@ class GraphRAGService:
 
         workspace_path = graphrag_config.output.base_dir
 
-        # Count the generated entities and communities
+        # Count the generated entities and communities (wrap blocking pandas operations)
         (
             documents_count,
             entities_count,
             communities_count,
-        ) = self._count_graphrag_results(workspace_path)
+        ) = await asyncio.to_thread(self._count_graphrag_results, workspace_path)
 
         await asyncio.to_thread(
             self.storage.save_graphrag_index_info,
@@ -249,6 +249,22 @@ class GraphRAGService:
             self._validate_embedding_completeness,
             workspace_path
         )
+
+        # Set status to "ready" ONLY after ALL operations succeed:
+        # 1. Index build complete
+        # 2. PostgreSQL data saved
+        # 3. Completeness validation passed
+        # 4. Embedding validation passed
+        # This prevents race condition where API shows "ready" before data is accessible
+        #
+        # Use atomic update with row locking to prevent concurrent status inconsistencies
+        await asyncio.to_thread(
+            self.storage.update_graphrag_index_status_atomic,
+            collection_id,
+            "ready",
+            None  # error_message
+        )
+        logger.info(f"Atomically set GraphRAG index status to 'ready' for collection {collection_id} after all validations passed")
 
         return workspace_path
 
@@ -687,12 +703,12 @@ class GraphRAGService:
             if not workspace_path or not os.path.exists(workspace_path):
                 return {"status": "index_missing", "path": workspace_path}
 
-            # Count current results
+            # Count current results (wrap blocking pandas operations)
             (
                 documents_count,
                 entities_count,
                 communities_count,
-            ) = self._count_graphrag_results(workspace_path)
+            ) = await asyncio.to_thread(self._count_graphrag_results, workspace_path)
 
             # Use actual index_status from database (building/ready/failed/updating)
             # instead of hardcoded "indexed" to support checkpoint resume
@@ -750,6 +766,18 @@ class GraphRAGService:
             communities_structure_file = os.path.join(workspace_path, "communities.parquet")
             communities_content_file = os.path.join(workspace_path, "community_reports.parquet")
 
+            # CRITICAL: Both files required for complete community data
+            # Missing community_reports.parquet means no summaries → broken display
+            if os.path.exists(communities_structure_file) and not os.path.exists(communities_content_file):
+                logger.error(
+                    f"CRITICAL: Missing {communities_content_file} - "
+                    f"communities will have no summaries. This indicates incomplete GraphRAG index."
+                )
+                raise ValueError(
+                    f"GraphRAG index incomplete: community_reports.parquet not found at {communities_content_file}. "
+                    "Index build may have failed or been interrupted. Please rebuild the index."
+                )
+
             if os.path.exists(communities_structure_file) and os.path.exists(communities_content_file):
                 # Load both files
                 communities_df = pd.read_parquet(communities_structure_file)  # Has entity_ids, relationship_ids
@@ -774,22 +802,11 @@ class GraphRAGService:
                     communities_data_clean
                 )
                 logger.info(f"Saved {len(communities_data_clean)} communities (merged from structure + reports) to database for collection {collection_id}")
-            elif os.path.exists(communities_structure_file):
-                # Fallback: only structure file exists
-                logger.warning(f"Only communities.parquet found, missing community_reports.parquet - summaries will be empty")
-                communities_df = pd.read_parquet(communities_structure_file)
-                communities_data = communities_df.to_dict('records')
-                communities_data_clean = [convert_numpy_arrays(community) for community in communities_data]
-
-                await asyncio.to_thread(
-                    self.storage.save_graphrag_communities,
-                    collection_id,
-                    communities_data_clean
-                )
-                logger.info(f"Saved {len(communities_data_clean)} communities (structure only) to database for collection {collection_id}")
 
         except Exception as e:
             logger.error(f"Error saving GraphRAG data to database: {e}")
+            # Re-raise to prevent marking index as "ready" with broken data
+            raise
 
     async def _rerank_sources_if_enabled(self, query: str, sources: List[Dict[str, Any]], top_k: int = None) -> List[Dict[str, Any]]:
         """

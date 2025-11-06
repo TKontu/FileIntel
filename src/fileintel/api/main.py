@@ -60,7 +60,7 @@ configure_cors(app)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log requests immediately when received, before processing."""
-    logger = logging.getLogger("uvicorn.access")
+    logger = logging.getLogger("fileintel.api.access")
 
     # Log request arrival immediately
     client_host = request.client.host if request.client else "unknown"

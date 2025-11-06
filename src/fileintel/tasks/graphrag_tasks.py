@@ -446,26 +446,35 @@ def adaptive_graphrag_query(
     self, query: str, collection_id: str, **kwargs
 ) -> Dict[str, Any]:
     """
-    Adaptive GraphRAG query that chooses between global and local search.
+    DEPRECATED: This task is no longer used by the API.
 
-    Args:
-        query: Query string
-        collection_id: Collection to query
-        **kwargs: Additional query parameters
+    The API now creates Celery chains directly in src/fileintel/api/routes/query.py
+    for better control flow and to avoid nested task ID confusion.
 
-    Returns:
-        Dict containing query results from optimal search strategy
+    Chain pattern: query_graph_X.s() | enhance_adaptive_result.s()
+
+    If you need adaptive querying:
+    - Use API endpoint: POST /api/v2/collections/{id}/query with search_type="adaptive"
+    - API returns single chain task ID for polling
+    - Poll GET /api/v2/tasks/{chain_id} for final result
+
+    This task remains for backward compatibility but should not be called directly.
     """
+    logger.warning(
+        f"adaptive_graphrag_query task called directly (deprecated). "
+        f"Use API endpoint POST /api/v2/collections/{{id}}/query instead. "
+        f"query='{query}', collection_id='{collection_id}'"
+    )
+
+    # For backward compatibility, still execute the query but log deprecation
     self.validate_input(
         ["query", "collection_id"], query=query, collection_id=collection_id
     )
 
     try:
-        self.update_progress(0, 4, "Analyzing query for optimal search strategy")
+        self.update_progress(0, 3, "Analyzing query for optimal search strategy")
 
         # Simple heuristic for choosing search strategy
-        # More specific queries (with entities/names) -> local search
-        # Broader questions -> global search
         query_lower = query.lower()
 
         # Keywords that suggest local search
@@ -501,40 +510,214 @@ def adaptive_graphrag_query(
         use_local = local_score > global_score and len(query.split()) <= 10
 
         search_type = "local" if use_local else "global"
-        self.update_progress(1, 4, f"Using {search_type} search strategy")
+        self.update_progress(1, 3, f"Using {search_type} search strategy")
 
-        # Execute the chosen search (avoiding .get() to prevent blocking)
+        # Create non-blocking chain
+        self.update_progress(2, 3, f"Creating chain for {search_type} search")
+
         if use_local:
-            search_task = query_graph_local.apply_async(
-                args=[query, collection_id], kwargs=kwargs
+            task_chain = chain(
+                query_graph_local.s(query, collection_id, **kwargs),
+                enhance_adaptive_result.s(search_type, local_score, global_score, query, collection_id)
             )
-            search_result = {"status": "processing", "task_id": search_task.id}
         else:
-            search_task = query_graph_global.apply_async(
-                args=[query, collection_id], kwargs=kwargs
+            task_chain = chain(
+                query_graph_global.s(query, collection_id, **kwargs),
+                enhance_adaptive_result.s(search_type, local_score, global_score, query, collection_id)
             )
-            search_result = {"status": "processing", "task_id": search_task.id}
 
-        self.update_progress(3, 4, "GraphRAG adaptive query initiated")
+        # Execute chain asynchronously
+        chain_result = task_chain.apply_async()
 
-        # Return task information instead of blocking for completion
-        result = search_result.copy()
-        result["adaptive_strategy"] = search_type
-        result["strategy_reasoning"] = f"Local score: {local_score}, Global score: {global_score}"
-        result["query"] = query
-        result["collection_id"] = collection_id
+        self.update_progress(3, 3, "Adaptive chain submitted (non-blocking)")
 
-        self.update_progress(4, 4, "Adaptive GraphRAG query task started")
-        return result
+        logger.info(
+            f"[DEPRECATED CALL] Adaptive query chain created: strategy={search_type} "
+            f"chain_id={chain_result.id} collection={collection_id}"
+        )
+
+        # Return task info for backward compatibility
+        # NOTE: This is metadata, not the actual query result!
+        # Poll the chain_id (task_id) to get the final result
+        return {
+            "status": "processing",
+            "task_id": str(chain_result.id),
+            "query": query,
+            "collection_id": collection_id,
+            "adaptive_strategy": search_type,
+            "strategy_reasoning": f"Local score: {local_score}, Global score: {global_score}",
+            "message": "Adaptive query submitted as non-blocking chain. Poll task_id for result.",
+            "warning": "This task is deprecated. Use API endpoint instead."
+        }
 
     except Exception as e:
-        logger.error(f"Error in adaptive GraphRAG query: {e}")
+        logger.error(f"Error creating adaptive GraphRAG query chain: {e}")
         return {
             "query": query,
             "collection_id": collection_id,
             "error": str(e),
             "status": "failed",
         }
+
+
+@app.task(queue="graphrag_queries")
+def enhance_adaptive_result(
+    search_result: Dict[str, Any],
+    *,  # Force all following parameters to be keyword-only
+    strategy: str,
+    local_score: int,
+    global_score: int,
+    query: str,
+    collection_id: str
+) -> Dict[str, Any]:
+    """
+    Enhance search result with adaptive strategy metadata.
+
+    This task receives the result from a chained GraphRAG search task
+    (query_graph_local or query_graph_global) and enriches it with
+    information about why that strategy was chosen.
+
+    Used in Celery chain to avoid worker blocking:
+    chain(query_graph_X.s(...), enhance_adaptive_result.s(...))
+
+    CRITICAL: This task is designed for Celery chains.
+    - search_result: Automatically passed from previous task (query_graph_X)
+    - Other parameters: Passed explicitly via .s() at chain creation
+
+    Args:
+        search_result: Result from query_graph_local or query_graph_global
+        strategy: Strategy used ("local" or "global")
+        local_score: Score for local search indicators
+        global_score: Score for global search indicators
+        query: Original query string
+        collection_id: Collection ID
+
+    Returns:
+        Enhanced result dict with adaptive_strategy and strategy_reasoning
+    """
+    logger.info(f"Enhancing adaptive result for collection {collection_id} with strategy '{strategy}'")
+
+    # Validate input from previous task
+    if not isinstance(search_result, dict):
+        logger.error(
+            f"enhance_adaptive_result received invalid input: {type(search_result)}. "
+            f"Expected dict from query_graph_{strategy} task."
+        )
+        return {
+            "query": query,
+            "collection_id": collection_id,
+            "status": "failed",
+            "error": f"Chain error: Previous task returned invalid result type: {type(search_result)}",
+            "adaptive_strategy": strategy,
+            "strategy_reasoning": f"Local score: {local_score}, Global score: {global_score}"
+        }
+
+    # Check if previous task failed
+    if search_result.get("status") == "failed":
+        logger.warning(
+            f"enhance_adaptive_result received failed result from {strategy} search: "
+            f"{search_result.get('error', 'Unknown error')}"
+        )
+        # Preserve error from previous task but add adaptive metadata
+        result = search_result.copy()
+        result["adaptive_strategy"] = strategy
+        result["strategy_reasoning"] = f"Local score: {local_score}, Global score: {global_score}"
+        result["chain_note"] = f"Search task ({strategy}) failed before enhancement"
+        return result
+
+    # Enhance successful result with adaptive metadata
+    result = search_result.copy()
+    result["adaptive_strategy"] = strategy
+    result["strategy_reasoning"] = f"Local score: {local_score}, Global score: {global_score}"
+
+    # Preserve original query and collection info if not already present
+    if "query" not in result:
+        result["query"] = query
+    if "collection_id" not in result:
+        result["collection_id"] = collection_id
+
+    logger.info(
+        f"Successfully enhanced adaptive result: strategy={strategy}, "
+        f"has_answer={('answer' in result)}, status={result.get('status', 'unknown')}"
+    )
+
+    return result
+
+
+@app.task(
+    base=BaseFileIntelTask,
+    bind=True,
+    queue="rag_processing",
+    rate_limit="120/m",  # Vector queries are faster, allow higher rate
+    max_retries=3
+)
+def query_vector(
+    self, query: str, collection_id: str, top_k: int = 5, **kwargs
+) -> Dict[str, Any]:
+    """
+    Perform vector similarity search with RAG.
+
+    Args:
+        query: Query string
+        collection_id: Collection to query
+        top_k: Number of similar chunks to retrieve
+        **kwargs: Additional query parameters
+
+    Returns:
+        Dict containing query results
+    """
+    self.validate_input(
+        ["query", "collection_id"], query=query, collection_id=collection_id
+    )
+
+    config = get_config()
+    from fileintel.celery_config import get_shared_storage
+    from fileintel.rag.vector_rag.services.vector_rag_service import VectorRAGService
+
+    storage = get_shared_storage()
+
+    try:
+        self.update_progress(0, 3, "Preparing vector RAG query")
+
+        self.update_progress(1, 3, "Executing vector similarity search")
+
+        # Initialize vector service and execute query
+        vector_service = VectorRAGService(config, storage)
+        result = vector_service.query(
+            query=query,
+            collection_id=collection_id,
+            top_k=top_k,
+            **kwargs
+        )
+
+        self.update_progress(2, 3, "Formatting results")
+
+        # Format result for task response
+        task_result = {
+            "query": query,
+            "collection_id": collection_id,
+            "answer": result.get("answer", "No answer found"),
+            "sources": result.get("sources", []),
+            "confidence": result.get("confidence", 0.0),
+            "search_type": "vector",
+            "chunks_retrieved": result.get("metadata", {}).get("chunks_retrieved", 0),
+            "status": "completed",
+        }
+
+        self.update_progress(3, 3, "Vector RAG query completed")
+        return task_result
+
+    except Exception as e:
+        logger.error(f"Error in vector RAG query: {e}")
+        return {
+            "query": query,
+            "collection_id": collection_id,
+            "error": str(e),
+            "status": "failed",
+        }
+    finally:
+        # CRITICAL: Always close storage connection to prevent leaks
+        storage.close()
 
 
 @app.task(base=BaseFileIntelTask, bind=True, queue="rag_processing")
@@ -737,21 +920,49 @@ def build_graphrag_index_task(
 
                 self.update_progress(4, 5, "GraphRAG index completed")
 
-                # Set status to "ready" ONLY if indexing completed successfully
-                # This includes passing embedding completeness validation
-                storage.update_graphrag_index_status(collection_id, "ready")
-                logger.info(f"Set GraphRAG index status to 'ready' for collection {collection_id}")
+                # Note: Status will be set to "ready" by GraphRAGService after ALL validations pass
+                # This prevents race condition where status is "ready" before PostgreSQL save + validation complete
 
             except Exception as index_error:
                 # If indexing fails (timeout, incomplete embeddings, etc.), set status to "error"
                 logger.error(f"Indexing failed for collection {collection_id}: {index_error}")
 
-                # Protect status update - don't let it mask the original error
-                try:
-                    storage.update_graphrag_index_status(collection_id, "error")
-                    logger.info(f"Set GraphRAG index status to 'error' for collection {collection_id}")
-                except Exception as status_error:
-                    logger.error(f"Failed to update status to 'error': {status_error}")
+                # Use atomic status update with retry logic
+                # This prevents status from being stuck at "building" if update fails
+                error_message = str(index_error)[:500]  # Limit error message length
+                retry_count = 0
+                max_retries = 3
+                retry_delay = 1.0  # Start with 1 second
+
+                while retry_count < max_retries:
+                    try:
+                        storage.update_graphrag_index_status_atomic(
+                            collection_id,
+                            "error",
+                            error_message
+                        )
+                        logger.info(
+                            f"Atomically set GraphRAG index status to 'error' for collection {collection_id} "
+                            f"(attempt {retry_count + 1}/{max_retries})"
+                        )
+                        break  # Success, exit retry loop
+                    except Exception as status_error:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            logger.critical(
+                                f"CRITICAL: Failed to update status to 'error' after {max_retries} retries. "
+                                f"Collection {collection_id} status may be stuck at 'building'. "
+                                f"Manual intervention required. Last error: {status_error}"
+                            )
+                            # Continue to re-raise original error even if status update failed
+                        else:
+                            logger.warning(
+                                f"Status update failed (attempt {retry_count}/{max_retries}), "
+                                f"retrying in {retry_delay}s: {status_error}"
+                            )
+                            import time
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
 
                 # Re-raise original error (not status error)
                 raise index_error
@@ -790,12 +1001,15 @@ def build_graphrag_index_task(
             f"Error building GraphRAG index for collection {collection_id}: {e}"
         )
 
-        # Set status to "failed" when indexing fails
+        # Set status to "failed" when indexing fails (ensure connection cleanup)
         try:
             storage = get_shared_storage()
-            storage.update_graphrag_index_status(collection_id, "failed")
-            storage.close()
-            logger.info(f"Set GraphRAG index status to 'failed' for collection {collection_id}")
+            try:
+                storage.update_graphrag_index_status(collection_id, "failed")
+                logger.info(f"Set GraphRAG index status to 'failed' for collection {collection_id}")
+            finally:
+                # CRITICAL: Always close storage connection to prevent leaks
+                storage.close()
         except Exception as status_error:
             logger.error(f"Failed to update status to 'failed': {status_error}")
 

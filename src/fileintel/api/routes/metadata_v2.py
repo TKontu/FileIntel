@@ -51,10 +51,12 @@ async def extract_document_metadata_endpoint(
     storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Extract metadata from a document using LLM analysis."""
+    import asyncio
+
     try:
         config = get_config()
-        # Get document by ID
-        document = storage.get_document(request.document_id)
+        # Get document by ID (wrap blocking storage call)
+        document = await asyncio.to_thread(storage.get_document, request.document_id)
         if not document:
             raise HTTPException(
                 status_code=404,
@@ -79,8 +81,10 @@ async def extract_document_metadata_endpoint(
                     timestamp=datetime.utcnow()
                 )
 
-        # Get document chunks for analysis
-        chunks = storage.get_all_chunks_for_document(request.document_id)
+        # Get document chunks for analysis (wrap blocking storage call)
+        chunks = await asyncio.to_thread(
+            storage.get_all_chunks_for_document, request.document_id
+        )
         if not chunks:
             raise HTTPException(
                 status_code=400,
@@ -144,9 +148,11 @@ async def get_document_metadata(
     storage: PostgreSQLStorage = Depends(get_storage)
 ):
     """Get extracted metadata for a document."""
+    import asyncio
+
     try:
-        # Get document by ID
-        document = storage.get_document(document_id)
+        # Get document by ID (wrap blocking storage call)
+        document = await asyncio.to_thread(storage.get_document, document_id)
         if not document:
             raise HTTPException(
                 status_code=404,
@@ -205,8 +211,11 @@ async def extract_collection_metadata(
                 detail=f"Collection '{collection_identifier}' not found",
             )
 
-        # Get all documents in collection
-        documents = storage.get_documents_by_collection(collection.id)
+        # Get all documents in collection (wrap blocking storage call)
+        import asyncio
+        documents = await asyncio.to_thread(
+            storage.get_documents_by_collection, collection.id
+        )
 
         # Log collection extraction request
         logger.info(
@@ -229,6 +238,8 @@ async def extract_collection_metadata(
         tasks_started = []
         processed_count = 0
 
+        # Filter documents that need processing
+        docs_to_process = []
         for document in documents:
             # Check if metadata already exists
             if not force_reextract and document.document_metadata:
@@ -238,9 +249,20 @@ async def extract_collection_metadata(
                 )
                 if has_extracted_metadata:
                     continue  # Skip documents that already have extracted metadata
+            docs_to_process.append(document)
 
-            # Get document chunks
-            chunks = storage.get_all_chunks_for_document(document.id)
+        # Parallelize chunk fetching for all documents
+        if docs_to_process:
+            chunk_tasks = [
+                asyncio.to_thread(storage.get_all_chunks_for_document, doc.id)
+                for doc in docs_to_process
+            ]
+            all_doc_chunks = await asyncio.gather(*chunk_tasks)
+        else:
+            all_doc_chunks = []
+
+        # Process each document with its chunks
+        for document, chunks in zip(docs_to_process, all_doc_chunks):
             if not chunks:
                 logger.warning(f"No chunks found for document {document.id}, skipping")
                 continue
@@ -267,8 +289,7 @@ async def extract_collection_metadata(
 
             # Rate limiting: add small delay every 10 tasks to prevent overwhelming LLM
             if len(tasks_started) % 10 == 0:
-                from time import sleep
-                sleep(1)  # 1 second pause every 10 tasks
+                await asyncio.sleep(1)  # 1 second pause every 10 tasks (non-blocking)
             processed_count += 1
 
         # Log batch completion
@@ -314,8 +335,11 @@ async def get_collection_metadata_status(
                 detail=f"Collection '{collection_identifier}' not found",
             )
 
-        # Get all documents in collection
-        documents = storage.get_documents_by_collection(collection.id)
+        # Get all documents in collection (wrap blocking storage call)
+        import asyncio
+        documents = await asyncio.to_thread(
+            storage.get_documents_by_collection, collection.id
+        )
 
         # Log status request
         logger.info(f"Collection metadata status requested: collection='{collection.name}' ({collection.id})")
@@ -394,8 +418,10 @@ async def export_collection_metadata(
                 detail=f"Collection '{collection_identifier}' not found",
             )
 
-        # Get all documents with metadata (SINGLE OPTIMIZED QUERY)
-        documents = storage.get_documents_by_collection(collection.id)
+        # Get all documents with metadata (SINGLE OPTIMIZED QUERY - wrap blocking call)
+        documents = await asyncio.to_thread(
+            storage.get_documents_by_collection, collection.id
+        )
 
         # Helper function to check if document has LLM-extracted metadata
         def has_llm_metadata(metadata):
@@ -483,8 +509,10 @@ async def bulk_update_metadata(
                 continue
 
             try:
-                # Get document
-                document = storage.get_document(document_id)
+                import asyncio
+
+                # Get document (wrap blocking storage call)
+                document = await asyncio.to_thread(storage.get_document, document_id)
                 if not document:
                     failed_updates.append({
                         "document_id": document_id,
@@ -492,8 +520,9 @@ async def bulk_update_metadata(
                     })
                     continue
 
-                # Update metadata
-                storage.update_document_metadata(
+                # Update metadata (wrap blocking storage call)
+                await asyncio.to_thread(
+                    storage.update_document_metadata,
                     document_id,
                     metadata,
                     replace=request.replace

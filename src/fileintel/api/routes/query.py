@@ -62,8 +62,8 @@ async def query_collection(
     start_time = datetime.now()
 
     try:
-        # Validate collection exists
-        collection = get_collection_by_id_or_name(collection_identifier, storage)
+        # Validate collection exists (now async)
+        collection = await get_collection_by_id_or_name(collection_identifier, storage)
         if not collection:
             raise HTTPException(
                 status_code=404, detail=f"Collection {collection_identifier} not found"
@@ -75,58 +75,21 @@ async def query_collection(
             f"query_mode={request.query_mode} question_length={len(request.question)} max_results={request.max_results}"
         )
 
-        # ASYNC MODE: Submit as Celery task (recommended for graph queries)
-        if request.query_mode == "async":
-            return await _submit_query_task(request, collection, storage)
-
-        # SYNC MODE: Execute synchronously (default, backwards compatible)
-        # Get configuration
-        config = get_config()
-
-        # Route the query based on search type
-        if request.search_type in ["vector"]:
-            result = await _process_vector_query(
-                request, collection.id, config, storage
+        # FORCE ALL QUERIES TO ASYNC MODE - API is non-blocking router only
+        # All processing (vector, graph, adaptive) happens in Celery workers
+        # This ensures:
+        # 1. API can handle high request concurrency (just routing to queues)
+        # 2. No blocking operations in API container
+        # 3. Consistent architecture: API = router, Workers = processing
+        if request.query_mode == "sync":
+            logger.info(
+                f"Auto-forcing async mode for {request.search_type} query "
+                "(API is non-blocking router - all queries run as Celery tasks)"
             )
-        elif request.search_type in ["graph", "global", "local"]:
-            result = await _process_graph_query(request, collection.id, config, storage)
-        elif request.search_type == "adaptive":
-            result = await _process_adaptive_query(
-                request, collection.id, config, storage
-            )
-        else:
-            from fileintel.core.validation import (
-                validate_search_type,
-                to_http_exception,
-                ValidationError,
-            )
+            request.query_mode = "async"
 
-            try:
-                validate_search_type(request.search_type)
-            except ValidationError as e:
-                raise to_http_exception(e)
-
-        # Calculate processing time
-        processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
-
-        # Log query completion
-        logger.info(
-            f"Query completed: collection='{collection.name}' query_type={result.get('query_type')} "
-            f"processing_time={processing_time}ms"
-        )
-
-        # Format response
-        query_response = QueryResponse(
-            answer=result.get("answer", "No answer generated"),
-            sources=result.get("sources", []),
-            query_type=result.get("query_type", request.search_type),
-            routing_explanation=result.get("routing_explanation"),
-            collection_id=collection.id,
-            question=request.question,
-            processing_time_ms=processing_time,
-        )
-
-        return create_success_response(query_response.dict())
+        # ALL QUERIES: Submit as Celery task (non-blocking)
+        return await _submit_query_task(request, collection, storage)
 
     except HTTPException:
         raise
@@ -150,6 +113,7 @@ async def _submit_query_task(
             query_graph_global,
             query_graph_local,
             adaptive_graphrag_query,
+            query_vector,
         )
 
         # Route to appropriate Celery task based on search type
@@ -170,25 +134,95 @@ async def _submit_query_task(
             query_type = "graph_local"
 
         elif request.search_type == "adaptive":
-            # Submit adaptive query task
-            task_result = adaptive_graphrag_query.delay(
-                query=request.question, collection_id=collection.id
+            # Adaptive routing: analyze query and create chain directly
+            # This avoids nested task IDs - user gets single task ID for the complete chain
+            from celery import chain
+            from celery.exceptions import OperationalError as CeleryOperationalError
+            import socket
+
+            # Routing logic: determine local vs global strategy
+            query_lower = request.question.lower()
+
+            # Keywords that suggest local search
+            local_indicators = ["who is", "what is", "tell me about", "specific", "person", "company", "entity"]
+            # Keywords that suggest global search
+            global_indicators = ["overall", "summary", "general", "trend", "pattern", "across", "all", "total"]
+
+            local_score = sum(1 for indicator in local_indicators if indicator in query_lower)
+            global_score = sum(1 for indicator in global_indicators if indicator in query_lower)
+
+            # Default to global search for broad queries, local for specific
+            use_local = local_score > global_score and len(request.question.split()) <= 10
+            search_type = "local" if use_local else "global"
+
+            logger.info(
+                f"Adaptive routing: chose '{search_type}' search "
+                f"(local_score={local_score}, global_score={global_score})"
             )
-            query_type = "adaptive"
+
+            # Import tasks
+            from fileintel.tasks.graphrag_tasks import enhance_adaptive_result
+
+            # Create chain: search task | enhancement task
+            # Wrap in try/except to handle Celery broker failures
+            try:
+                if use_local:
+                    task_result = chain(
+                        query_graph_local.s(request.question, collection.id),
+                        # Use .si() (immutable signature) with explicit kwargs for clarity and type safety
+                        enhance_adaptive_result.si(
+                            strategy=search_type,
+                            local_score=local_score,
+                            global_score=global_score,
+                            query=request.question,
+                            collection_id=collection.id
+                        )
+                    ).apply_async()
+                else:
+                    task_result = chain(
+                        query_graph_global.s(request.question, collection.id),
+                        # Use .si() (immutable signature) with explicit kwargs for clarity and type safety
+                        enhance_adaptive_result.si(
+                            strategy=search_type,
+                            local_score=local_score,
+                            global_score=global_score,
+                            query=request.question,
+                            collection_id=collection.id
+                        )
+                    ).apply_async()
+
+                query_type = "adaptive"
+
+            except (ConnectionError, CeleryOperationalError, socket.error, TimeoutError) as e:
+                logger.error(f"Failed to submit adaptive query chain: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Task queue unavailable: {str(e)}. "
+                        "The Celery broker may be down or overloaded. Please try again later."
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Unexpected error creating adaptive query chain: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create adaptive query: {str(e)}"
+                )
 
         elif request.search_type == "vector":
-            # Vector queries are fast enough to run synchronously
-            raise HTTPException(
-                status_code=400,
-                detail="Async mode not needed for vector queries (< 1s response time). "
-                "Use query_mode='sync' or remove query_mode parameter.",
+            # Submit vector query task
+            task_result = query_vector.delay(
+                query=request.question,
+                collection_id=collection.id,
+                top_k=request.max_results
             )
+            query_type = "vector"
 
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported search_type '{request.search_type}' for async mode. "
-                "Supported: graph, global, local, adaptive",
+                detail=f"Unsupported search_type '{request.search_type}'. "
+                "Supported: vector, graph, global, local, adaptive",
             )
 
         # Log task submission
@@ -224,112 +258,6 @@ async def _submit_query_task(
         )
 
 
-async def _process_vector_query(
-    request: QueryRequest, collection_id: str, config, storage: PostgreSQLStorage
-) -> Dict[str, Any]:
-    """Process vector-based RAG query."""
-    try:
-        import asyncio
-        from fileintel.rag.vector_rag.services.vector_rag_service import (
-            VectorRAGService,
-        )
-
-        vector_service = VectorRAGService(config, storage)
-        result = await asyncio.to_thread(
-            vector_service.query, request.question, collection_id
-        )
-
-        return {
-            "answer": result.get("answer", "No answer found"),
-            "sources": result.get("sources", []),
-            "query_type": "vector",
-            "routing_explanation": "Processed using vector similarity search",
-        }
-    except Exception as e:
-        logger.error(f"Vector query error: {e}")
-        return {
-            "answer": "Vector search temporarily unavailable",
-            "sources": [],
-            "query_type": "vector",
-            "routing_explanation": f"Vector search failed: {str(e)}",
-        }
-
-
-async def _process_graph_query(
-    request: QueryRequest, collection_id: str, config, storage: PostgreSQLStorage
-) -> Dict[str, Any]:
-    """Process graph-based RAG query."""
-    try:
-        from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
-
-        graph_service = GraphRAGService(storage, config)
-
-        # Route to specific GraphRAG method based on search type
-        if request.search_type == "global":
-            result = await graph_service.global_query(collection_id, request.question)
-        elif request.search_type == "local":
-            result = await graph_service.local_query(collection_id, request.question)
-        else:  # generic "graph"
-            result = await graph_service.query(request.question, collection_id)
-
-        return {
-            "answer": result.get("answer", "No answer found"),
-            "sources": result.get("sources", []),
-            "query_type": f"graph_{request.search_type}"
-            if request.search_type in ["global", "local"]
-            else "graph",
-            "routing_explanation": f"Processed using GraphRAG {request.search_type} search",
-        }
-    except Exception as e:
-        logger.error(f"Graph query error: {e}")
-        return {
-            "answer": "Graph search temporarily unavailable",
-            "sources": [],
-            "query_type": "graph",
-            "routing_explanation": f"Graph search failed: {str(e)}",
-        }
-
-
-async def _process_adaptive_query(
-    request: QueryRequest, collection_id: str, config, storage: PostgreSQLStorage
-) -> Dict[str, Any]:
-    """Process adaptive query using intelligent routing."""
-    try:
-        from fileintel.rag.query_orchestrator import QueryOrchestrator
-        from fileintel.rag.vector_rag.services.vector_rag_service import (
-            VectorRAGService,
-        )
-        from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
-        from fileintel.rag.query_classifier import QueryClassifier
-
-        # Create services
-        vector_service = VectorRAGService(config, storage)
-        graph_service = GraphRAGService(storage, config)
-        query_classifier = QueryClassifier(config)
-
-        # Create orchestrator
-        orchestrator = QueryOrchestrator(
-            vector_rag_service=vector_service,
-            graphrag_service=graph_service,
-            query_classifier=query_classifier,
-            config=config.rag,
-        )
-
-        # Route query
-        result = await orchestrator.route_query(request.question, collection_id)
-
-        return {
-            "answer": result.answer,
-            "sources": result.sources,
-            "query_type": result.query_type,
-            "routing_explanation": result.routing_explanation,
-        }
-    except Exception as e:
-        logger.error(f"Adaptive query error: {e}")
-        # Fallback to vector search
-        return await _process_vector_query(request, collection_id, config, storage)
-
-
 @router.post(
     "/collections/{collection_identifier}/documents/{document_identifier}/query",
     response_model=ApiResponseV2,
@@ -345,19 +273,22 @@ async def query_document(
     Query a specific document within a collection.
 
     Uses vector search restricted to chunks from the specified document.
+    Routes to Celery worker for consistency with collection queries.
     """
-    start_time = datetime.now()
+    import asyncio
 
     try:
-        # Validate collection exists
-        collection = get_collection_by_id_or_name(collection_identifier, storage)
+        # Validate collection exists (now async)
+        collection = await get_collection_by_id_or_name(collection_identifier, storage)
         if not collection:
             raise HTTPException(
                 status_code=404, detail=f"Collection {collection_identifier} not found"
             )
 
-        # Find document in collection
-        documents = storage.get_documents_by_collection(collection.id)
+        # Find document in collection (wrap in asyncio.to_thread)
+        documents = await asyncio.to_thread(
+            storage.get_documents_by_collection, collection.id
+        )
         document = None
         for doc in documents:
             if (
@@ -380,52 +311,51 @@ async def query_document(
             f"document='{document.original_filename}' question_length={len(request.question)}"
         )
 
-        # Get configuration
-        config = get_config()
+        # ARCHITECTURE: Route to Celery worker for consistency
+        # Collection queries → Celery (line 47)
+        # Document queries → Celery (here)
+        # This ensures consistent architecture: API as non-blocking router
+        from fileintel.tasks.graphrag_tasks import query_vector
 
-        # Process as vector query restricted to this document
         try:
-            import asyncio
-            from fileintel.rag.vector_rag.services.vector_rag_service import (
-                VectorRAGService,
-            )
-
-            vector_service = VectorRAGService(config, storage)
-
-            # Query with document restriction
-            result = await asyncio.to_thread(
-                vector_service.query,
-                request.question,
-                collection.id,
-                document_id=document.id,
-            )
-
-            # Calculate processing time
-            processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
-
-            # Log query completion
-            logger.info(
-                f"Document query completed: document='{document.original_filename}' "
-                f"processing_time={processing_time}ms"
-            )
-
-            # Format response
-            query_response = QueryResponse(
-                answer=result.get("answer", "No answer found in document"),
-                sources=result.get("sources", []),
-                query_type="vector_document",
-                routing_explanation=f"Searched within document '{document.original_filename}' using vector similarity",
+            # Submit as Celery task (non-blocking)
+            task_result = query_vector.delay(
+                query=request.question,
                 collection_id=collection.id,
-                question=request.question,
-                processing_time_ms=processing_time,
+                document_id=document.id,  # Restrict to specific document
+                top_k=request.max_results or 5
             )
 
-            return create_success_response(query_response.dict())
+            # Log task submission
+            logger.info(
+                f"Submitted document query task: task_id={task_result.id} "
+                f"collection='{collection.name}' document='{document.original_filename}'"
+            )
+
+            # Return task ID immediately (non-blocking)
+            response_data = {
+                "task_id": str(task_result.id),
+                "status": "processing",
+                "query_type": "vector_document",
+                "collection_id": collection.id,
+                "document_id": document.id,
+                "question": request.question,
+                "message": f"Document query submitted for async processing. Use task_id to check status.",
+                "status_endpoint": f"/api/v2/tasks/{task_result.id}",
+            }
+
+            return ApiResponseV2(
+                success=True,
+                message="Document query submitted successfully",
+                data=response_data,
+                timestamp=datetime.utcnow(),
+            )
 
         except Exception as e:
-            logger.error(f"Document query error: {e}")
+            logger.error(f"Failed to submit document query task: {e}")
             raise HTTPException(
-                status_code=500, detail=f"Error querying document: {str(e)}"
+                status_code=500,
+                detail=f"Failed to submit document query: {str(e)}"
             )
 
     except HTTPException:
@@ -503,13 +433,20 @@ async def get_query_status(
         # Log status request
         logger.info("Query system status requested")
 
-        # Get collections with their document counts
-        collections = storage.get_all_collections()
+        # Get collections with their document counts (wrap blocking storage call)
+        import asyncio
+
+        collections = await asyncio.to_thread(storage.get_all_collections)
         collection_info = []
 
         for collection in collections:
-            documents = storage.get_documents_by_collection(collection.id)
-            chunks = storage.get_all_chunks_for_collection(collection.id)
+            # Wrap blocking storage calls
+            documents = await asyncio.to_thread(
+                storage.get_documents_by_collection, collection.id
+            )
+            chunks = await asyncio.to_thread(
+                storage.get_all_chunks_for_collection, collection.id
+            )
 
             collection_info.append(
                 {

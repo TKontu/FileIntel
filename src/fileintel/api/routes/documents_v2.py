@@ -80,27 +80,32 @@ async def get_document_chunks(
     GET /api/v2/documents/3b9e6ac7-2152-4133-bd87-2cd0ffc09863/chunks?chunk_type=vector
     ```
     """
+    import asyncio
+
     # Log request
     logger.info(f"Document chunks requested (JSON): document_id={document_id} chunk_type={chunk_type}")
 
-    # Get document info
-    doc = storage.get_document(document_id)
+    # Get document info (wrap blocking storage call)
+    doc = await asyncio.to_thread(storage.get_document, document_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
-    # Get chunks
-    query = storage.db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == document_id
-    )
-
-    # Filter by chunk type if specified
-    if chunk_type:
-        query = query.filter(
-            DocumentChunk.chunk_metadata['chunk_type'].astext == chunk_type
+    # Get chunks (wrap blocking query)
+    def _get_chunks():
+        query = storage.db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id
         )
 
-    # Order by position column to maintain document order
-    chunks = query.order_by(DocumentChunk.position).all()
+        # Filter by chunk type if specified
+        if chunk_type:
+            query = query.filter(
+                DocumentChunk.chunk_metadata['chunk_type'].astext == chunk_type
+            )
+
+        # Order by position column to maintain document order
+        return query.order_by(DocumentChunk.position).all()
+
+    chunks = await asyncio.to_thread(_get_chunks)
 
     # Format response - already ordered by position from query
     chunk_list = []
@@ -153,27 +158,32 @@ async def export_document_chunks_markdown(
     GET /api/v2/documents/3b9e6ac7-2152-4133-bd87-2cd0ffc09863/export?chunk_type=graph
     ```
     """
+    import asyncio
+
     # Log request
     logger.info(f"Document export requested (markdown): document_id={document_id} chunk_type={chunk_type} include_metadata={include_metadata}")
 
-    # Get document info
-    doc = storage.get_document(document_id)
+    # Get document info (wrap blocking storage call)
+    doc = await asyncio.to_thread(storage.get_document, document_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
-    # Get chunks
-    query = storage.db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == document_id
-    )
-
-    # Filter by chunk type if specified
-    if chunk_type:
-        query = query.filter(
-            DocumentChunk.chunk_metadata['chunk_type'].astext == chunk_type
+    # Get chunks (wrap blocking query)
+    def _get_chunks():
+        query = storage.db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id
         )
 
-    # Order by position column to maintain document order
-    chunks = query.order_by(DocumentChunk.position).all()
+        # Filter by chunk type if specified
+        if chunk_type:
+            query = query.filter(
+                DocumentChunk.chunk_metadata['chunk_type'].astext == chunk_type
+            )
+
+        # Order by position column to maintain document order
+        return query.order_by(DocumentChunk.position).all()
+
+    chunks = await asyncio.to_thread(_get_chunks)
 
     if not chunks:
         raise HTTPException(
@@ -303,28 +313,40 @@ async def get_document_info(
     GET /api/v2/documents/3b9e6ac7-2152-4133-bd87-2cd0ffc09863
     ```
     """
+    import asyncio
+
     # Log request
     logger.info(f"Document info requested: document_id={document_id}")
 
-    doc = storage.get_document(document_id)
+    # Wrap blocking storage call
+    doc = await asyncio.to_thread(storage.get_document, document_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
 
-    # Get chunk count
-    chunk_count = storage.db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == document_id
-    ).count()
+    # Get chunk count (wrap blocking query)
+    def _get_chunk_count():
+        return storage.db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id
+        ).count()
 
-    # Get chunk types breakdown
-    vector_count = storage.db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == document_id,
-        DocumentChunk.chunk_metadata['chunk_type'].astext == 'vector'
-    ).count()
+    chunk_count = await asyncio.to_thread(_get_chunk_count)
 
-    graph_count = storage.db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == document_id,
-        DocumentChunk.chunk_metadata['chunk_type'].astext == 'graph'
-    ).count()
+    # Get chunk types breakdown (wrap blocking queries)
+    def _get_vector_count():
+        return storage.db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.chunk_metadata['chunk_type'].astext == 'vector'
+        ).count()
+
+    vector_count = await asyncio.to_thread(_get_vector_count)
+
+    def _get_graph_count():
+        return storage.db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.chunk_metadata['chunk_type'].astext == 'graph'
+        ).count()
+
+    graph_count = await asyncio.to_thread(_get_graph_count)
 
     return create_success_response({
         'document_id': doc.id,
