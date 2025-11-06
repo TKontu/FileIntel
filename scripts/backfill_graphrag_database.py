@@ -62,7 +62,7 @@ def backfill_collection(graphrag_storage, base_storage, collection_id):
             logger.error(f"  Collection not found: {collection_id}")
             return False
 
-        logger.info(f"  Collection name: {collection.get('name', 'Unknown')}")
+        logger.info(f"  Collection name: {collection.name if collection.name else 'Unknown'}")
 
         # Check if GraphRAG index exists
         index_info = graphrag_storage.get_graphrag_index_info(collection_id)
@@ -221,7 +221,7 @@ def main():
         # Filter to collections with GraphRAG indexes
         collections_with_indexes = []
         for collection in collections:
-            collection_id = collection.get('id')
+            collection_id = collection.id
             index_info = graphrag_storage.get_graphrag_index_info(collection_id)
             if index_info:
                 collections_with_indexes.append(collection)
@@ -238,7 +238,7 @@ def main():
         fail_count = 0
 
         for collection in collections_with_indexes:
-            collection_id = collection.get('id')
+            collection_id = collection.id
             result = backfill_collection(graphrag_storage, base_storage, collection_id)
 
             if result:
