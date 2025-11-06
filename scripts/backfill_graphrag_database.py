@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root / "src"))
 
 from fileintel.storage.graphrag_storage import GraphRAGStorage
 from fileintel.storage.postgresql_storage import PostgreSQLStorage
-from fileintel.config import Config
+from fileintel.core.config import get_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -210,7 +210,7 @@ def main():
         logger.info("="*60)
 
         # Initialize storage
-        config = Config()
+        config = get_config()
         base_storage = PostgreSQLStorage(config)
         graphrag_storage = GraphRAGStorage(config)
 
