@@ -288,58 +288,37 @@ def query_graph_global(
         ["query", "collection_id"], query=query, collection_id=collection_id
     )
 
+    from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
+    from fileintel.celery_config import get_shared_storage
+
+    storage = get_shared_storage()
+
     try:
         self.update_progress(0, 3, "Preparing global GraphRAG query")
 
         config = get_config()
-        root_dir = Path(config.graphrag.index_base_path) / collection_id
 
-        # Check if index exists
-        output_dir = root_dir / "output"
-        if not output_dir.exists():
-            return {
-                "query": query,
-                "collection_id": collection_id,
-                "error": "GraphRAG index not found. Please build index first.",
-                "status": "failed",
-            }
+        # Initialize GraphRAG service
+        graphrag_service = GraphRAGService(storage, config)
 
         self.update_progress(1, 3, "Executing global search")
 
-        # Import GraphRAG components
-        try:
-            from fileintel.rag.graph_rag._graphrag_imports import (
-                global_search,
-                GraphRagConfig,
-            )
-        except ImportError as e:
-            return {
-                "query": query,
-                "collection_id": collection_id,
-                "error": "GraphRAG dependencies not available",
-                "status": "failed",
-            }
-
-        # Create configuration using the config adapter (correct approach)
-        from fileintel.rag.graph_rag.adapters.config_adapter import GraphRAGConfigAdapter
-        config_adapter = GraphRAGConfigAdapter()
-        config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
-
-        # Perform global search (async function - run in event loop)
+        # Perform global search using GraphRAG service (async function - run in event loop)
         import asyncio
         loop = asyncio.get_event_loop()
         future = asyncio.run_coroutine_threadsafe(
-            global_search(query=query, config=config_obj, **kwargs),
+            graphrag_service.global_search(query, collection_id),
             loop
         )
         search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
-        # Extract results
-        if hasattr(search_result, "response"):
-            answer = search_result.response
-            sources = getattr(search_result, "context_data", [])
+        # Extract results from GraphRAGService response format
+        # GraphRAGService returns dict with 'response' and 'context_data'
+        if isinstance(search_result, dict):
+            answer = search_result.get("response", "")
+            sources = search_result.get("context_data", [])
         else:
             answer = str(search_result)
             sources = []
@@ -365,6 +344,9 @@ def query_graph_global(
             "error": str(e),
             "status": "failed",
         }
+    finally:
+        # CRITICAL: Always close storage connection to prevent leaks
+        storage.close()
 
 
 @app.task(
@@ -390,58 +372,38 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
         ["query", "collection_id"], query=query, collection_id=collection_id
     )
 
+    from fileintel.rag.graph_rag.services.graphrag_service import GraphRAGService
+    from fileintel.celery_config import get_shared_storage
+
+    storage = get_shared_storage()
+
     try:
         self.update_progress(0, 3, "Preparing local GraphRAG query")
 
         config = get_config()
-        root_dir = Path(config.graphrag.index_base_path) / collection_id
 
-        # Check if index exists
-        output_dir = root_dir / "output"
-        if not output_dir.exists():
-            return {
-                "query": query,
-                "collection_id": collection_id,
-                "error": "GraphRAG index not found. Please build index first.",
-                "status": "failed",
-            }
+        # Initialize GraphRAG service
+        graphrag_service = GraphRAGService(storage, config)
 
         self.update_progress(1, 3, "Executing local search")
 
-        # Import GraphRAG components
-        try:
-            from fileintel.rag.graph_rag._graphrag_imports import (
-                local_search,
-                GraphRagConfig,
-            )
-        except ImportError as e:
-            return {
-                "query": query,
-                "collection_id": collection_id,
-                "error": "GraphRAG dependencies not available",
-                "status": "failed",
-            }
-
-        # Create configuration using the config adapter (correct approach)
-        from fileintel.rag.graph_rag.adapters.config_adapter import GraphRAGConfigAdapter
-        config_adapter = GraphRAGConfigAdapter()
-        config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
-
-        # Perform local search (async function - run in event loop)
+        # Perform local search using GraphRAG service (async function - run in event loop)
+        # Note: local_search requires community parameter, pass empty string to use default
         import asyncio
         loop = asyncio.get_event_loop()
         future = asyncio.run_coroutine_threadsafe(
-            local_search(query=query, config=config_obj, **kwargs),
+            graphrag_service.local_search(query, collection_id, community=""),
             loop
         )
         search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
-        # Extract results
-        if hasattr(search_result, "response"):
-            answer = search_result.response
-            sources = getattr(search_result, "context_data", [])
+        # Extract results from GraphRAGService response format
+        # GraphRAGService returns dict with 'response' and 'context_data'
+        if isinstance(search_result, dict):
+            answer = search_result.get("response", "")
+            sources = search_result.get("context_data", [])
         else:
             answer = str(search_result)
             sources = []
@@ -467,6 +429,9 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
             "error": str(e),
             "status": "failed",
         }
+    finally:
+        # CRITICAL: Always close storage connection to prevent leaks
+        storage.close()
 
 
 @app.task(base=BaseFileIntelTask, bind=True, queue="graphrag_queries")
