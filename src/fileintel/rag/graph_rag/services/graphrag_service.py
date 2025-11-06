@@ -1212,7 +1212,7 @@ class GraphRAGService:
     async def _format_with_harvard_citations(
         self, answer_text: str, sources: List[Dict], collection_id: str, reranked_sources: List[Dict]
     ) -> str:
-        """Format answer by replacing inline citations with Harvard-style references."""
+        """Format answer by replacing inline citations with Harvard-style references using semantic matching."""
         import re
 
         # Find all citation contexts (sentence + citation)
@@ -1222,10 +1222,14 @@ class GraphRAGService:
         if not citation_contexts:
             return answer_text
 
-        logger.info(f"Formatting {len(citation_contexts)} citations with Harvard style")
+        logger.info(f"Formatting {len(citation_contexts)} citations with semantic matching")
 
-        # Build mapping of citation marker to Harvard citation
-        citation_mappings = {}
+        if not sources:
+            logger.warning("No sources available for citation matching")
+            return answer_text
+
+        # Extract unique citation contexts for semantic matching
+        unique_contexts = {}  # {citation_marker: context_text}
 
         for match in citation_contexts:
             full_context = match.group(1)
@@ -1237,42 +1241,113 @@ class GraphRAGService:
 
             citation_marker = marker_match.group(0)
 
-            if citation_marker in citation_mappings:
-                continue  # Already processed
+            if citation_marker not in unique_contexts:
+                # Get context text without citation for semantic matching
+                context_text = full_context.replace(citation_marker, '').strip()
+                unique_contexts[citation_marker] = context_text
 
-            # Get context text without citation for matching
-            context_text = full_context.replace(citation_marker, '').strip()
+        # Semantically match each citation to the most relevant source
+        citation_mappings = await self._match_citations_to_sources(
+            unique_contexts, sources, reranked_sources
+        )
 
-            # Build citation from all available sources
-            # Since we traced all citations together, use combined source list
-            # Future improvement: map each specific citation ID to its sources
-            if sources:
-                # Use first source as primary, but indicate multiple sources if available
-                if len(sources) == 1:
-                    harvard_citation = self._build_harvard_citation(sources[0], reranked_sources)
-                else:
-                    # Multiple sources - build combined citation
-                    primary_source = sources[0]
-                    harvard_citation = self._build_harvard_citation(primary_source, reranked_sources)
-                    if len(sources) > 1:
-                        harvard_citation += f" et al. ({len(sources)} sources)"
-
-                citation_mappings[citation_marker] = harvard_citation
-            else:
-                logger.warning(f"No sources available for citation: {citation_marker}")
-
-        # Replace citations
+        # Replace citations using simple string replacement (avoid regex issues with parentheses)
         result = answer_text
         for marker, harvard_citation in citation_mappings.items():
-            # Escape special regex characters in the marker
-            escaped_marker = re.escape(marker)
-            # Use plain f-string, not raw f-string (rf causes issues with escaped chars)
-            pattern = f'\\s*{escaped_marker}'
+            # Use simple string replacement instead of regex to avoid parenthesis issues
             replacement = f' ({harvard_citation})'
-            result = re.sub(pattern, replacement, result)
-            logger.debug(f"Replaced '{marker}' with '{replacement}'")
+            # Replace with optional leading whitespace handling
+            result = result.replace(f' {marker}', replacement)  # Space before marker
+            result = result.replace(marker, replacement)  # No space before marker
+            logger.info(f"Replaced citation '{marker[:50]}...' with '{replacement}'")
 
         return result
+
+    async def _match_citations_to_sources(
+        self,
+        unique_contexts: Dict[str, str],
+        sources: List[Dict],
+        reranked_sources: List[Dict]
+    ) -> Dict[str, str]:
+        """
+        Semantically match each citation context to the most relevant source document.
+
+        Args:
+            unique_contexts: {citation_marker: context_text}
+            sources: List of traced source documents
+            reranked_sources: Reranked sources for fallback scoring
+
+        Returns:
+            {citation_marker: harvard_citation_string}
+        """
+        import numpy as np
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        citation_mappings = {}
+
+        if len(sources) == 1:
+            # Only one source - use it for all citations
+            harvard_citation = self._build_harvard_citation(sources[0], reranked_sources)
+            for marker in unique_contexts.keys():
+                citation_mappings[marker] = harvard_citation
+            logger.info(f"Single source: using same citation for all {len(unique_contexts)} contexts")
+            return citation_mappings
+
+        try:
+            # Get embeddings for all citation contexts
+            context_texts = list(unique_contexts.values())
+            logger.info(f"Embedding {len(context_texts)} citation contexts for semantic matching...")
+
+            context_embeddings = await asyncio.to_thread(
+                self.embedding_provider.embed_batch,
+                context_texts
+            )
+
+            # Get representative text for each source (first chunk or document name)
+            source_texts = []
+            for source in sources:
+                # Try to get actual chunk text if available
+                doc_name = source.get("document_name", "Unknown")
+                # Use document name as fallback (not ideal but works)
+                source_texts.append(doc_name)
+
+            logger.info(f"Embedding {len(source_texts)} source documents...")
+            source_embeddings = await asyncio.to_thread(
+                self.embedding_provider.embed_batch,
+                source_texts
+            )
+
+            # Compute similarity matrix: contexts x sources
+            similarities = cosine_similarity(context_embeddings, source_embeddings)
+
+            # Match each citation to its most similar source
+            for idx, (marker, context_text) in enumerate(unique_contexts.items()):
+                # Find most similar source
+                best_source_idx = np.argmax(similarities[idx])
+                best_similarity = similarities[idx][best_source_idx]
+
+                best_source = sources[best_source_idx]
+                harvard_citation = self._build_harvard_citation(best_source, reranked_sources)
+
+                citation_mappings[marker] = harvard_citation
+
+                logger.info(
+                    f"Matched citation '{context_text[:50]}...' → "
+                    f"{best_source.get('document_name', 'Unknown')[:30]} "
+                    f"(similarity: {best_similarity:.3f})"
+                )
+
+            return citation_mappings
+
+        except Exception as e:
+            # Fallback: If semantic matching fails, use frequency-based assignment
+            logger.warning(f"Semantic matching failed: {e}. Using fallback (first source for all)")
+
+            harvard_citation = self._build_harvard_citation(sources[0], reranked_sources)
+            for marker in unique_contexts.keys():
+                citation_mappings[marker] = harvard_citation
+
+            return citation_mappings
 
     def _build_harvard_citation(self, source: Dict, reranked_sources: List[Dict]) -> str:
         """Build Harvard-style citation from source metadata."""
