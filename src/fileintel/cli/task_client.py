@@ -74,7 +74,20 @@ class TaskAPIClient:
             self.console.print("[yellow]The API server may be overloaded or hung. Try again later.[/yellow]")
             raise
         except requests.exceptions.RequestException as e:
-            self.console.print(f"[bold red]API request failed:[/bold red] {e}")
+            # Try to extract detailed error message from JSON response
+            error_detail = None
+            try:
+                if hasattr(e.response, 'json'):
+                    error_json = e.response.json()
+                    error_detail = error_json.get('detail') or error_json.get('message')
+            except:
+                pass
+
+            # Display helpful error message
+            if error_detail:
+                self.console.print(f"[bold red]API request failed:[/bold red] {error_detail}")
+            else:
+                self.console.print(f"[bold red]API request failed:[/bold red] {e}")
             raise
 
     def _request_raw(
@@ -96,7 +109,20 @@ class TaskAPIClient:
             self.console.print("[yellow]The API server may be overloaded. Try again later.[/yellow]")
             raise
         except requests.exceptions.RequestException as e:
-            self.console.print(f"[bold red]API request failed:[/bold red] {e}")
+            # Try to extract detailed error message from JSON response
+            error_detail = None
+            try:
+                if hasattr(e.response, 'json'):
+                    error_json = e.response.json()
+                    error_detail = error_json.get('detail') or error_json.get('message')
+            except:
+                pass
+
+            # Display helpful error message
+            if error_detail:
+                self.console.print(f"[bold red]API request failed:[/bold red] {error_detail}")
+            else:
+                self.console.print(f"[bold red]API request failed:[/bold red] {e}")
             raise
 
     # Collection Operations (v2)

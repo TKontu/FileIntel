@@ -196,8 +196,14 @@ def build_graph_index(
         # Build the index
         self.update_progress(3, 5, "Building GraphRAG index (this may take a while)")
 
-        # Run indexing
-        index_result = build_index(config=config_obj)
+        # Run indexing (async function - run in event loop)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        future = asyncio.run_coroutine_threadsafe(
+            build_index(config=config_obj),
+            loop
+        )
+        index_result = future.result()  # Wait for completion
 
         self.update_progress(4, 5, "Processing index results")
 
@@ -319,8 +325,14 @@ def query_graph_global(
         config_adapter = GraphRAGConfigAdapter()
         config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
 
-        # Perform global search
-        search_result = global_search(query=query, config=config_obj, **kwargs)
+        # Perform global search (async function - run in event loop)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        future = asyncio.run_coroutine_threadsafe(
+            global_search(query=query, config=config_obj, **kwargs),
+            loop
+        )
+        search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
@@ -415,8 +427,14 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
         config_adapter = GraphRAGConfigAdapter()
         config_obj = config_adapter.adapt_config(config, collection_id, config.graphrag.index_base_path)
 
-        # Perform local search
-        search_result = local_search(query=query, config=config_obj, **kwargs)
+        # Perform local search (async function - run in event loop)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        future = asyncio.run_coroutine_threadsafe(
+            local_search(query=query, config=config_obj, **kwargs),
+            loop
+        )
+        search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
