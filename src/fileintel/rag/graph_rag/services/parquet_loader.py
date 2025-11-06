@@ -44,7 +44,8 @@ class ParquetLoader:
             if not os.path.exists(full_path):
                 raise FileNotFoundError(f"Parquet file not found: {full_path}")
 
-            df = pd.read_parquet(full_path)
+            # Use asyncio.to_thread to prevent blocking the event loop
+            df = await asyncio.to_thread(pd.read_parquet, full_path)
             await self.cache.set(
                 cache_key, df, ttl=self.cache.settings.cache.ttl_seconds
             )

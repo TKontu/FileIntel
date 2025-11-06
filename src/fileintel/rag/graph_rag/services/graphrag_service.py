@@ -746,11 +746,24 @@ class GraphRAGService:
                 )
                 logger.info(f"Saved {len(entities_data_clean)} entities to database for collection {collection_id}")
 
-            # Load communities from parquet
-            communities_file = os.path.join(workspace_path, "communities.parquet")
-            if os.path.exists(communities_file):
-                communities_df = pd.read_parquet(communities_file)
-                communities_data = communities_df.to_dict('records')
+            # Load communities - need to merge two files for complete data
+            communities_structure_file = os.path.join(workspace_path, "communities.parquet")
+            communities_content_file = os.path.join(workspace_path, "community_reports.parquet")
+
+            if os.path.exists(communities_structure_file) and os.path.exists(communities_content_file):
+                # Load both files
+                communities_df = pd.read_parquet(communities_structure_file)  # Has entity_ids, relationship_ids
+                reports_df = pd.read_parquet(communities_content_file)  # Has summary, full_content, findings
+
+                # Merge on community and level to get complete data
+                merged_df = pd.merge(
+                    communities_df,
+                    reports_df[['community', 'level', 'summary', 'full_content', 'findings', 'rank', 'rating_explanation']],
+                    on=['community', 'level'],
+                    how='left'  # Keep all communities even if no report
+                )
+
+                communities_data = merged_df.to_dict('records')
 
                 # Clean the communities data for JSON serialization
                 communities_data_clean = [convert_numpy_arrays(community) for community in communities_data]
@@ -760,7 +773,20 @@ class GraphRAGService:
                     collection_id,
                     communities_data_clean
                 )
-                logger.info(f"Saved {len(communities_data_clean)} communities to database for collection {collection_id}")
+                logger.info(f"Saved {len(communities_data_clean)} communities (merged from structure + reports) to database for collection {collection_id}")
+            elif os.path.exists(communities_structure_file):
+                # Fallback: only structure file exists
+                logger.warning(f"Only communities.parquet found, missing community_reports.parquet - summaries will be empty")
+                communities_df = pd.read_parquet(communities_structure_file)
+                communities_data = communities_df.to_dict('records')
+                communities_data_clean = [convert_numpy_arrays(community) for community in communities_data]
+
+                await asyncio.to_thread(
+                    self.storage.save_graphrag_communities,
+                    collection_id,
+                    communities_data_clean
+                )
+                logger.info(f"Saved {len(communities_data_clean)} communities (structure only) to database for collection {collection_id}")
 
         except Exception as e:
             logger.error(f"Error saving GraphRAG data to database: {e}")

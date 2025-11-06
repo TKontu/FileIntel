@@ -6,9 +6,10 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', message='.*PyTorch.*TensorFlow.*Flax.*')
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import time
 
 from fileintel.core.logging import setup_logging
 from fileintel.core.config import get_config, Settings
@@ -54,6 +55,33 @@ def configure_cors(app: FastAPI, config: Optional[Settings] = None) -> None:
 
 # Configure CORS with default configuration
 configure_cors(app)
+
+# Request logging middleware - logs immediately when request arrives
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log requests immediately when received, before processing."""
+    logger = logging.getLogger("uvicorn.access")
+
+    # Log request arrival immediately
+    client_host = request.client.host if request.client else "unknown"
+    logger.info(f"{client_host} - \"{request.method} {request.url.path}\" - Request received")
+
+    # Track processing time
+    start_time = time.time()
+
+    # Process request
+    response = await call_next(request)
+
+    # Calculate duration
+    process_time = time.time() - start_time
+
+    # Log completion with timing
+    logger.info(
+        f"{client_host} - \"{request.method} {request.url.path}\" "
+        f"{response.status_code} - Completed in {process_time:.2f}s"
+    )
+
+    return response
 
 # V1 routes removed - migrated to task-based v2 API
 # V2 Task-based API endpoints

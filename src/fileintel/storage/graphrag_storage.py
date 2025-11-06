@@ -200,14 +200,33 @@ class GraphRAGStorage:
             logger.error(f"Error saving GraphRAG entities: {e}")
             self.base._handle_session_error(e)
 
-    def get_graphrag_entities(self, collection_id: str) -> List[dict]:
-        """Get GraphRAG entities for a collection."""
+    def get_graphrag_entities(
+        self, collection_id: str, limit: Optional[int] = None, offset: Optional[int] = 0
+    ) -> List[dict]:
+        """
+        Get GraphRAG entities for a collection with pagination support.
+
+        Args:
+            collection_id: Collection ID
+            limit: Maximum number of entities to return (None for all)
+            offset: Number of entities to skip (default: 0)
+
+        Returns:
+            List of entity dictionaries ordered by importance_score descending
+        """
         try:
-            entities = (
+            query = (
                 self.db.query(GraphRAGEntity)
                 .filter(GraphRAGEntity.collection_id == collection_id)
-                .all()
+                .order_by(GraphRAGEntity.importance_score.desc())
             )
+
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+
+            entities = query.all()
 
             entity_list = []
             for entity in entities:
@@ -309,15 +328,33 @@ class GraphRAGStorage:
             logger.error(f"Error saving GraphRAG communities: {e}")
             self.base._handle_session_error(e)
 
-    def get_graphrag_communities(self, collection_id: str) -> List[dict]:
-        """Get GraphRAG communities for a collection."""
+    def get_graphrag_communities(
+        self, collection_id: str, limit: Optional[int] = None, offset: Optional[int] = 0
+    ) -> List[dict]:
+        """
+        Get GraphRAG communities for a collection with pagination support.
+
+        Args:
+            collection_id: Collection ID
+            limit: Maximum number of communities to return (None for all)
+            offset: Number of communities to skip (default: 0)
+
+        Returns:
+            List of community dictionaries ordered by size descending
+        """
         try:
-            communities = (
+            query = (
                 self.db.query(GraphRAGCommunity)
                 .filter(GraphRAGCommunity.collection_id == collection_id)
                 .order_by(GraphRAGCommunity.size.desc())
-                .all()
             )
+
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+
+            communities = query.all()
 
             community_list = []
             for community in communities:
@@ -342,6 +379,49 @@ class GraphRAGStorage:
         except Exception as e:
             logger.error(f"Error getting GraphRAG communities: {e}")
             return []
+
+    def get_graphrag_community_by_id(
+        self, collection_id: str, community_id: int
+    ) -> Optional[dict]:
+        """
+        Get a specific GraphRAG community by its ID.
+
+        Args:
+            collection_id: Collection ID
+            community_id: Community ID (integer)
+
+        Returns:
+            Community dictionary or None if not found
+        """
+        try:
+            community = (
+                self.db.query(GraphRAGCommunity)
+                .filter(
+                    GraphRAGCommunity.collection_id == collection_id,
+                    GraphRAGCommunity.community_id == community_id
+                )
+                .first()
+            )
+
+            if not community:
+                return None
+
+            community_dict = {
+                "id": community.id,
+                "community_id": community.community_id,
+                "level": community.level,
+                "title": community.title,
+                "summary": community.summary,
+                "entities": community.entities or [],
+                "size": community.size,
+                "collection_id": community.collection_id,
+            }
+
+            return self.base._clean_result_data(community_dict)
+
+        except Exception as e:
+            logger.error(f"Error getting community by ID: {e}")
+            return None
 
     def _get_graphrag_communities_from_db(self, collection_id: str) -> List[dict]:
         """Get GraphRAG communities from database."""

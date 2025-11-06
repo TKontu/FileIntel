@@ -29,6 +29,7 @@ class QueryRequest(BaseModel):
     search_type: Optional[str] = "adaptive"  # vector, graph, adaptive, global, local
     max_results: Optional[int] = 5
     include_sources: Optional[bool] = True
+    query_mode: Optional[str] = "sync"  # "sync" (default) or "async" for backwards compatibility
 
 
 class QueryResponse(BaseModel):
@@ -71,9 +72,14 @@ async def query_collection(
         # Log query request
         logger.info(
             f"Received query request: collection='{collection.name}' search_type={request.search_type} "
-            f"question_length={len(request.question)} max_results={request.max_results}"
+            f"query_mode={request.query_mode} question_length={len(request.question)} max_results={request.max_results}"
         )
 
+        # ASYNC MODE: Submit as Celery task (recommended for graph queries)
+        if request.query_mode == "async":
+            return await _submit_query_task(request, collection, storage)
+
+        # SYNC MODE: Execute synchronously (default, backwards compatible)
         # Get configuration
         config = get_config()
 
@@ -127,6 +133,95 @@ async def query_collection(
     except Exception as e:
         logger.error(f"Error processing query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _submit_query_task(
+    request: QueryRequest, collection, storage: PostgreSQLStorage
+) -> ApiResponseV2:
+    """
+    Submit query as async Celery task.
+
+    Returns task ID immediately for non-blocking operation.
+    Recommended for graph queries which can take 30-60 seconds.
+    """
+    try:
+        # Import Celery tasks
+        from fileintel.tasks.graphrag_tasks import (
+            query_graph_global,
+            query_graph_local,
+            adaptive_graphrag_query,
+        )
+
+        # Route to appropriate Celery task based on search type
+        task_result = None
+
+        if request.search_type in ["graph", "global"]:
+            # Submit global graph query task
+            task_result = query_graph_global.delay(
+                query=request.question, collection_id=collection.id
+            )
+            query_type = "graph_global"
+
+        elif request.search_type == "local":
+            # Submit local graph query task
+            task_result = query_graph_local.delay(
+                query=request.question, collection_id=collection.id
+            )
+            query_type = "graph_local"
+
+        elif request.search_type == "adaptive":
+            # Submit adaptive query task
+            task_result = adaptive_graphrag_query.delay(
+                query=request.question, collection_id=collection.id
+            )
+            query_type = "adaptive"
+
+        elif request.search_type == "vector":
+            # Vector queries are fast enough to run synchronously
+            raise HTTPException(
+                status_code=400,
+                detail="Async mode not needed for vector queries (< 1s response time). "
+                "Use query_mode='sync' or remove query_mode parameter.",
+            )
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported search_type '{request.search_type}' for async mode. "
+                "Supported: graph, global, local, adaptive",
+            )
+
+        # Log task submission
+        logger.info(
+            f"Submitted async query task: task_id={task_result.id} "
+            f"collection='{collection.name}' query_type={query_type}"
+        )
+
+        # Return task ID immediately (non-blocking)
+        response_data = {
+            "task_id": str(task_result.id),
+            "status": "processing",
+            "query_type": query_type,
+            "collection_id": collection.id,
+            "question": request.question,
+            "message": f"Query submitted for async processing. Use task_id to check status.",
+            "status_endpoint": f"/api/v2/tasks/{task_result.id}",
+        }
+
+        return ApiResponseV2(
+            success=True,
+            message="Query submitted successfully",
+            data=response_data,
+            timestamp=datetime.utcnow(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error submitting async query task: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to submit async query: {str(e)}"
+        )
 
 
 async def _process_vector_query(
