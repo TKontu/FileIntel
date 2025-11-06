@@ -301,35 +301,29 @@ def query_graph_global(
         # Initialize GraphRAG service
         graphrag_service = GraphRAGService(storage, config)
 
-        self.update_progress(1, 3, "Executing global search")
+        self.update_progress(1, 3, "Executing global search with citation tracing")
 
-        # Perform global search using GraphRAG service (async function - run in event loop)
+        # Perform global search using GraphRAG service's query() method
+        # This calls global_search() internally + applies citation tracing and formatting
         import asyncio
         loop = asyncio.get_event_loop()
         future = asyncio.run_coroutine_threadsafe(
-            graphrag_service.global_search(query, collection_id),
+            graphrag_service.query(query, collection_id, search_type="global"),
             loop
         )
         search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
-        # Extract results from GraphRAGService response format
-        # GraphRAGService returns dict with 'response' and 'context_data'
-        if isinstance(search_result, dict):
-            answer = search_result.get("response", "")
-            sources = search_result.get("context_data", [])
-        else:
-            answer = str(search_result)
-            sources = []
-
+        # GraphRAGService.query() returns dict with 'answer', 'sources', 'confidence', 'metadata'
+        # The answer is already formatted with Harvard-style citations
         result = {
             "query": query,
             "collection_id": collection_id,
-            "answer": answer,
-            "sources": sources,
+            "answer": search_result.get("answer", ""),
+            "sources": search_result.get("sources", []),
             "search_type": "global",
-            "confidence": kwargs.get("confidence", 0.8),
+            "confidence": search_result.get("confidence", 0.8),
             "status": "completed",
         }
 
@@ -385,36 +379,29 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
         # Initialize GraphRAG service
         graphrag_service = GraphRAGService(storage, config)
 
-        self.update_progress(1, 3, "Executing local search")
+        self.update_progress(1, 3, "Executing local search with citation tracing")
 
-        # Perform local search using GraphRAG service (async function - run in event loop)
-        # Note: local_search requires community parameter, pass empty string to use default
+        # Perform local search using GraphRAG service's query() method
+        # This calls local_search() internally + applies citation tracing and formatting
         import asyncio
         loop = asyncio.get_event_loop()
         future = asyncio.run_coroutine_threadsafe(
-            graphrag_service.local_search(query, collection_id, community=""),
+            graphrag_service.query(query, collection_id, search_type="local"),
             loop
         )
         search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
-        # Extract results from GraphRAGService response format
-        # GraphRAGService returns dict with 'response' and 'context_data'
-        if isinstance(search_result, dict):
-            answer = search_result.get("response", "")
-            sources = search_result.get("context_data", [])
-        else:
-            answer = str(search_result)
-            sources = []
-
+        # GraphRAGService.query() returns dict with 'answer', 'sources', 'confidence', 'metadata'
+        # The answer is already formatted with Harvard-style citations
         result = {
             "query": query,
             "collection_id": collection_id,
-            "answer": answer,
-            "sources": sources,
+            "answer": search_result.get("answer", ""),
+            "sources": search_result.get("sources", []),
             "search_type": "local",
-            "confidence": kwargs.get("confidence", 0.9),
+            "confidence": search_result.get("confidence", 0.9),
             "status": "completed",
         }
 

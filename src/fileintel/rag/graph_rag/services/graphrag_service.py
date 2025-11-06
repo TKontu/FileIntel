@@ -72,9 +72,17 @@ class GraphRAGService:
             )
         return self._config_cache[collection_id]
 
-    async def query(self, query: str, collection_id: str) -> Dict[str, Any]:
+    async def query(self, query: str, collection_id: str, search_type: str = "global") -> Dict[str, Any]:
         """
-        Standard query interface for the orchestrator. Defaults to global search.
+        Standard query interface with citation tracing. Routes to global or local search.
+
+        Args:
+            query: The search query
+            collection_id: Collection to search
+            search_type: "global" for global search, "local" for local search (default: "global")
+
+        Returns:
+            Dict with answer (formatted with citations), sources, confidence, and metadata
         """
         # Validate collection exists (run in thread to avoid blocking)
         collection = await asyncio.to_thread(self.storage.get_collection, collection_id)
@@ -86,12 +94,16 @@ class GraphRAGService:
                 "confidence": 0.0,
                 "metadata": {
                     "error": "collection_not_found",
-                    "search_type": "global",
+                    "search_type": search_type,
                     "collection_id": collection_id,
                 },
             }
 
-        raw_response = await self.global_search(query, collection_id)
+        # Route to appropriate search method
+        if search_type == "local":
+            raw_response = await self.local_search(query, collection_id, community="")
+        else:
+            raw_response = await self.global_search(query, collection_id)
 
         # Extract response from dict (global_search returns a dict from data_adapter)
         if isinstance(raw_response, dict):
@@ -105,31 +117,25 @@ class GraphRAGService:
         sources = await self._rerank_sources_if_enabled(query, sources)
 
         # SERVER-SIDE: Trace citations and format answer with Harvard references
-        logger.info(f"[CITATION_TRACE] Starting citation tracing for collection {collection_id}")
         formatted_answer = answer
         traced_sources = sources
         try:
             # Get workspace path for this collection
-            logger.info(f"[CITATION_TRACE] Fetching GraphRAG index info from database...")
             index_info = await asyncio.to_thread(
                 self.storage.get_graphrag_index_info, collection_id
             )
-            logger.info(f"[CITATION_TRACE] Index info retrieved: {index_info}")
 
             if index_info and index_info.get("index_path"):
                 workspace_path = index_info["index_path"]
-                logger.info(f"[CITATION_TRACE] Workspace path: {workspace_path}")
-                logger.info(f"[CITATION_TRACE] Calling _trace_and_format_citations...")
                 formatted_answer, traced_sources = await self._trace_and_format_citations(
                     answer, collection_id, workspace_path, sources
                 )
-                logger.info(f"[CITATION_TRACE] Citation tracing completed successfully")
             else:
-                logger.warning(f"[CITATION_TRACE] Skipping citation tracing - index_info is None or missing index_path. index_info={index_info}")
+                logger.warning(f"Citation tracing skipped: No index_path found for collection {collection_id}")
         except Exception as e:
             import traceback
-            logger.error(f"[CITATION_TRACE] Citation tracing failed with exception: {e}")
-            logger.error(f"[CITATION_TRACE] Traceback: {traceback.format_exc()}")
+            logger.error(f"Citation tracing failed: {e}")
+            logger.debug(f"Citation tracing traceback: {traceback.format_exc()}")
             # Fallback to raw answer if tracing fails
 
         # Calculate confidence based on result quality
@@ -140,7 +146,7 @@ class GraphRAGService:
             "raw_answer": answer,            # Original with [Data: Reports (X)]
             "sources": traced_sources,
             "confidence": confidence,
-            "metadata": {"search_type": "global"},
+            "metadata": {"search_type": search_type},
         }
 
     async def build_index(self, documents: List[DocumentChunk], collection_id: str):
@@ -936,20 +942,14 @@ class GraphRAGService:
         import os
         import pandas as pd
 
-        logger.info(f"[CITATION_TRACE] _trace_and_format_citations called")
-        logger.info(f"[CITATION_TRACE] Answer length: {len(answer)} chars")
-        logger.info(f"[CITATION_TRACE] Answer preview: {answer[:200]}...")
-
         # 1. Parse citation IDs from answer
         citation_ids = self._parse_citation_ids(answer)
-        logger.info(f"[CITATION_TRACE] Parsed citation IDs: {citation_ids}")
 
         if not citation_ids["report_ids"] and not citation_ids["entity_ids"]:
             # No citations to trace
-            logger.debug("No GraphRAG citations found in answer")
             return answer, reranked_sources
 
-        logger.info(f"Tracing GraphRAG citations: {len(citation_ids['report_ids'])} reports, {len(citation_ids['entity_ids'])} entities")
+        logger.info(f"Tracing {len(citation_ids['report_ids'])} report citations, {len(citation_ids['entity_ids'])} entity citations")
 
         # 2. SERVER-SIDE: Trace citations to sources using direct parquet access
         traced_sources = await asyncio.to_thread(
@@ -979,27 +979,17 @@ class GraphRAGService:
         import pandas as pd
         import os
 
-        logger.info(f"[CITATION_TRACE] _trace_citations_server_side called with workspace_path: {workspace_path}")
-        logger.info(f"[CITATION_TRACE] Citation IDs to trace: {citation_ids}")
-
         # Helper to safely load parquet files
         def load_parquet_safe(filename):
             path = os.path.join(workspace_path, filename)
-            logger.info(f"[CITATION_TRACE] Looking for {filename} at: {path}")
-            logger.info(f"[CITATION_TRACE] File exists: {os.path.exists(path)}")
             if os.path.exists(path):
                 try:
-                    df = pd.read_parquet(path)
-                    logger.info(f"[CITATION_TRACE] Successfully loaded {filename}, shape: {df.shape}")
-                    return df
+                    return pd.read_parquet(path)
                 except Exception as e:
-                    logger.warning(f"[CITATION_TRACE] Failed to load {filename}: {e}")
-            else:
-                logger.warning(f"[CITATION_TRACE] File not found: {path}")
+                    logger.warning(f"Failed to load {filename}: {e}")
             return None
 
         # Load required parquet files
-        logger.info(f"[CITATION_TRACE] Loading required parquet files...")
         communities_df = load_parquet_safe("communities.parquet")
         entities_df = load_parquet_safe("entities.parquet")
         text_units_df = load_parquet_safe("text_units.parquet")
@@ -1024,7 +1014,6 @@ class GraphRAGService:
 
         # From report IDs (community IDs)
         report_ids = citation_ids.get("report_ids", [])
-        logger.debug(f"Tracing {len(report_ids)} report citations to text units")
         for report_id in report_ids:
             # Find community by ID
             comm_rows = communities_df[communities_df["community"] == report_id]
@@ -1041,7 +1030,6 @@ class GraphRAGService:
 
         # From entity IDs directly
         entity_ids = citation_ids.get("entity_ids", [])
-        logger.debug(f"Tracing {len(entity_ids)} entity citations to text units")
         for entity_id in entity_ids:
             ent_rows = entities_df[entities_df["id"] == entity_id]
             for _, ent in ent_rows.iterrows():
@@ -1052,8 +1040,6 @@ class GraphRAGService:
         if not text_unit_ids:
             logger.warning(f"No text units found for {len(report_ids)} reports and {len(entity_ids)} entities")
             return []
-
-        logger.debug(f"Found {len(text_unit_ids)} text units from citations")
 
         # Map text units to chunk UUIDs
         # Note: text_units.document_ids contains FileIntel chunk UUIDs (GraphRAG's "document" = FileIntel's "chunk")
