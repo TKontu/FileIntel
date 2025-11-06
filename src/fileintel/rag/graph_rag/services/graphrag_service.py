@@ -955,7 +955,8 @@ class GraphRAGService:
         traced_sources = await asyncio.to_thread(
             self._trace_citations_server_side,
             citation_ids,
-            workspace_path
+            workspace_path,
+            reranked_sources
         )
 
         if not traced_sources:
@@ -971,10 +972,22 @@ class GraphRAGService:
 
         return formatted_answer, traced_sources
 
-    def _trace_citations_server_side(self, citation_ids: Dict[str, set], workspace_path: str) -> List[Dict[str, Any]]:
+    def _trace_citations_server_side(
+        self,
+        citation_ids: Dict[str, set],
+        workspace_path: str,
+        reranked_sources: List[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
         SERVER-SIDE: Trace citations to source documents using direct parquet file access.
-        Simplified version that doesn't require API client.
+
+        Args:
+            citation_ids: Parsed citation IDs from answer
+            workspace_path: Path to GraphRAG output directory
+            reranked_sources: Sources from search (used to prioritize relevant documents)
+
+        Returns:
+            List of source documents with page numbers, sorted by relevance
         """
         import pandas as pd
         import os
@@ -1078,9 +1091,32 @@ class GraphRAGService:
                     doc_chunks[doc_title] = {"chunk_uuids": [], "pages": set()}
                 doc_chunks[doc_title]["chunk_uuids"].append(chunk_uuid)
 
+        # Extract relevant document names from reranked sources (these are the ACTUAL sources used in the answer)
+        relevant_doc_names = set()
+        if reranked_sources:
+            for source in reranked_sources:
+                doc_name = source.get("document_name") or source.get("title")
+                if doc_name:
+                    relevant_doc_names.add(doc_name)
+
+        # Sort documents by relevance:
+        # 1. Documents that appear in reranked_sources (actually used in answer)
+        # 2. Documents with most cited chunks
+        def doc_relevance_score(item):
+            doc_name, info = item
+            in_reranked = 1 if doc_name in relevant_doc_names else 0
+            chunk_count = len(info["chunk_uuids"])
+            return (in_reranked, chunk_count)  # Sort by (reranked first, then chunk count)
+
+        sorted_docs = sorted(doc_chunks.items(), key=doc_relevance_score, reverse=True)
+
+        # Limit to top 10 most relevant documents to avoid slow storage queries
+        top_docs = sorted_docs[:10]
+        logger.info(f"Selected top {len(top_docs)} most relevant documents from {len(doc_chunks)} total (reranked sources: {len(relevant_doc_names)})")
+
         # Get page numbers from storage
         sources = []
-        for doc_title, info in doc_chunks.items():
+        for doc_title, info in top_docs:
             pages = set()
             document_id = None
 
