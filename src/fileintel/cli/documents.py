@@ -16,6 +16,7 @@ from .shared import (
     validate_supported_format,
     monitor_task_with_progress,
 )
+from .constants import CLI_ERROR
 
 app = typer.Typer(help="Manage documents.")
 
@@ -167,6 +168,12 @@ def list_documents(
         return api.get_collection(collection_identifier)
 
     collection_data = cli_handler.handle_api_call(_get_collection, "get collection")
+
+    # Handle case where API returns None (e.g., collection not found)
+    if collection_data is None:
+        cli_handler.display_error(f"Collection '{collection_identifier}' not found or API returned no data")
+        raise typer.Exit(CLI_ERROR)
+
     documents = collection_data.get("documents", [])
 
     if documents:

@@ -119,9 +119,16 @@ def validate_collection_exists(
     Raises:
         CollectionValidationError: If collection is not found
     """
-    from fileintel.api.dependencies import get_collection_by_id_or_name
+    import uuid
 
-    collection = get_collection_by_id_or_name(collection_identifier, storage)
+    # Try to get by ID first
+    try:
+        uuid.UUID(collection_identifier)
+        collection = storage.get_collection(collection_identifier)
+    except (ValueError, TypeError):
+        # Not a UUID, try by name
+        collection = storage.get_collection_by_name(collection_identifier)
+
     if not collection:
         raise CollectionValidationError(
             f"Collection '{collection_identifier}' not found"

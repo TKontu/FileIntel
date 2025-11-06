@@ -128,7 +128,7 @@ async def get_collection(
     """Get collection by ID or name."""
     import asyncio
 
-    # Wrap blocking validation (which calls storage methods)
+    # Wrap blocking validation (which now correctly uses sync storage methods)
     collection = await asyncio.to_thread(
         validate_collection_exists, collection_identifier, storage, "get collection"
     )
@@ -275,8 +275,9 @@ async def upload_document_to_collection(
             async with aiofiles.open(file_path, "wb") as f:
                 await f.write(content)
 
-            # Store document in database with normalized absolute file_path
-            document = storage.create_document(
+            # Store document in database with normalized absolute file_path (wrap blocking call)
+            document = await asyncio.to_thread(
+                storage.create_document,
                 filename=unique_filename,
                 content_hash=content_hash,
                 content_fingerprint=content_fingerprint,
@@ -289,8 +290,10 @@ async def upload_document_to_collection(
                     "original_filename": file.filename,
                 },
             )
-            # Add the new document to the collection
-            storage.add_document_to_collection(document.id, collection.id)
+            # Add the new document to the collection (wrap blocking call)
+            await asyncio.to_thread(
+                storage.add_document_to_collection, document.id, collection.id
+            )
             duplicate_detected = False
 
         # Log successful upload
