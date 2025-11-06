@@ -18,7 +18,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
 from fileintel.storage.graphrag_storage import GraphRAGStorage
-from fileintel.storage.base_storage import BaseStorage
+from fileintel.storage.postgresql_storage import PostgreSQLStorage
 from fileintel.config import Config
 
 logging.basicConfig(
@@ -211,7 +211,7 @@ def main():
 
         # Initialize storage
         config = Config()
-        base_storage = BaseStorage(config)
+        base_storage = PostgreSQLStorage(config)
         graphrag_storage = GraphRAGStorage(config)
 
         # Get all collections
