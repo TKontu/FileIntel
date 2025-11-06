@@ -127,7 +127,7 @@ async def upload_document_to_collection(
         )
 
     # Validate collection exists
-    collection = get_collection_by_id_or_name(collection_identifier, storage)
+    collection = await get_collection_by_id_or_name(collection_identifier, storage)
     if not collection:
         raise HTTPException(
             status_code=404, detail=f"Collection {collection_identifier} not found"
@@ -263,7 +263,8 @@ async def upload_and_process_document(
         )
 
     # Validate collection exists
-    collection = storage.get_collection(collection_id)
+    import asyncio
+    collection = await asyncio.to_thread(storage.get_collection, collection_id)
     if not collection:
         raise HTTPException(
             status_code=404, detail=f"Collection {collection_id} not found"

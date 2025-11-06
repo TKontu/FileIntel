@@ -188,6 +188,7 @@ async def upload_document_to_collection(
 ) -> ApiResponseV2:
     """Upload a single document to a collection."""
     try:
+        import asyncio
         from fileintel.core.config import get_config
         from pathlib import Path
 
