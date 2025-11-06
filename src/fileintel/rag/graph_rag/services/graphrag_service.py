@@ -113,17 +113,32 @@ class GraphRAGService:
             context = raw_response.get("context", {})
             logger.info(f"GraphRAG context type: {type(context)}, keys: {context.keys() if isinstance(context, dict) else 'N/A'}")
 
-            # Try different ways to extract sources from context
+            # Extract sources from context (check each key individually to avoid DataFrame boolean ambiguity)
+            sources = []
             if isinstance(context, dict):
-                sources = context.get("data", []) or context.get("reports", []) or context.get("sources", [])
+                # Try common field names
+                for key in ["reports", "data", "sources"]:
+                    if key in context:
+                        potential_sources = context[key]
+                        # Convert DataFrame to list of dicts if needed
+                        import pandas as pd
+                        if isinstance(potential_sources, pd.DataFrame):
+                            sources = potential_sources.to_dict('records')
+                            logger.info(f"Extracted {len(sources)} sources from context['{key}'] (DataFrame)")
+                            break
+                        elif potential_sources and len(potential_sources) > 0:
+                            sources = potential_sources
+                            logger.info(f"Extracted {len(sources)} sources from context['{key}']")
+                            break
             else:
                 # Context might be a SearchResult object
-                sources = getattr(context, "data", []) or getattr(context, "reports", []) or []
+                sources = getattr(context, "reports", []) or getattr(context, "data", []) or []
         else:
             answer = getattr(raw_response, "response", str(raw_response))
             sources = getattr(raw_response, "context_data", [])
+            logger.info(f"Extracted {len(sources)} sources from context_data")
 
-        logger.info(f"GraphRAG returned {len(sources)} sources for reranking")
+        logger.info(f"Total sources before reranking: {len(sources)}")
 
         # Rerank sources if enabled
         sources = await self._rerank_sources_if_enabled(query, sources)
