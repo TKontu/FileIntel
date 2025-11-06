@@ -184,6 +184,11 @@ async def _text_embed_with_vector_store(
         for doc_id, doc_text, doc_title, doc_vector in zip(
             ids, texts, titles, vectors, strict=True
         ):
+            # Skip documents with None embeddings (failed embedding attempts)
+            if doc_vector is None:
+                logger.warning(f"Skipping document {doc_id} - embedding failed")
+                continue
+
             if type(doc_vector) is np.ndarray:
                 doc_vector = doc_vector.tolist()
             document = VectorStoreDocument(
@@ -197,12 +202,17 @@ async def _text_embed_with_vector_store(
         # CRITICAL FIX: Run blocking I/O in executor to prevent event loop blocking
         import asyncio
         loop = asyncio.get_event_loop()
-        logger.info(f"About to load {len(documents)} documents to LanceDB (batch {i+1}/{num_total_batches}, overwrite={overwrite and i == 0})")
-        await loop.run_in_executor(
-            None,
-            lambda: vector_store.load_documents(documents, overwrite and i == 0)
-        )
-        logger.info(f"Successfully loaded {len(documents)} documents to LanceDB (batch {i+1}/{num_total_batches})")
+
+        # Skip loading if all embeddings failed for this batch
+        if documents:
+            logger.info(f"About to load {len(documents)} documents to LanceDB (batch {i+1}/{num_total_batches}, overwrite={overwrite and i == 0})")
+            await loop.run_in_executor(
+                None,
+                lambda: vector_store.load_documents(documents, overwrite and i == 0)
+            )
+            logger.info(f"Successfully loaded {len(documents)} documents to LanceDB (batch {i+1}/{num_total_batches})")
+        else:
+            logger.warning(f"Batch {i+1}/{num_total_batches} had no valid embeddings - skipping LanceDB load")
         starting_index += len(documents)
         i += 1
 

@@ -150,19 +150,34 @@ async def _execute(
                 logger.error(f"GRAPHRAG EMBEDDING ERROR: aembed_batch failed with {type(e).__name__}: {e}")
                 logger.error(f"GRAPHRAG EMBEDDING ERROR: Chunk had {len(chunk)} texts with lengths: {[len(t) for t in chunk]}")
                 logger.error(f"GRAPHRAG EMBEDDING ERROR: First 200 chars of each text: {[t[:200] for t in chunk]}")
-                raise
+
+                # CRITICAL: Don't fail entire workflow for bad texts
+                # Return None embeddings for this chunk and continue
+                logger.warning(f"Returning None embeddings for {len(chunk)} texts in failed chunk to continue processing")
+                chunk_embeddings = [None] * len(chunk)
 
             # CRITICAL DEBUG: Log after API call completes
             logger.info(f"GRAPHRAG EMBEDDING: Completed aembed_batch, got {len(chunk_embeddings)} embeddings")
 
-            result = np.array(chunk_embeddings)
+            # Handle None embeddings (from failed chunks)
+            if all(e is None for e in chunk_embeddings):
+                result = [None] * len(chunk_embeddings)
+            else:
+                result = np.array(chunk_embeddings)
             tick(1)
         return result
 
     futures = [embed(chunk) for chunk in chunks]
     results = await asyncio.gather(*futures)
     # merge results in a single list of lists (reduce the collect dimension)
-    return [item for sublist in results for item in sublist]
+    # Handle mixed results: numpy arrays and lists of None
+    merged = []
+    for sublist in results:
+        if isinstance(sublist, list):
+            merged.extend(sublist)
+        else:
+            merged.extend(sublist.tolist() if hasattr(sublist, 'tolist') else list(sublist))
+    return merged
 
 
 def _create_text_batches(
@@ -205,6 +220,7 @@ def _sanitize_text_for_embedding(text: str) -> str:
     Sanitize text to prevent vLLM 400 Bad Request errors.
 
     Removes null bytes, control characters, and ensures valid UTF-8.
+    Also filters out "non-natural" text that's mostly special characters.
     """
     if not text:
         return ""
@@ -224,7 +240,21 @@ def _sanitize_text_for_embedding(text: str) -> str:
         return ""
 
     # Final strip
-    return text.strip()
+    text = text.strip()
+
+    # Filter out texts that are mostly special characters/symbols
+    # These often cause embedding errors and aren't meaningful for search
+    if len(text) > 0:
+        # Count alphabetic and numeric characters
+        alphanumeric_count = sum(1 for c in text if c.isalnum())
+        total_count = len(text)
+
+        # If less than 30% alphanumeric, likely corrupted/malformed text
+        if alphanumeric_count / total_count < 0.3:
+            logger.debug(f"Filtering out non-natural text ({alphanumeric_count}/{total_count} alphanumeric): {text[:100]}")
+            return ""
+
+    return text
 
 
 def _prepare_embed_texts(
