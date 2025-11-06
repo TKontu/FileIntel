@@ -32,6 +32,10 @@ class GraphRAGService:
         # Cache configs by collection_id to avoid repeated adaptation
         self._config_cache = {}
 
+        # Initialize embedding provider for semantic citation matching
+        from fileintel.llm_integration.embedding_provider import OpenAIEmbeddingProvider
+        self.embedding_provider = OpenAIEmbeddingProvider(settings=settings)
+
         # Initialize reranker service if enabled for graph results
         self.reranker = None
         if settings.rag.reranking.enabled and settings.rag.reranking.rerank_graph_results:
@@ -1176,7 +1180,7 @@ class GraphRAGService:
             sources.append({
                 "document_name": doc_title,
                 "document_id": str(document_id) if document_id else None,
-                "pages": pages,
+                "pages": sorted(list(pages)) if pages else [],  # Convert set to sorted list for JSON serialization
                 "chunk_uuids": [str(c) for c in info["chunk_uuids"]],
                 "chunk_count": len(info["chunk_uuids"])
             })
@@ -1303,13 +1307,32 @@ class GraphRAGService:
                 context_texts
             )
 
-            # Get representative text for each source (first chunk or document name)
+            # Get representative text for each source (fetch actual chunk content)
             source_texts = []
             for source in sources:
-                # Try to get actual chunk text if available
-                doc_name = source.get("document_name", "Unknown")
-                # Use document name as fallback (not ideal but works)
-                source_texts.append(doc_name)
+                # Fetch actual chunk content from first chunk UUID for semantic matching
+                chunk_uuids = source.get("chunk_uuids", [])
+                chunk_text = None
+
+                if chunk_uuids:
+                    try:
+                        # Get first chunk's content as representative text
+                        chunk = await asyncio.to_thread(
+                            self.storage.get_chunk_by_id,
+                            str(chunk_uuids[0])
+                        )
+                        if chunk and chunk.content:
+                            # Use first 500 chars for efficient embedding
+                            chunk_text = chunk.content[:500]
+                    except Exception as e:
+                        logger.debug(f"Could not fetch chunk {chunk_uuids[0]}: {e}")
+
+                # Fallback to document name if chunk fetch fails
+                if not chunk_text:
+                    chunk_text = source.get("document_name", "Unknown")
+                    logger.debug(f"Using document name as fallback for {chunk_text}")
+
+                source_texts.append(chunk_text)
 
             logger.info(f"Embedding {len(source_texts)} source documents...")
             source_embeddings = await asyncio.to_thread(
@@ -1353,7 +1376,7 @@ class GraphRAGService:
         """Build Harvard-style citation from source metadata."""
         # Extract document info
         document_name = source.get("document_name") or source.get("title") or "Unknown"
-        pages = source.get("pages", set())
+        pages = source.get("pages", [])
 
         logger.debug(f"Building citation for: {document_name}, pages: {pages}")
 
