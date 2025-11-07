@@ -991,7 +991,8 @@ class GraphRAGService:
         )
 
         if not citation_mappings:
-            logger.warning("No citations traced successfully")
+            logger.warning("Citation tracing failed or returned no mappings - returning raw answer without citations")
+            # Return raw answer with GraphRAG's original inline citations and reranked sources
             return answer, reranked_sources
 
         logger.info(f"Traced {len(citation_mappings)} citations to {len(all_sources)} unique sources")
@@ -1342,11 +1343,13 @@ class GraphRAGService:
         # OPTIMIZATION 3: Batch embed all citation contexts at once
         context_texts = [c["context_text"] for c in citation_contexts]
         try:
-            context_embeddings = self.embedding_provider.embed_batch(context_texts)
+            context_embeddings = self.embedding_provider.get_embeddings(context_texts)
             logger.info(f"Batch embedded {len(context_embeddings)} citation contexts")
         except Exception as e:
-            logger.error(f"Batch embedding failed: {e}")
-            context_embeddings = None
+            logger.error(f"Batch embedding failed for citation tracing: {e}")
+            logger.error("Cannot perform semantic citation matching - returning answer without detailed citations")
+            # Return empty mappings - caller will handle this gracefully
+            return {}, []
 
         # Process each citation with cached data
         citation_mappings = {}
@@ -1377,44 +1380,41 @@ class GraphRAGService:
                 best_similarity = 1.0
             else:
                 # Multiple documents - use semantic matching with cached embeddings
-                if context_embeddings is not None:
-                    try:
-                        context_embedding = context_embeddings[idx]
+                # NOTE: context_embeddings is guaranteed to exist at this point (or we returned early)
+                try:
+                    context_embedding = context_embeddings[idx]
 
-                        # Collect doc texts from cache for batch embedding
-                        doc_texts = []
-                        doc_titles = []
-                        for doc_title, chunk_uuids_for_doc in doc_chunks.items():
-                            first_chunk = chunk_cache.get(str(chunk_uuids_for_doc[0]))
-                            if first_chunk and first_chunk.content:
-                                doc_texts.append(first_chunk.content[:500])
-                                doc_titles.append(doc_title)
+                    # Collect doc texts from cache for batch embedding
+                    doc_texts = []
+                    doc_titles = []
+                    for doc_title, chunk_uuids_for_doc in doc_chunks.items():
+                        first_chunk = chunk_cache.get(str(chunk_uuids_for_doc[0]))
+                        if first_chunk and first_chunk.content:
+                            doc_texts.append(first_chunk.content[:500])
+                            doc_titles.append(doc_title)
 
-                        if doc_texts:
-                            # Batch embed all candidate documents
-                            doc_embeddings = self.embedding_provider.embed_batch(doc_texts)
+                    if not doc_texts:
+                        logger.error(f"No document texts available for semantic matching for citation {marker}")
+                        continue
 
-                            # Find best match
-                            similarities = cosine_similarity([context_embedding], doc_embeddings)[0]
-                            best_idx = np.argmax(similarities)
-                            best_similarity = similarities[best_idx]
-                            best_doc_title = doc_titles[best_idx]
+                    # Batch embed all candidate documents
+                    doc_embeddings = self.embedding_provider.get_embeddings(doc_texts)
 
-                            best_source = self._create_source_from_chunks_cached(
-                                best_doc_title, doc_chunks[best_doc_title], reranked_sources, chunk_cache
-                            )
+                    # Find best match
+                    similarities = cosine_similarity([context_embedding], doc_embeddings)[0]
+                    best_idx = np.argmax(similarities)
+                    best_similarity = similarities[best_idx]
+                    best_doc_title = doc_titles[best_idx]
 
-                    except Exception as e:
-                        logger.warning(f"Semantic matching failed for citation {marker}: {e}")
-
-                # Fallback: use first document
-                if not best_source:
-                    doc_title = list(doc_chunks.keys())[0]
-                    chunk_uuids_for_doc = doc_chunks[doc_title]
                     best_source = self._create_source_from_chunks_cached(
-                        doc_title, chunk_uuids_for_doc, reranked_sources, chunk_cache
+                        best_doc_title, doc_chunks[best_doc_title], reranked_sources, chunk_cache
                     )
-                    best_similarity = 0.5
+                    logger.info(f"Semantic match successful: {best_doc_title} (similarity: {best_similarity:.3f})")
+
+                except Exception as e:
+                    logger.error(f"Semantic matching failed for citation {marker}: {e}")
+                    # Skip this citation rather than providing bad data
+                    continue
 
             if not best_source:
                 logger.warning(f"No best source found for citation {marker}")
@@ -1737,35 +1737,50 @@ class GraphRAGService:
             return citation_mappings
 
     def _build_harvard_citation(self, source: Dict, reranked_sources: List[Dict]) -> str:
-        """Build Harvard-style citation from source metadata."""
-        # Extract document info
+        """Build Harvard-style citation from document metadata using CitationFormatter."""
+        from fileintel.citation import format_in_text_citation
+
+        document_id = source.get("document_id")
         document_name = source.get("document_name") or source.get("title") or "Unknown"
         pages = source.get("pages", [])
 
-        logger.debug(f"Building citation for: {document_name}, pages: {pages}")
+        logger.debug(f"Building citation for: {document_name} (ID: {document_id}), pages: {pages}")
 
-        # Check if this source has reranking score
-        reranked_score = None
-        if reranked_sources:
-            # Find matching source in reranked list
-            for rs in reranked_sources:
-                if rs.get("document_name") == document_name:
-                    reranked_score = rs.get("reranked_score")
-                    break
+        # Fetch document metadata for proper Harvard citation
+        document_metadata = {}
 
-        # Format page numbers
-        page_str = ""
-        if pages:
-            pages_list = sorted(list(pages))[:3]  # First 3 pages
-            if len(pages_list) == 1:
-                page_str = f", p. {pages_list[0]}"
-            else:
-                page_str = f", pp. {', '.join(map(str, pages_list))}"
+        if document_id:
+            try:
+                doc = self.storage.get_document(document_id)
+                if doc and doc.document_metadata:
+                    document_metadata = doc.document_metadata
+                    logger.debug(f"Document metadata fetched: {document_metadata.keys()}")
+            except Exception as e:
+                logger.debug(f"Could not fetch document metadata for {document_id}: {e}")
 
-        # Add reranking score if available and enabled
-        score_str = ""
-        if reranked_score is not None and self.settings.rag.reranking.enabled:
-            score_str = f", relevance: {reranked_score:.2f}"
+        # Prepare chunk-like dict for CitationFormatter (same format as vector RAG)
+        chunk_data = {
+            "document_id": document_id,
+            "document_metadata": document_metadata,
+            "original_filename": document_name,
+            "filename": document_name,
+            "chunk_metadata": {
+                "pages": pages  # CitationFormatter handles list of pages
+            }
+        }
 
-        # Simplified citation format (can be enhanced with author/year parsing)
-        return f"{document_name}{page_str}{score_str}"
+        # Use the same citation formatter as vector RAG for consistency
+        try:
+            citation = format_in_text_citation(chunk_data)
+            return citation
+        except Exception as e:
+            logger.warning(f"CitationFormatter failed: {e}, using fallback")
+            # Fallback: simple format
+            if pages:
+                pages_list = sorted(list(pages))[:5]
+                if len(pages_list) == 1:
+                    page_str = f", p. {pages_list[0]}"
+                else:
+                    page_str = f", pp. {', '.join(map(str, pages_list))}"
+                return f"{document_name}{page_str}"
+            return document_name
