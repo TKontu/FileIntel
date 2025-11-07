@@ -1351,9 +1351,9 @@ class GraphRAGService:
             citation_tus = relevant_tus[relevant_tus["id"].isin(text_unit_ids)]
 
             # If this citation has too many text units, take the most dense ones
-            if len(citation_tus) > 200:
+            if len(citation_tus) > 1000:
                 logger.info(f"Citation {marker}: {len(citation_tus)} text units, filtering to top 200 by density")
-                citation_tus = citation_tus.nlargest(200, 'info_density')
+                citation_tus = citation_tus.nlargest(1000, 'info_density')
 
             # Collect chunks from this citation's text units
             for _, tu in citation_tus.iterrows():
@@ -1559,7 +1559,7 @@ class GraphRAGService:
                 # QUALITY THRESHOLD: Only include citations with reasonable similarity
                 # With citation-specific filtering, we can be more lenient (0.65+)
                 # GraphRAG already filtered to relevant entities, so moderate similarity is acceptable
-                SIMILARITY_THRESHOLD = 0.75
+                SIMILARITY_THRESHOLD = 0.7
                 if best_similarity < SIMILARITY_THRESHOLD:
                     logger.warning(f"Citation {marker} has low similarity ({best_similarity:.3f} < {SIMILARITY_THRESHOLD}) - excluding citation")
                     # Don't add to citation_mappings - marker will be removed from text
