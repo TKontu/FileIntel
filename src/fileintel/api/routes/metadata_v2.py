@@ -409,6 +409,8 @@ async def export_collection_metadata(
     This endpoint returns all documents in a collection with their full metadata
     in a structured format suitable for export to CSV, Markdown, or JSON.
     """
+    import asyncio
+
     try:
         # Get collection by identifier
         collection = await get_collection_by_identifier(storage, collection_identifier)
@@ -493,6 +495,8 @@ async def bulk_update_metadata(
         # Log bulk update request
         logger.info(f"Received bulk metadata update: updates={len(request.updates)} replace={request.replace}")
 
+        import asyncio
+
         success_count = 0
         failed_updates = []
         updated_documents = []
@@ -509,8 +513,6 @@ async def bulk_update_metadata(
                 continue
 
             try:
-                import asyncio
-
                 # Get document (wrap blocking storage call)
                 document = await asyncio.to_thread(storage.get_document, document_id)
                 if not document:

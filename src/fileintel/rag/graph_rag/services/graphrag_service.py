@@ -1559,7 +1559,7 @@ class GraphRAGService:
                 # QUALITY THRESHOLD: Only include citations with reasonable similarity
                 # With citation-specific filtering, we can be more lenient (0.65+)
                 # GraphRAG already filtered to relevant entities, so moderate similarity is acceptable
-                SIMILARITY_THRESHOLD = 0.7
+                SIMILARITY_THRESHOLD = 0.65
                 if best_similarity < SIMILARITY_THRESHOLD:
                     logger.warning(f"Citation {marker} has low similarity ({best_similarity:.3f} < {SIMILARITY_THRESHOLD}) - excluding citation")
                     # Don't add to citation_mappings - marker will be removed from text
