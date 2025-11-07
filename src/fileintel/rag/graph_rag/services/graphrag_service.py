@@ -1389,8 +1389,8 @@ class GraphRAGService:
                     doc_titles = []
                     for doc_title, chunk_uuids_for_doc in doc_chunks.items():
                         first_chunk = chunk_cache.get(str(chunk_uuids_for_doc[0]))
-                        if first_chunk and first_chunk.content:
-                            doc_texts.append(first_chunk.content[:500])
+                        if first_chunk and first_chunk.chunk_text:
+                            doc_texts.append(first_chunk.chunk_text[:500])
                             doc_titles.append(doc_title)
 
                     if not doc_texts:
@@ -1685,9 +1685,9 @@ class GraphRAGService:
                             self.storage.get_chunk_by_id,
                             str(chunk_uuids[0])
                         )
-                        if chunk and chunk.content:
+                        if chunk and chunk.chunk_text:
                             # Use first 500 chars for efficient embedding
-                            chunk_text = chunk.content[:500]
+                            chunk_text = chunk.chunk_text[:500]
                     except Exception as e:
                         logger.debug(f"Could not fetch chunk {chunk_uuids[0]}: {e}")
 
