@@ -152,13 +152,15 @@ class DynamicCommunitySelection:
                         children_count = 0
                         missing_children = []
                         for child in self.communities[community].children:
-                            if child in self.reports:
-                                communities_to_rate.append(child)
+                            # Convert child to string to match report keys (reports are keyed by string IDs)
+                            child_str = str(child)
+                            if child_str in self.reports:
+                                communities_to_rate.append(child_str)
                                 children_count += 1
                             else:
                                 missing_children.append(child)
                                 logger.info(
-                                    f"    ⚠ Child community {child} not found in reports (total reports: {len(self.reports)})"
+                                    f"    ⚠ Child community {child} (str: {child_str}) not found in reports (total reports: {len(self.reports)})"
                                 )
 
                         if missing_children:
