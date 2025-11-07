@@ -1434,7 +1434,7 @@ class GraphRAGService:
                 idx = len(chunk_uuid_list) - 1
                 chunk_uuid_to_index[chunk_uuid] = idx
 
-                if chunk.embedding and len(chunk.embedding) > 0:
+                if chunk.embedding is not None and len(chunk.embedding) > 0:
                     # Use pre-computed embedding (convert from pgvector to list if needed)
                     embedding = chunk.embedding
                     if not isinstance(embedding, list):
