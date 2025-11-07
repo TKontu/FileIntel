@@ -112,7 +112,7 @@ graphrag:
 
   # Drift search configuration (dynamic community selection)
   dynamic_search_max_level: ${GRAPHRAG_DYNAMIC_MAX_LEVEL:-5}  # Allow exploring all levels (was 2, which stopped too early)
-  dynamic_search_threshold: ${GRAPHRAG_DYNAMIC_THRESHOLD:-2}  # Stricter relevance threshold (was 1, too lenient)
+  dynamic_search_threshold: ${GRAPHRAG_DYNAMIC_THRESHOLD:-4}  # Very strict relevance threshold (4 = "very relevant" on 0-5 scale)
   dynamic_search_starting_level: ${GRAPHRAG_DYNAMIC_STARTING_LEVEL:-1}  # Start at level 1 to skip overly broad root (0=root)
 
   # Leiden clustering parameters (controls community hierarchy structure)

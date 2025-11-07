@@ -85,7 +85,7 @@ class DynamicCommunitySelection:
         """
         start = time()
         queue = deepcopy(self.starting_communities)
-        level = 0
+        level = self.starting_level  # Start from configured starting level
 
         ratings = {}  # store the ratings for each community
         llm_info: dict[str, Any] = {
@@ -94,6 +94,11 @@ class DynamicCommunitySelection:
             "output_tokens": 0,
         }
         relevant_communities = set()
+
+        # Log drift search initialization
+        logger.info(f"Drift search starting at level {self.starting_level} with {len(queue)} communities")
+        logger.info(f"Query: {query}")
+        logger.info(f"Threshold: {self.threshold}, Max level: {self.max_level}")
 
         while queue:
             gather_results = await asyncio.gather(*[
@@ -114,34 +119,58 @@ class DynamicCommunitySelection:
                 for community in queue
             ])
 
+            # Log current level exploration
+            logger.info(f"Level {level}: Evaluating {len(queue)} communities")
+
             communities_to_rate = []
+            level_relevant = []
+            level_rejected = []
+
             for community, result in zip(queue, gather_results, strict=True):
                 rating = result["rating"]
-                logger.debug(
-                    "dynamic community selection: community %s rating %s",
-                    community,
-                    rating,
+                community_title = self.reports[community].title if community in self.reports else community
+
+                logger.info(
+                    f"  Community '{community_title}' (ID: {community}) - Rating: {rating}/{self.threshold}"
                 )
+
                 ratings[community] = rating
                 llm_info["llm_calls"] += result["llm_calls"]
                 llm_info["prompt_tokens"] += result["prompt_tokens"]
                 llm_info["output_tokens"] += result["output_tokens"]
+
                 if rating >= self.threshold:
                     relevant_communities.add(community)
+                    level_relevant.append((community_title, rating))
+
                     # find children nodes of the current node and append them to the queue
                     # TODO check why some sub_communities are NOT in report_df
                     if community in self.communities:
+                        children_count = 0
                         for child in self.communities[community].children:
                             if child in self.reports:
                                 communities_to_rate.append(child)
+                                children_count += 1
                             else:
                                 logger.debug(
                                     "dynamic community selection: cannot find community %s in reports",
                                     child,
                                 )
+                        if children_count > 0:
+                            logger.info(f"    → Added {children_count} children to explore at level {level + 1}")
+
                     # remove parent node if the current node is deemed relevant
                     if not self.keep_parent and community in self.communities:
                         relevant_communities.discard(self.communities[community].parent)
+                else:
+                    level_rejected.append((community_title, rating))
+
+            # Log level summary
+            if level_relevant:
+                logger.info(f"Level {level} summary: {len(level_relevant)} relevant, {len(level_rejected)} rejected")
+                logger.info(f"  Relevant: {[f'{title} ({rating})' for title, rating in level_relevant[:5]]}")
+            else:
+                logger.info(f"Level {level} summary: No communities met threshold ({self.threshold})")
             queue = communities_to_rate
             level += 1
             if (
@@ -150,10 +179,9 @@ class DynamicCommunitySelection:
                 and (str(level) in self.levels)
                 and (level <= self.max_level)
             ):
-                logger.debug(
-                    "dynamic community selection: no relevant community "
-                    "reports, adding all reports at level %s to rate.",
-                    level,
+                logger.info(
+                    f"⚠ FALLBACK: No relevant communities found yet. "
+                    f"Adding all {len(self.levels[str(level)])} communities at level {level} to rate."
                 )
                 # append all communities at the next level to queue
                 queue = self.levels[str(level)]
@@ -162,6 +190,34 @@ class DynamicCommunitySelection:
             self.reports[community] for community in relevant_communities
         ]
         end = time()
+
+        # Log final summary
+        logger.info("=" * 80)
+        logger.info("DRIFT SEARCH COMPLETED")
+        logger.info("=" * 80)
+        logger.info(f"Duration: {int(end - start)}s")
+        logger.info(f"Selected {len(relevant_communities)} out of {len(self.reports)} total communities")
+        logger.info(f"Rating distribution: {dict(sorted(Counter(ratings.values()).items()))}")
+        logger.info(f"LLM calls: {llm_info['llm_calls']}, Prompt tokens: {llm_info['prompt_tokens']}, Output tokens: {llm_info['output_tokens']}")
+
+        # Group selected communities by level
+        selected_by_level = {}
+        for community_id in relevant_communities:
+            if community_id in self.communities:
+                comm_level = self.communities[community_id].level
+                if comm_level not in selected_by_level:
+                    selected_by_level[comm_level] = []
+                title = self.reports[community_id].title if community_id in self.reports else community_id
+                selected_by_level[comm_level].append(title)
+
+        logger.info("\nSelected communities by level:")
+        for lvl in sorted(selected_by_level.keys()):
+            logger.info(f"  Level {lvl}: {len(selected_by_level[lvl])} communities")
+            for title in selected_by_level[lvl][:3]:  # Show first 3
+                logger.info(f"    - {title}")
+            if len(selected_by_level[lvl]) > 3:
+                logger.info(f"    ... and {len(selected_by_level[lvl]) - 3} more")
+        logger.info("=" * 80)
 
         logger.debug(
             "dynamic community selection (took: %ss)\n"

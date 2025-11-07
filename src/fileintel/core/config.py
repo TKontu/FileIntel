@@ -137,7 +137,7 @@ class GraphRAGSettings(BaseModel):
 
     # Drift search configuration (dynamic community selection for global search)
     dynamic_search_max_level: int = Field(default=5, description="Max level to explore in drift search")
-    dynamic_search_threshold: int = Field(default=2, description="Relevance threshold for community selection (higher = stricter)")
+    dynamic_search_threshold: int = Field(default=4, description="Relevance threshold for community selection (4 = very relevant on 0-5 scale)")
     dynamic_search_starting_level: int = Field(default=1, description="Starting level for drift search (0=root, 1=skip overly broad root)")
 
     # Async processing
