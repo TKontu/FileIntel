@@ -998,7 +998,8 @@ class GraphRAGService:
         logger.info(f"Traced {len(citation_mappings)} citations to {len(all_sources)} unique sources")
 
         # 3. Format answer with Harvard citations using the specific mappings
-        formatted_answer = self._apply_citation_mappings(answer, citation_mappings)
+        # Also pass citation_contexts to remove low-quality/failed citations
+        formatted_answer = self._apply_citation_mappings(answer, citation_mappings, citation_contexts)
 
         return formatted_answer, all_sources
 
@@ -1190,9 +1191,10 @@ class GraphRAGService:
     def _parse_citation_contexts(self, answer_text: str) -> List[Dict[str, Any]]:
         """
         Parse individual citations with their context text.
+        Each citation gets a UNIQUE marker based on its position to avoid replacement conflicts.
 
         Returns:
-            List of dicts with {marker, type, ids, context_text}
+            List of dicts with {marker, original_marker, type, ids, context_text, start, end}
         """
         import re
 
@@ -1201,7 +1203,7 @@ class GraphRAGService:
 
         citation_contexts = []
         for match in re.finditer(citation_pattern, answer_text):
-            marker = match.group(0)
+            original_marker = match.group(0)
             cit_type = match.group(1)
             ids_str = match.group(2)
 
@@ -1222,13 +1224,19 @@ class GraphRAGService:
 
             context_text = answer_text[sentence_start:sentence_end].strip()
             # Remove the citation marker from context for semantic matching
-            context_text_clean = context_text.replace(marker, '').strip()
+            context_text_clean = context_text.replace(original_marker, '').strip()
+
+            # Create UNIQUE marker with position to avoid replacement conflicts
+            unique_marker = f"{original_marker}__POS_{start}__"
 
             citation_contexts.append({
-                "marker": marker,
+                "marker": unique_marker,  # Unique marker for replacement
+                "original_marker": original_marker,  # Original for finding in text
                 "type": cit_type,
                 "ids": ids,
-                "context_text": context_text_clean
+                "context_text": context_text_clean,
+                "start": start,  # Position in text
+                "end": end
             })
 
         return citation_contexts
@@ -1273,8 +1281,23 @@ class GraphRAGService:
             logger.error(f"Required parquet files not found in {workspace_path}")
             return {}, []
 
-        # OPTIMIZATION 1: Collect all chunk UUIDs needed across ALL citations first
-        all_needed_chunks = set()
+        # OPTIMIZATION 1a: Calculate information density for all text units
+        # Density = number of entities + relationships (semantic richness indicator)
+        logger.info("Calculating information density for text units...")
+        try:
+            text_units_df['info_density'] = text_units_df.apply(
+                lambda x: (len(x['entity_ids']) if x['entity_ids'] is not None and hasattr(x['entity_ids'], '__len__') else 0) +
+                         (len(x['relationship_ids']) if x['relationship_ids'] is not None and hasattr(x['relationship_ids'], '__len__') else 0),
+                axis=1
+            )
+            logger.info(f"Density stats - Mean: {text_units_df['info_density'].mean():.2f}, Max: {text_units_df['info_density'].max()}, Min: {text_units_df['info_density'].min()}")
+        except Exception as e:
+            logger.warning(f"Failed to calculate info_density: {e}. Using uniform density.")
+            text_units_df['info_density'] = 1
+
+        # OPTIMIZATION 1b: Collect text units and apply density-based filtering
+        all_relevant_text_units = set()
+        citation_to_text_units = {}  # {marker: [text_unit_ids]}
         citation_to_chunks = {}  # {marker: {doc_title: [chunk_uuids]}}
 
         for citation in citation_contexts:
@@ -1305,39 +1328,84 @@ class GraphRAGService:
             if not text_unit_ids:
                 continue
 
-            # Step 3: Get chunk UUIDs for these specific text units
-            chunk_uuids = set()
-            tu_mask = text_units_df["id"].isin(text_unit_ids)
-            for doc_id_list in text_units_df[tu_mask]["document_ids"]:
-                if doc_id_list is not None and len(doc_id_list) > 0:
-                    chunk_uuids.update(doc_id_list)
+            citation_to_text_units[marker] = text_unit_ids
+            all_relevant_text_units.update(text_unit_ids)
 
-            if not chunk_uuids:
-                continue
+        logger.info(f"Collected {len(all_relevant_text_units)} unique text units across {len(citation_contexts)} citations")
 
-            # Step 4: Group these specific chunks by document
-            chunk_uuid_strs = [str(uuid) for uuid in chunk_uuids]
-            doc_mask = documents_df["id"].isin(chunk_uuid_strs)
-            matched_docs = documents_df[doc_mask]
+        # OPTIMIZATION 1c: Smart chunk selection using information density
+        # Instead of processing ALL chunks, select the most information-dense ones
+        MAX_CHUNKS_FOR_EMBEDDING = 5000  # Reasonable limit for performance
 
-            doc_chunks = {}  # {doc_title: [chunk_uuids]}
-            for _, row in matched_docs.iterrows():
-                doc_title = row.get("title", "Unknown")
-                chunk_id = row.get("id")
+        # Get text units sorted by density
+        relevant_tus = text_units_df[text_units_df["id"].isin(all_relevant_text_units)]
+
+        if len(relevant_tus) > 1000:
+            # For very large collections, take top 1000 most dense text units
+            logger.info(f"Large collection detected ({len(relevant_tus)} text units). Filtering to top 1000 by density.")
+            relevant_tus = relevant_tus.nlargest(1000, 'info_density')
+
+        # Get chunks from selected text units
+        chunk_candidates = set()
+        chunk_frequency = {}  # Track how often each chunk appears (multi-text-unit chunks are important)
+
+        for _, tu in relevant_tus.iterrows():
+            doc_ids = tu.get("document_ids")
+            if doc_ids is not None and len(doc_ids) > 0:
+                for chunk_id in doc_ids:
+                    chunk_candidates.add(str(chunk_id))
+                    chunk_frequency[str(chunk_id)] = chunk_frequency.get(str(chunk_id), 0) + 1
+
+        logger.info(f"Density filtering produced {len(chunk_candidates)} candidate chunks")
+
+        # If still too many, prioritize by frequency (chunks appearing in multiple dense text units)
+        if len(chunk_candidates) > MAX_CHUNKS_FOR_EMBEDDING:
+            logger.info(f"Still too many chunks ({len(chunk_candidates)}). Prioritizing by frequency...")
+            sorted_chunks = sorted(chunk_frequency.items(), key=lambda x: x[1], reverse=True)
+            chunk_candidates = set([c[0] for c in sorted_chunks[:MAX_CHUNKS_FOR_EMBEDDING]])
+            logger.info(f"Reduced to {len(chunk_candidates)} chunks (top by frequency)")
+
+        # Map chunks to documents for citation grouping
+        chunk_uuid_strs = list(chunk_candidates)
+        doc_mask = documents_df["id"].isin(chunk_uuid_strs)
+        matched_docs = documents_df[doc_mask]
+
+        # Build chunk-to-document mapping
+        chunk_to_doc_title = {}
+        for _, row in matched_docs.iterrows():
+            chunk_id = str(row.get("id"))
+            doc_title = row.get("title", "Unknown")
+            chunk_to_doc_title[chunk_id] = doc_title
+
+        # Group chunks by citation and document
+        for marker, text_unit_ids in citation_to_text_units.items():
+            # Get chunks for this citation's text units
+            citation_text_units = text_units_df[text_units_df["id"].isin(text_unit_ids)]
+            citation_chunks = set()
+
+            for _, tu in citation_text_units.iterrows():
+                doc_ids = tu.get("document_ids")
+                if doc_ids is not None and len(doc_ids) > 0:
+                    for chunk_id in doc_ids:
+                        chunk_id_str = str(chunk_id)
+                        if chunk_id_str in chunk_candidates:  # Only include if in our filtered set
+                            citation_chunks.add(chunk_id_str)
+
+            # Group by document
+            doc_chunks = {}
+            for chunk_id in citation_chunks:
+                doc_title = chunk_to_doc_title.get(chunk_id, "Unknown")
                 if doc_title not in doc_chunks:
                     doc_chunks[doc_title] = []
                 doc_chunks[doc_title].append(chunk_id)
 
             if doc_chunks:
                 citation_to_chunks[marker] = doc_chunks
-                # Collect all needed chunks for batch fetch
-                for chunks in doc_chunks.values():
-                    all_needed_chunks.update([str(c) for c in chunks[:10]])  # Limit to 10 per doc
 
-        logger.info(f"Collected {len(all_needed_chunks)} unique chunks across {len(citation_contexts)} citations")
+        logger.info(f"Smart chunk selection: {len(chunk_candidates)} chunks for embedding (density + frequency filtered)")
 
-        # OPTIMIZATION 2: Batch fetch all chunks at once
-        chunk_cache = self._batch_fetch_chunks(list(all_needed_chunks))
+        # OPTIMIZATION 2: Batch fetch all selected chunks at once
+        chunk_cache = self._batch_fetch_chunks(list(chunk_candidates))
         logger.info(f"Batch fetched {len(chunk_cache)} chunks from storage")
 
         # OPTIMIZATION 3a: Batch embed all citation contexts at once
@@ -1351,26 +1419,47 @@ class GraphRAGService:
             # Return empty mappings - caller will handle this gracefully
             return {}, []
 
-        # OPTIMIZATION 3b: Batch embed ALL cached chunks ONCE (shared across all citations)
-        # This is CRITICAL for performance when multiple citations reference the same community
-        chunk_texts_list = []
-        chunk_uuid_list = []  # Maintains order with chunk_texts_list
-        chunk_uuid_to_index = {}  # {chunk_uuid: index in embedding list}
+        # OPTIMIZATION 3b: Use PRE-COMPUTED embeddings from PostgreSQL
+        # Chunks already have embeddings stored - no need to re-embed!
+        all_chunk_embeddings = []
+        chunk_uuid_list = []
+        chunk_uuid_to_index = {}
+        chunks_to_embed = []  # Fallback for chunks without embeddings
+        chunks_to_embed_indices = []
 
-        # Build lists maintaining consistent indexing
+        logger.info("Extracting pre-computed embeddings from PostgreSQL chunks...")
         for chunk_uuid, chunk in chunk_cache.items():
-            if chunk and chunk.chunk_text:
-                chunk_texts_list.append(chunk.chunk_text[:500])
+            if chunk:
                 chunk_uuid_list.append(chunk_uuid)
-                chunk_uuid_to_index[chunk_uuid] = len(chunk_texts_list) - 1  # Index in the list
+                idx = len(chunk_uuid_list) - 1
+                chunk_uuid_to_index[chunk_uuid] = idx
 
-        try:
-            all_chunk_embeddings = self.embedding_provider.get_embeddings(chunk_texts_list)
-            logger.info(f"Batch embedded {len(all_chunk_embeddings)} chunks once (shared across all {len(citation_contexts)} citations)")
-        except Exception as e:
-            logger.error(f"Batch chunk embedding failed: {e}")
-            logger.error("Cannot perform semantic citation matching - returning answer without detailed citations")
-            return {}, []
+                if chunk.embedding and len(chunk.embedding) > 0:
+                    # Use pre-computed embedding (convert from pgvector to list if needed)
+                    embedding = chunk.embedding
+                    if not isinstance(embedding, list):
+                        embedding = list(embedding)  # Convert numpy array or pgvector to list
+                    all_chunk_embeddings.append(embedding)
+                else:
+                    # Mark for embedding (rare case - chunk without embedding)
+                    all_chunk_embeddings.append(None)  # Placeholder
+                    chunks_to_embed.append(chunk.chunk_text[:500] if chunk.chunk_text else "")
+                    chunks_to_embed_indices.append(idx)
+
+        # Embed any chunks that don't have pre-computed embeddings (fallback)
+        if chunks_to_embed:
+            logger.warning(f"{len(chunks_to_embed)} chunks missing embeddings - computing now...")
+            try:
+                new_embeddings = self.embedding_provider.get_embeddings(chunks_to_embed)
+                for i, embedding in enumerate(new_embeddings):
+                    all_chunk_embeddings[chunks_to_embed_indices[i]] = embedding
+            except Exception as e:
+                logger.error(f"Failed to embed {len(chunks_to_embed)} chunks: {e}")
+                # Remove chunks without embeddings from consideration
+                for idx in reversed(chunks_to_embed_indices):
+                    all_chunk_embeddings[idx] = [0.0] * 1024  # Zero vector fallback
+
+        logger.info(f"Using embeddings for {len(all_chunk_embeddings)} chunks ({len(chunk_cache) - len(chunks_to_embed)} pre-computed, {len(chunks_to_embed)} newly computed)")
 
         # Process each citation with cached data
         citation_mappings = {}
@@ -1445,6 +1534,14 @@ class GraphRAGService:
                 )
                 best_chunk_uuids = sources_by_doc[best_doc_title]["chunk_uuids"]
                 best_similarity = sum(sources_by_doc[best_doc_title]["similarities"]) / len(sources_by_doc[best_doc_title]["similarities"])
+
+                # QUALITY THRESHOLD: Only include citations with high similarity (0.8+)
+                # Better to have no citation than a weak/misleading one
+                SIMILARITY_THRESHOLD = 0.8
+                if best_similarity < SIMILARITY_THRESHOLD:
+                    logger.warning(f"Citation {marker} has low similarity ({best_similarity:.3f} < {SIMILARITY_THRESHOLD}) - excluding citation")
+                    # Don't add to citation_mappings - marker will be removed from text
+                    continue
 
                 # Create source from the globally most relevant chunks
                 best_source = self._create_source_from_chunks_cached(
@@ -1638,9 +1735,13 @@ class GraphRAGService:
         for chunk_uuid in chunk_uuids[:20]:  # Limit to 20 chunks for performance
             chunk = chunk_cache.get(str(chunk_uuid))
             if chunk and chunk.chunk_metadata:
-                page = chunk.chunk_metadata.get("page_number")
-                if page is not None:
-                    pages.add(page)
+                # PostgreSQL stores pages as a LIST in chunk_metadata["pages"]
+                chunk_pages = chunk.chunk_metadata.get("pages")
+                if chunk_pages:
+                    if isinstance(chunk_pages, list):
+                        pages.update(chunk_pages)
+                    else:
+                        pages.add(chunk_pages)  # Handle single page number
                 if not document_id:
                     document_id = chunk.document_id
 
@@ -1670,9 +1771,13 @@ class GraphRAGService:
             try:
                 chunk = self.storage.get_chunk_by_id(str(chunk_uuid))
                 if chunk and chunk.chunk_metadata:
-                    page = chunk.chunk_metadata.get("page_number")
-                    if page is not None:
-                        pages.add(page)
+                    # PostgreSQL stores pages as a LIST in chunk_metadata["pages"]
+                    chunk_pages = chunk.chunk_metadata.get("pages")
+                    if chunk_pages:
+                        if isinstance(chunk_pages, list):
+                            pages.update(chunk_pages)
+                        else:
+                            pages.add(chunk_pages)  # Handle single page number
                     if not document_id:
                         document_id = chunk.document_id
             except Exception as e:
@@ -1687,24 +1792,66 @@ class GraphRAGService:
             "chunk_count": len(chunk_uuids)
         }
 
-    def _apply_citation_mappings(self, answer_text: str, citation_mappings: Dict[str, str]) -> str:
+    def _apply_citation_mappings(
+        self,
+        answer_text: str,
+        citation_mappings: Dict[str, str],
+        citation_contexts: List[Dict[str, Any]]
+    ) -> str:
         """
-        Replace citation markers with Harvard-style references.
+        Replace citation markers with Harvard-style references using position-based approach.
+        REMOVES markers that weren't mapped (below similarity threshold or failed processing).
+        Replaces from END to START to avoid position shifts.
 
         Args:
             answer_text: Original answer with [Data: ...] markers
-            citation_mappings: {marker: harvard_citation}
+            citation_mappings: {unique_marker: harvard_citation}
+            citation_contexts: All parsed citation contexts (to identify unmapped markers)
 
         Returns:
-            Formatted answer with Harvard citations
+            Formatted answer with Harvard citations and unmapped markers removed
         """
+        import re
+
+        # Build list of all operations (replacements and removals)
+        operations = []
+
+        # Add replacements for mapped citations
+        for unique_marker, harvard_citation in citation_mappings.items():
+            match = re.match(r'(.+)__POS_(\d+)__', unique_marker)
+            if match:
+                original_marker = match.group(1)
+                position = int(match.group(2))
+                operations.append((position, original_marker, f' ({harvard_citation})', 'replace'))
+            else:
+                logger.warning(f"Could not parse unique marker: {unique_marker}")
+
+        # Add removals for unmapped citations (below threshold or failed)
+        mapped_markers = set(citation_mappings.keys())
+        for citation_context in citation_contexts:
+            unique_marker = citation_context["marker"]
+            if unique_marker not in mapped_markers:
+                # This citation was excluded (low similarity or error)
+                original_marker = citation_context["original_marker"]
+                position = citation_context["start"]
+                operations.append((position, original_marker, '', 'remove'))
+                logger.info(f"Removing low-quality citation marker at position {position}: {original_marker}")
+
+        # Sort by position (descending) to process from end to start
+        operations.sort(key=lambda x: x[0], reverse=True)
+
         result = answer_text
-        for marker, harvard_citation in citation_mappings.items():
-            replacement = f' ({harvard_citation})'
-            # Simple string replacement
-            result = result.replace(f' {marker}', replacement)
-            result = result.replace(marker, replacement)
-            logger.debug(f"Replaced '{marker}' with '{replacement}'")
+        for position, original_marker, replacement, operation_type in operations:
+            marker_len = len(original_marker)
+            if result[position:position+marker_len] == original_marker:
+                # Replace/remove this specific occurrence
+                result = result[:position] + replacement + result[position+marker_len:]
+                if operation_type == 'replace':
+                    logger.debug(f"Replaced '{original_marker}' at position {position} with '{replacement}'")
+                else:
+                    logger.debug(f"Removed '{original_marker}' at position {position}")
+            else:
+                logger.warning(f"Marker mismatch at position {position}: expected '{original_marker}', found '{result[position:position+marker_len]}'")
 
         return result
 
