@@ -1340,7 +1340,7 @@ class GraphRAGService:
         chunk_cache = self._batch_fetch_chunks(list(all_needed_chunks))
         logger.info(f"Batch fetched {len(chunk_cache)} chunks from storage")
 
-        # OPTIMIZATION 3: Batch embed all citation contexts at once
+        # OPTIMIZATION 3a: Batch embed all citation contexts at once
         context_texts = [c["context_text"] for c in citation_contexts]
         try:
             context_embeddings = self.embedding_provider.get_embeddings(context_texts)
@@ -1349,6 +1349,27 @@ class GraphRAGService:
             logger.error(f"Batch embedding failed for citation tracing: {e}")
             logger.error("Cannot perform semantic citation matching - returning answer without detailed citations")
             # Return empty mappings - caller will handle this gracefully
+            return {}, []
+
+        # OPTIMIZATION 3b: Batch embed ALL cached chunks ONCE (shared across all citations)
+        # This is CRITICAL for performance when multiple citations reference the same community
+        chunk_texts_list = []
+        chunk_uuid_list = []  # Maintains order with chunk_texts_list
+        chunk_uuid_to_index = {}  # {chunk_uuid: index in embedding list}
+
+        # Build lists maintaining consistent indexing
+        for chunk_uuid, chunk in chunk_cache.items():
+            if chunk and chunk.chunk_text:
+                chunk_texts_list.append(chunk.chunk_text[:500])
+                chunk_uuid_list.append(chunk_uuid)
+                chunk_uuid_to_index[chunk_uuid] = len(chunk_texts_list) - 1  # Index in the list
+
+        try:
+            all_chunk_embeddings = self.embedding_provider.get_embeddings(chunk_texts_list)
+            logger.info(f"Batch embedded {len(all_chunk_embeddings)} chunks once (shared across all {len(citation_contexts)} citations)")
+        except Exception as e:
+            logger.error(f"Batch chunk embedding failed: {e}")
+            logger.error("Cannot perform semantic citation matching - returning answer without detailed citations")
             return {}, []
 
         # Process each citation with cached data
@@ -1366,55 +1387,75 @@ class GraphRAGService:
             doc_chunks = citation_to_chunks[marker]
             logger.info(f"Citation {marker} references {len(doc_chunks)} documents")
 
-            # Semantic matching using cached embeddings and chunks
-            best_source = None
-            best_similarity = -1
+            # NEW APPROACH: Find most relevant chunks GLOBALLY across all documents in the community
+            # This is more accurate than picking a document first
+            try:
+                context_embedding = context_embeddings[idx]
 
-            if len(doc_chunks) == 1:
-                # Only one document - use it
-                doc_title = list(doc_chunks.keys())[0]
-                chunk_uuids_for_doc = doc_chunks[doc_title]
-                best_source = self._create_source_from_chunks_cached(
-                    doc_title, chunk_uuids_for_doc, reranked_sources, chunk_cache
+                # Collect ALL chunks across ALL documents referenced by this citation
+                all_chunk_uuids = []
+                for chunk_list in doc_chunks.values():
+                    all_chunk_uuids.extend(chunk_list)
+
+                logger.debug(f"Searching across {len(all_chunk_uuids)} total chunks for citation {marker}")
+
+                # Find globally most relevant chunks (not limited to one document)
+                # Use pre-computed embeddings for efficiency
+                relevant_chunks_with_scores = self._find_most_relevant_chunks_with_precomputed_embeddings(
+                    context_embedding,
+                    all_chunk_uuids,
+                    chunk_uuid_to_index,
+                    all_chunk_embeddings,
+                    top_k=10
                 )
-                best_similarity = 1.0
-            else:
-                # Multiple documents - use semantic matching with cached embeddings
-                # NOTE: context_embeddings is guaranteed to exist at this point (or we returned early)
-                try:
-                    context_embedding = context_embeddings[idx]
 
-                    # Collect doc texts from cache for batch embedding
-                    doc_texts = []
-                    doc_titles = []
-                    for doc_title, chunk_uuids_for_doc in doc_chunks.items():
-                        first_chunk = chunk_cache.get(str(chunk_uuids_for_doc[0]))
-                        if first_chunk and first_chunk.chunk_text:
-                            doc_texts.append(first_chunk.chunk_text[:500])
-                            doc_titles.append(doc_title)
-
-                    if not doc_texts:
-                        logger.error(f"No document texts available for semantic matching for citation {marker}")
-                        continue
-
-                    # Batch embed all candidate documents
-                    doc_embeddings = self.embedding_provider.get_embeddings(doc_texts)
-
-                    # Find best match
-                    similarities = cosine_similarity([context_embedding], doc_embeddings)[0]
-                    best_idx = np.argmax(similarities)
-                    best_similarity = similarities[best_idx]
-                    best_doc_title = doc_titles[best_idx]
-
-                    best_source = self._create_source_from_chunks_cached(
-                        best_doc_title, doc_chunks[best_doc_title], reranked_sources, chunk_cache
-                    )
-                    logger.info(f"Semantic match successful: {best_doc_title} (similarity: {best_similarity:.3f})")
-
-                except Exception as e:
-                    logger.error(f"Semantic matching failed for citation {marker}: {e}")
-                    # Skip this citation rather than providing bad data
+                if not relevant_chunks_with_scores:
+                    logger.error(f"No relevant chunks found for citation {marker}")
                     continue
+
+                # Group selected chunks by document and create sources
+                sources_by_doc = {}
+                for chunk_uuid, similarity in relevant_chunks_with_scores:
+                    # Find which document this chunk belongs to
+                    chunk_doc_title = None
+                    for doc_title, doc_chunk_list in doc_chunks.items():
+                        if chunk_uuid in doc_chunk_list:
+                            chunk_doc_title = doc_title
+                            break
+
+                    if chunk_doc_title:
+                        if chunk_doc_title not in sources_by_doc:
+                            sources_by_doc[chunk_doc_title] = {
+                                "chunk_uuids": [],
+                                "similarities": []
+                            }
+                        sources_by_doc[chunk_doc_title]["chunk_uuids"].append(chunk_uuid)
+                        sources_by_doc[chunk_doc_title]["similarities"].append(similarity)
+
+                # Edge case: no chunks mapped to documents (shouldn't happen but safety check)
+                if not sources_by_doc:
+                    logger.error(f"No chunks mapped to documents for citation {marker}")
+                    continue
+
+                # Use the document with the most relevant chunks (or highest avg similarity)
+                best_doc_title = max(
+                    sources_by_doc.keys(),
+                    key=lambda d: (len(sources_by_doc[d]["chunk_uuids"]),
+                                   sum(sources_by_doc[d]["similarities"]))
+                )
+                best_chunk_uuids = sources_by_doc[best_doc_title]["chunk_uuids"]
+                best_similarity = sum(sources_by_doc[best_doc_title]["similarities"]) / len(sources_by_doc[best_doc_title]["similarities"])
+
+                # Create source from the globally most relevant chunks
+                best_source = self._create_source_from_chunks_cached(
+                    best_doc_title, best_chunk_uuids, reranked_sources, chunk_cache
+                )
+
+                logger.info(f"Global chunk search: {best_doc_title} (avg similarity: {best_similarity:.3f}, {len(best_chunk_uuids)} chunks, pages: {best_source.get('pages', [])})")
+
+            except Exception as e:
+                logger.error(f"Global chunk search failed for citation {marker}: {e}")
+                continue
 
             if not best_source:
                 logger.warning(f"No best source found for citation {marker}")
@@ -1435,7 +1476,7 @@ class GraphRAGService:
                 existing["chunk_uuids"] = list(set(existing.get("chunk_uuids", []) + best_source.get("chunk_uuids", [])))
                 existing["chunk_count"] = len(existing["chunk_uuids"])
 
-            logger.info(f"Matched citation {marker} → {doc_name} (similarity: {best_similarity:.3f}, pages: {best_source.get('pages', [])})")
+            logger.info(f"Matched citation {marker} → {doc_name} (pages: {best_source.get('pages', [])})")
 
         all_sources = list(all_sources_dict.values())
         return citation_mappings, all_sources
@@ -1463,6 +1504,121 @@ class GraphRAGService:
                     continue
 
         return chunk_cache
+
+    def _find_most_relevant_chunks_with_precomputed_embeddings(
+        self,
+        context_embedding: List[float],
+        chunk_uuids: List[str],
+        chunk_uuid_to_index: Dict[str, int],
+        all_chunk_embeddings: List[List[float]],
+        top_k: int = 10
+    ) -> List[tuple]:
+        """
+        Find the most semantically relevant chunks using PRE-COMPUTED embeddings.
+        This is much more efficient than re-embedding chunks for each citation.
+
+        Args:
+            context_embedding: Embedding of the citation context
+            chunk_uuids: All chunk UUIDs to search
+            chunk_uuid_to_index: Mapping from chunk_uuid to index in all_chunk_embeddings
+            all_chunk_embeddings: Pre-computed embeddings for ALL cached chunks
+            top_k: Number of top chunks to return
+
+        Returns:
+            List of tuples: [(chunk_uuid, similarity_score), ...]
+        """
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as np
+
+        # Filter to only chunks we have embeddings for
+        valid_uuids = []
+        valid_indices = []
+
+        for chunk_uuid in chunk_uuids:
+            if str(chunk_uuid) in chunk_uuid_to_index:
+                valid_uuids.append(chunk_uuid)
+                valid_indices.append(chunk_uuid_to_index[str(chunk_uuid)])
+
+        if not valid_uuids:
+            logger.warning("No valid chunks with embeddings found")
+            return []
+
+        if len(valid_uuids) <= top_k:
+            # Fewer chunks than top_k, return all with computed similarity
+            chunk_embeddings = [all_chunk_embeddings[i] for i in valid_indices]
+            similarities = cosine_similarity([context_embedding], chunk_embeddings)[0]
+            return [(valid_uuids[i], float(similarities[i])) for i in range(len(valid_uuids))]
+
+        # Get embeddings for these chunks (no API call needed - already computed!)
+        chunk_embeddings = [all_chunk_embeddings[i] for i in valid_indices]
+
+        # Compute similarity to context
+        similarities = cosine_similarity([context_embedding], chunk_embeddings)[0]
+
+        # Get top_k most similar chunks with their scores
+        top_indices = np.argsort(similarities)[-top_k:][::-1]  # Descending order
+        results = [(valid_uuids[i], float(similarities[i])) for i in top_indices]
+
+        logger.debug(f"Selected {len(results)} most relevant chunks (similarity range: {similarities[top_indices[-1]]:.3f} - {similarities[top_indices[0]]:.3f})")
+        return results
+
+    def _find_most_relevant_chunks_global(
+        self,
+        context_embedding: List[float],
+        chunk_uuids: List[str],
+        chunk_cache: Dict[str, Any],
+        top_k: int = 10
+    ) -> List[tuple]:
+        """
+        Find the most semantically relevant chunks globally across documents.
+
+        Args:
+            context_embedding: Embedding of the citation context
+            chunk_uuids: All chunk UUIDs to search (from multiple documents)
+            chunk_cache: Pre-fetched chunks
+            top_k: Number of top chunks to return
+
+        Returns:
+            List of tuples: [(chunk_uuid, similarity_score), ...]
+        """
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as np
+
+        # Collect chunk texts for embedding
+        chunk_texts = []
+        valid_uuids = []
+
+        for chunk_uuid in chunk_uuids:
+            chunk = chunk_cache.get(str(chunk_uuid))
+            if chunk and chunk.chunk_text:
+                chunk_texts.append(chunk.chunk_text[:500])  # First 500 chars
+                valid_uuids.append(chunk_uuid)
+
+        if not chunk_texts:
+            logger.warning("No valid chunk texts found for global search")
+            return []
+
+        if len(chunk_texts) <= top_k:
+            # Fewer chunks than top_k, return all with placeholder similarity
+            return [(uuid, 1.0) for uuid in valid_uuids]
+
+        # Embed all chunks
+        try:
+            chunk_embeddings = self.embedding_provider.get_embeddings(chunk_texts)
+
+            # Compute similarity to context
+            similarities = cosine_similarity([context_embedding], chunk_embeddings)[0]
+
+            # Get top_k most similar chunks with their scores
+            top_indices = np.argsort(similarities)[-top_k:][::-1]  # Descending order
+            results = [(valid_uuids[i], float(similarities[i])) for i in top_indices]
+
+            logger.debug(f"Selected {len(results)} most relevant chunks globally (similarity range: {similarities[top_indices[-1]]:.3f} - {similarities[top_indices[0]]:.3f})")
+            return results
+
+        except Exception as e:
+            logger.error(f"Failed to find most relevant chunks globally: {e}")
+            return []
 
     def _create_source_from_chunks_cached(
         self,
