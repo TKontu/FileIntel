@@ -1764,8 +1764,18 @@ class GraphRAGService:
                         pages.update(chunk_pages)
                     else:
                         pages.add(chunk_pages)  # Handle single page number
+                else:
+                    # Fallback: check for singular "page_number" field
+                    page_num = chunk.chunk_metadata.get("page_number")
+                    if page_num is not None:
+                        pages.add(page_num)
+                    else:
+                        logger.debug(f"Chunk {chunk_uuid}: No pages found in metadata. Keys: {list(chunk.chunk_metadata.keys())}")
+
                 if not document_id:
                     document_id = chunk.document_id
+            else:
+                logger.debug(f"Chunk {chunk_uuid}: No chunk or no metadata found")
 
         return {
             "document_name": doc_title,
@@ -1800,6 +1810,12 @@ class GraphRAGService:
                             pages.update(chunk_pages)
                         else:
                             pages.add(chunk_pages)  # Handle single page number
+                    else:
+                        # Fallback: check for singular "page_number" field
+                        page_num = chunk.chunk_metadata.get("page_number")
+                        if page_num is not None:
+                            pages.add(page_num)
+
                     if not document_id:
                         document_id = chunk.document_id
             except Exception as e:

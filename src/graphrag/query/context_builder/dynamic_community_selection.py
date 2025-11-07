@@ -169,8 +169,9 @@ class DynamicCommunitySelection:
 
                         if children_count > 0:
                             logger.info(f"    → Added {children_count} children to explore at level {level + 1}")
-                        else:
-                            logger.info(f"    ⚠ No children added (had {len(comm_obj.children) if hasattr(comm_obj, 'children') else 0} children, but none in reports)")
+                        elif len(comm_obj.children) > 0:
+                            logger.info(f"    ⚠ No children added (had {len(comm_obj.children)} children, but none found in reports)")
+                        # If 0 children, no message needed - that's normal for leaf nodes
                     else:
                         logger.info(f"    ⚠ Community {community} not found in self.communities dict (total: {len(self.communities)})")
 
