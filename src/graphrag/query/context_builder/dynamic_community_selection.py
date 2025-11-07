@@ -146,18 +146,31 @@ class DynamicCommunitySelection:
                     # find children nodes of the current node and append them to the queue
                     # TODO check why some sub_communities are NOT in report_df
                     if community in self.communities:
+                        comm_obj = self.communities[community]
+                        logger.info(f"    Community {community} has children: {comm_obj.children if hasattr(comm_obj, 'children') else 'NO CHILDREN ATTR'}")
+
                         children_count = 0
+                        missing_children = []
                         for child in self.communities[community].children:
                             if child in self.reports:
                                 communities_to_rate.append(child)
                                 children_count += 1
                             else:
-                                logger.debug(
-                                    "dynamic community selection: cannot find community %s in reports",
-                                    child,
+                                missing_children.append(child)
+                                logger.info(
+                                    f"    ⚠ Child community {child} not found in reports (total reports: {len(self.reports)})"
                                 )
+
+                        if missing_children:
+                            logger.info(f"    Missing children IDs: {missing_children}")
+                            logger.info(f"    Available report IDs sample: {list(self.reports.keys())[:10]}")
+
                         if children_count > 0:
                             logger.info(f"    → Added {children_count} children to explore at level {level + 1}")
+                        else:
+                            logger.info(f"    ⚠ No children added (had {len(comm_obj.children) if hasattr(comm_obj, 'children') else 0} children, but none in reports)")
+                    else:
+                        logger.info(f"    ⚠ Community {community} not found in self.communities dict (total: {len(self.communities)})")
 
                     # remove parent node if the current node is deemed relevant
                     if not self.keep_parent and community in self.communities:
