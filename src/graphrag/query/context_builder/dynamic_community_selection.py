@@ -39,6 +39,7 @@ class DynamicCommunitySelection:
         keep_parent: bool = False,
         num_repeats: int = 1,
         max_level: int = 2,
+        starting_level: int = 0,  # Allow configuring the starting level
         concurrent_coroutines: int = 25,  # Match vLLM capacity and system config
         model_params: dict[str, Any] | None = None,
     ):
@@ -50,6 +51,7 @@ class DynamicCommunitySelection:
         self.threshold = threshold
         self.keep_parent = keep_parent
         self.max_level = max_level
+        self.starting_level = starting_level
         self.semaphore = asyncio.Semaphore(concurrent_coroutines)
         self.model_params = model_params if model_params else {}
 
@@ -65,8 +67,14 @@ class DynamicCommunitySelection:
             if community.short_id in self.reports:
                 self.levels[community.level].append(community.short_id)
 
-        # start from root communities (level 0)
-        self.starting_communities = self.levels["0"]
+        # start from configured starting level (default 0 for backward compatibility)
+        starting_level_key = str(self.starting_level)
+        if starting_level_key in self.levels:
+            self.starting_communities = self.levels[starting_level_key]
+        else:
+            # Fallback to level 0 if starting level doesn't exist
+            logger.warning(f"Starting level {self.starting_level} not found, falling back to level 0")
+            self.starting_communities = self.levels.get("0", [])
 
     async def select(self, query: str) -> tuple[list[CommunityReport], dict[str, Any]]:
         """

@@ -1352,7 +1352,7 @@ class GraphRAGService:
 
             # If this citation has too many text units, take the most dense ones
             if len(citation_tus) > 1000:
-                logger.info(f"Citation {marker}: {len(citation_tus)} text units, filtering to top 200 by density")
+                logger.info(f"Citation {marker}: {len(citation_tus)} text units, filtering to top 1000 by density")
                 citation_tus = citation_tus.nlargest(1000, 'info_density')
 
             # Collect chunks from this citation's text units

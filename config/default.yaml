@@ -108,7 +108,12 @@ graphrag:
   llm_model: ${GRAPHRAG_LLM_MODEL:-gemma3-12b-awq}  # Match main LLM model
   embedding_model: ${GRAPHRAG_EMBEDDING_MODEL:-bge-large-en}  # Match embedding model
   # NOTE: GraphRAG uses existing Vector RAG chunks, no separate chunking needed
-  community_levels: ${GRAPHRAG_COMMUNITY_LEVELS:-3}  # Good for hierarchical community detection (query-time parameter)
+  community_levels: ${GRAPHRAG_COMMUNITY_LEVELS:-5}  # Max level cap for drift search (collection has 6 levels: 0-5)
+
+  # Drift search configuration (dynamic community selection)
+  dynamic_search_max_level: ${GRAPHRAG_DYNAMIC_MAX_LEVEL:-5}  # Allow exploring all levels (was 2, which stopped too early)
+  dynamic_search_threshold: ${GRAPHRAG_DYNAMIC_THRESHOLD:-2}  # Stricter relevance threshold (was 1, too lenient)
+  dynamic_search_starting_level: ${GRAPHRAG_DYNAMIC_STARTING_LEVEL:-1}  # Start at level 1 to skip overly broad root (0=root)
 
   # Leiden clustering parameters (controls community hierarchy structure)
   # PRODUCTION NOTE: docker-compose.prod.yml and stack.env use (150/0.5) for consolidated hierarchies

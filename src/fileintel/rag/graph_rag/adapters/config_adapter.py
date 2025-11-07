@@ -237,6 +237,15 @@ class GraphRAGConfigAdapter:
                 resolution=settings.graphrag.leiden_resolution,
             )
 
+            # Import GlobalSearchConfig for drift search configuration
+            from graphrag.config.models.global_search_config import GlobalSearchConfig
+
+            # Create global_search config with drift search parameters
+            global_search_config = GlobalSearchConfig(
+                dynamic_search_threshold=settings.graphrag.dynamic_search_threshold,
+                dynamic_search_max_level=settings.graphrag.dynamic_search_max_level,
+                dynamic_search_starting_level=settings.graphrag.dynamic_search_starting_level,
+            )
 
             config = GraphRagConfig(
                 root_dir=workspace_path,
@@ -246,6 +255,7 @@ class GraphRAGConfigAdapter:
                 output=OutputConfig(base_dir=output_path),
                 embed_text=embed_text_config,
                 cluster_graph=cluster_graph_config,
+                global_search=global_search_config,
             )
 
             # Debug log the final config

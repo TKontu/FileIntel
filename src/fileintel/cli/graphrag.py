@@ -543,6 +543,102 @@ def check_completeness(
                 cli_handler.console.print()
 
 
+@app.command("export-communities")
+def export_communities(
+    collection_identifier: str = typer.Argument(
+        ..., help="The name or ID of the collection."
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o", help="Output markdown file path."
+    ),
+):
+    """Export all communities to a markdown file for analysis."""
+    import pandas as pd
+    from pathlib import Path
+    from datetime import datetime
+
+    # Get collection info
+    def _get_collection_info(api):
+        return api._request("GET", f"collections/{collection_identifier}")
+
+    collection_data = cli_handler.handle_api_call(_get_collection_info, "get collection info")
+    collection = collection_data.get("data", collection_data)
+    collection_id = collection.get("id")
+    collection_name = collection.get("name", "Unknown")
+
+    # Get index info
+    def _get_index_info(api):
+        return api._request("GET", f"graphrag/{collection_identifier}/status")
+
+    index_data = cli_handler.handle_api_call(_get_index_info, "get GraphRAG index info")
+    index_info = index_data.get("data", index_data)
+
+    workspace_path = index_info.get("index_path")
+    if not workspace_path:
+        cli_handler.console.print(f"[red]No GraphRAG index found for collection '{collection_identifier}'[/red]")
+        raise typer.Exit(1)
+
+    # Read parquet file
+    parquet_path = Path(workspace_path) / "community_reports.parquet"
+    if not parquet_path.exists():
+        cli_handler.console.print(f"[red]Community reports not found at {parquet_path}[/red]")
+        raise typer.Exit(1)
+
+    df = pd.read_parquet(parquet_path)
+    df = df.sort_values(['level', 'title'])
+
+    # Default output filename
+    if output is None:
+        output = f"communities_{collection_name.replace(' ', '_')}.md"
+
+    # Generate markdown
+    lines = [
+        f"# GraphRAG Communities: {collection_name}",
+        "",
+        f"**Collection ID:** `{collection_id}`",
+        f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"**Total Communities:** {len(df)}",
+        "",
+        "## Distribution by Level",
+        "",
+        "| Level | Count |",
+        "|-------|-------|",
+    ]
+
+    for level, count in df['level'].value_counts().sort_index().items():
+        lines.append(f"| {level} | {count} |")
+    lines.append("")
+
+    # Communities by level
+    for level in sorted(df['level'].unique()):
+        level_communities = df[df['level'] == level]
+        lines.append(f"## Level {level} Communities ({len(level_communities)})")
+        lines.append("")
+
+        for idx, row in level_communities.iterrows():
+            lines.append(f"### {row['title']}")
+            lines.append("")
+            lines.append(f"**Community ID:** `{row['community']}`")
+            lines.append("")
+
+            # Truncate summary to 300 chars
+            summary = row['summary']
+            if len(summary) > 300:
+                summary = summary[:297] + "..."
+            lines.append(f"**Summary:** {summary}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+    # Write to file
+    with open(output, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+
+    cli_handler.display_success(f"Exported {len(df)} communities to {output}")
+    cli_handler.console.print(f"Levels: {df['level'].min()} - {df['level'].max()}")
+    cli_handler.console.print(f"File size: {Path(output).stat().st_size / 1024:.1f} KB")
+
+
 @app.command("system-status")
 def system_status():
     """Check GraphRAG system status."""

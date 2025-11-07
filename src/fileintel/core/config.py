@@ -122,7 +122,7 @@ class GraphRAGSettings(BaseModel):
 
     llm_model: str = Field(default="gemma3-12b-awq")
     embedding_model: str = Field(default="bge-large-en")
-    community_levels: int = Field(default=3)
+    community_levels: int = Field(default=5, description="Max level cap for drift search")
     max_cluster_size: int = Field(default=50, description="Leiden algorithm max cluster size")
     leiden_resolution: float = Field(default=1.0, description="Leiden resolution parameter (lower = larger communities)")
     base_resolution_multiplier: float = Field(
@@ -134,6 +134,11 @@ class GraphRAGSettings(BaseModel):
 
     # Query classification
     query_classification_model: str = Field(default="gemma3-12b-awq")
+
+    # Drift search configuration (dynamic community selection for global search)
+    dynamic_search_max_level: int = Field(default=5, description="Max level to explore in drift search")
+    dynamic_search_threshold: int = Field(default=2, description="Relevance threshold for community selection (higher = stricter)")
+    dynamic_search_starting_level: int = Field(default=1, description="Starting level for drift search (0=root, 1=skip overly broad root)")
 
     # Async processing
     async_processing: AsyncProcessingSettings = Field(default_factory=AsyncProcessingSettings)

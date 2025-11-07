@@ -65,3 +65,7 @@ class GlobalSearchConfig(BaseModel):
         description="The maximum level of community hierarchy to consider if none of the processed communities are relevant",
         default=graphrag_config_defaults.global_search.dynamic_search_max_level,
     )
+    dynamic_search_starting_level: int = Field(
+        description="The starting level for drift search (0=root, 1=skip overly broad root)",
+        default=0,  # Default to 0 for backward compatibility
+    )

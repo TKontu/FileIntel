@@ -151,6 +151,7 @@ def get_global_search_engine(
             "concurrent_coroutines": model_settings.concurrent_requests,
             "threshold": gs_config.dynamic_search_threshold,
             "max_level": gs_config.dynamic_search_max_level,
+            "starting_level": getattr(gs_config, "dynamic_search_starting_level", 0),  # Default to 0 if not set
             "model_params": {**model_params},
         })
 
