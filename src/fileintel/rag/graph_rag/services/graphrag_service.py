@@ -1333,37 +1333,58 @@ class GraphRAGService:
 
         logger.info(f"Collected {len(all_relevant_text_units)} unique text units across {len(citation_contexts)} citations")
 
-        # OPTIMIZATION 1c: Smart chunk selection using information density
-        # Instead of processing ALL chunks, select the most information-dense ones
-        MAX_CHUNKS_FOR_EMBEDDING = 5000  # Reasonable limit for performance
+        # OPTIMIZATION 1c: Smart chunk selection using CITATION-SPECIFIC density filtering
+        # For each citation, select its most dense text units, then collect chunks
+        # This ensures each citation gets relevant chunks, not globally dense ones
+        MAX_CHUNKS_PER_CITATION = 5000  # Reasonable limit per citation
 
-        # Get text units sorted by density
+        chunk_candidates = set()
+        chunk_density_scores = {}  # Track density for tiebreaking
+        chunk_frequency = {}  # Track how often each chunk appears
+
+        # Get text units with density scores
         relevant_tus = text_units_df[text_units_df["id"].isin(all_relevant_text_units)]
 
-        if len(relevant_tus) > 1000:
-            # For very large collections, take top 1000 most dense text units
-            logger.info(f"Large collection detected ({len(relevant_tus)} text units). Filtering to top 1000 by density.")
-            relevant_tus = relevant_tus.nlargest(1000, 'info_density')
+        # Process each citation separately to ensure relevance
+        for marker, text_unit_ids in citation_to_text_units.items():
+            # Get text units for THIS SPECIFIC citation
+            citation_tus = relevant_tus[relevant_tus["id"].isin(text_unit_ids)]
 
-        # Get chunks from selected text units
-        chunk_candidates = set()
-        chunk_frequency = {}  # Track how often each chunk appears (multi-text-unit chunks are important)
+            # If this citation has too many text units, take the most dense ones
+            if len(citation_tus) > 200:
+                logger.info(f"Citation {marker}: {len(citation_tus)} text units, filtering to top 200 by density")
+                citation_tus = citation_tus.nlargest(200, 'info_density')
 
-        for _, tu in relevant_tus.iterrows():
-            doc_ids = tu.get("document_ids")
-            if doc_ids is not None and len(doc_ids) > 0:
-                for chunk_id in doc_ids:
-                    chunk_candidates.add(str(chunk_id))
-                    chunk_frequency[str(chunk_id)] = chunk_frequency.get(str(chunk_id), 0) + 1
+            # Collect chunks from this citation's text units
+            for _, tu in citation_tus.iterrows():
+                doc_ids = tu.get("document_ids")
+                density = tu.get("info_density", 0)
+                if doc_ids is not None and len(doc_ids) > 0:
+                    for chunk_id in doc_ids:
+                        chunk_id_str = str(chunk_id)
+                        chunk_candidates.add(chunk_id_str)
+                        chunk_frequency[chunk_id_str] = chunk_frequency.get(chunk_id_str, 0) + 1
+                        # Track max density for this chunk
+                        chunk_density_scores[chunk_id_str] = max(
+                            chunk_density_scores.get(chunk_id_str, 0), density
+                        )
 
-        logger.info(f"Density filtering produced {len(chunk_candidates)} candidate chunks")
+        logger.info(f"Citation-specific filtering produced {len(chunk_candidates)} candidate chunks")
 
-        # If still too many, prioritize by frequency (chunks appearing in multiple dense text units)
-        if len(chunk_candidates) > MAX_CHUNKS_FOR_EMBEDDING:
-            logger.info(f"Still too many chunks ({len(chunk_candidates)}). Prioritizing by frequency...")
-            sorted_chunks = sorted(chunk_frequency.items(), key=lambda x: x[1], reverse=True)
-            chunk_candidates = set([c[0] for c in sorted_chunks[:MAX_CHUNKS_FOR_EMBEDDING]])
-            logger.info(f"Reduced to {len(chunk_candidates)} chunks (top by frequency)")
+        # If still too many total chunks, prioritize by:
+        # 1. Frequency (chunks appearing in multiple citations)
+        # 2. Density (chunks from high-density text units)
+        MAX_TOTAL_CHUNKS = 10000
+        if len(chunk_candidates) > MAX_TOTAL_CHUNKS:
+            logger.info(f"Too many chunks ({len(chunk_candidates)}). Prioritizing by frequency + density...")
+            # Score = frequency * 100 + density (frequency is primary, density is tiebreaker)
+            chunk_scores = {
+                chunk_id: chunk_frequency[chunk_id] * 100 + chunk_density_scores.get(chunk_id, 0)
+                for chunk_id in chunk_candidates
+            }
+            sorted_chunks = sorted(chunk_scores.items(), key=lambda x: x[1], reverse=True)
+            chunk_candidates = set([c[0] for c in sorted_chunks[:MAX_TOTAL_CHUNKS]])
+            logger.info(f"Reduced to {len(chunk_candidates)} chunks (top by frequency + density)")
 
         # Map chunks to documents for citation grouping
         chunk_uuid_strs = list(chunk_candidates)
@@ -1535,9 +1556,10 @@ class GraphRAGService:
                 best_chunk_uuids = sources_by_doc[best_doc_title]["chunk_uuids"]
                 best_similarity = sum(sources_by_doc[best_doc_title]["similarities"]) / len(sources_by_doc[best_doc_title]["similarities"])
 
-                # QUALITY THRESHOLD: Only include citations with high similarity (0.8+)
-                # Better to have no citation than a weak/misleading one
-                SIMILARITY_THRESHOLD = 0.8
+                # QUALITY THRESHOLD: Only include citations with reasonable similarity
+                # With citation-specific filtering, we can be more lenient (0.65+)
+                # GraphRAG already filtered to relevant entities, so moderate similarity is acceptable
+                SIMILARITY_THRESHOLD = 0.75
                 if best_similarity < SIMILARITY_THRESHOLD:
                     logger.warning(f"Citation {marker} has low similarity ({best_similarity:.3f} < {SIMILARITY_THRESHOLD}) - excluding citation")
                     # Don't add to citation_mappings - marker will be removed from text
