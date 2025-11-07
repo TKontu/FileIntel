@@ -973,35 +973,33 @@ class GraphRAGService:
         import os
         import pandas as pd
 
-        # 1. Parse citation IDs from answer
-        citation_ids = self._parse_citation_ids(answer)
+        # 1. Parse individual citations with their contexts
+        citation_contexts = self._parse_citation_contexts(answer)
 
-        if not citation_ids["report_ids"] and not citation_ids["entity_ids"]:
+        if not citation_contexts:
             # No citations to trace
             return answer, reranked_sources
 
-        logger.info(f"Tracing {len(citation_ids['report_ids'])} report citations, {len(citation_ids['entity_ids'])} entity citations")
+        logger.info(f"Tracing {len(citation_contexts)} individual citations")
 
-        # 2. SERVER-SIDE: Trace citations to sources using direct parquet access
-        traced_sources = await asyncio.to_thread(
-            self._trace_citations_server_side,
-            citation_ids,
+        # 2. SERVER-SIDE: Trace each citation individually to maintain citation→chunk mapping
+        citation_mappings, all_sources = await asyncio.to_thread(
+            self._trace_citations_individually,
+            citation_contexts,
             workspace_path,
             reranked_sources
         )
 
-        if not traced_sources:
-            logger.warning("No sources traced from citations")
+        if not citation_mappings:
+            logger.warning("No citations traced successfully")
             return answer, reranked_sources
 
-        logger.info(f"Traced {len(traced_sources)} source documents from citations")
+        logger.info(f"Traced {len(citation_mappings)} citations to {len(all_sources)} unique sources")
 
-        # 3. Format answer with Harvard citations
-        formatted_answer = await self._format_with_harvard_citations(
-            answer, traced_sources, collection_id, reranked_sources
-        )
+        # 3. Format answer with Harvard citations using the specific mappings
+        formatted_answer = self._apply_citation_mappings(answer, citation_mappings)
 
-        return formatted_answer, traced_sources
+        return formatted_answer, all_sources
 
     def _trace_citations_server_side(
         self,
@@ -1187,6 +1185,372 @@ class GraphRAGService:
 
         logger.info(f"Citation tracing complete: found {len(sources)} source documents with page numbers")
         return sources
+
+    def _parse_citation_contexts(self, answer_text: str) -> List[Dict[str, Any]]:
+        """
+        Parse individual citations with their context text.
+
+        Returns:
+            List of dicts with {marker, type, ids, context_text}
+        """
+        import re
+
+        # Find all citation markers with surrounding context (sentence)
+        citation_pattern = r'\[Data: (Reports|Entities|Relationships) \(([0-9, ]+)\)\]'
+
+        citation_contexts = []
+        for match in re.finditer(citation_pattern, answer_text):
+            marker = match.group(0)
+            cit_type = match.group(1)
+            ids_str = match.group(2)
+
+            # Parse IDs
+            ids = [int(id.strip()) for id in ids_str.split(',')]
+
+            # Extract surrounding context (sentence containing the citation)
+            start = match.start()
+            end = match.end()
+
+            # Find sentence boundaries
+            sentence_start = answer_text.rfind('.', 0, start) + 1
+            sentence_end = answer_text.find('.', end)
+            if sentence_end == -1:
+                sentence_end = len(answer_text)
+            else:
+                sentence_end += 1
+
+            context_text = answer_text[sentence_start:sentence_end].strip()
+            # Remove the citation marker from context for semantic matching
+            context_text_clean = context_text.replace(marker, '').strip()
+
+            citation_contexts.append({
+                "marker": marker,
+                "type": cit_type,
+                "ids": ids,
+                "context_text": context_text_clean
+            })
+
+        return citation_contexts
+
+    def _trace_citations_individually(
+        self,
+        citation_contexts: List[Dict[str, Any]],
+        workspace_path: str,
+        reranked_sources: List[Dict[str, Any]]
+    ) -> tuple[Dict[str, str], List[Dict[str, Any]]]:
+        """
+        Trace each citation individually to maintain citation→chunk→page mapping.
+        OPTIMIZED for massive collections with batch operations.
+
+        Returns:
+            Tuple of (citation_mappings, all_sources)
+            - citation_mappings: {marker: harvard_citation}
+            - all_sources: List of unique source documents referenced
+        """
+        import pandas as pd
+        import os
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as np
+
+        # Helper to safely load parquet files
+        def load_parquet_safe(filename):
+            path = os.path.join(workspace_path, filename)
+            if os.path.exists(path):
+                try:
+                    return pd.read_parquet(path)
+                except Exception as e:
+                    logger.warning(f"Failed to load {filename}: {e}")
+            return None
+
+        # Load required parquet files once (cached in memory for all citations)
+        communities_df = load_parquet_safe("communities.parquet")
+        entities_df = load_parquet_safe("entities.parquet")
+        text_units_df = load_parquet_safe("text_units.parquet")
+        documents_df = load_parquet_safe("documents.parquet")
+
+        if communities_df is None or entities_df is None or text_units_df is None or documents_df is None:
+            logger.error(f"Required parquet files not found in {workspace_path}")
+            return {}, []
+
+        # OPTIMIZATION 1: Collect all chunk UUIDs needed across ALL citations first
+        all_needed_chunks = set()
+        citation_to_chunks = {}  # {marker: {doc_title: [chunk_uuids]}}
+
+        for citation in citation_contexts:
+            marker = citation["marker"]
+            cit_type = citation["type"]
+            ids = citation["ids"]
+
+            # Step 1: Get entity IDs for this specific citation
+            entity_ids = set()
+            if cit_type == "Reports":
+                comm_mask = communities_df["community"].isin(ids)
+                for entity_list in communities_df[comm_mask]["entity_ids"]:
+                    if entity_list is not None and len(entity_list) > 0:
+                        entity_ids.update(entity_list)
+            elif cit_type == "Entities":
+                entity_ids.update(ids)
+
+            if not entity_ids:
+                continue
+
+            # Step 2: Get text units for these specific entities
+            text_unit_ids = set()
+            entity_mask = entities_df["id"].isin(entity_ids)
+            for tu_list in entities_df[entity_mask]["text_unit_ids"]:
+                if tu_list is not None and len(tu_list) > 0:
+                    text_unit_ids.update(tu_list)
+
+            if not text_unit_ids:
+                continue
+
+            # Step 3: Get chunk UUIDs for these specific text units
+            chunk_uuids = set()
+            tu_mask = text_units_df["id"].isin(text_unit_ids)
+            for doc_id_list in text_units_df[tu_mask]["document_ids"]:
+                if doc_id_list is not None and len(doc_id_list) > 0:
+                    chunk_uuids.update(doc_id_list)
+
+            if not chunk_uuids:
+                continue
+
+            # Step 4: Group these specific chunks by document
+            chunk_uuid_strs = [str(uuid) for uuid in chunk_uuids]
+            doc_mask = documents_df["id"].isin(chunk_uuid_strs)
+            matched_docs = documents_df[doc_mask]
+
+            doc_chunks = {}  # {doc_title: [chunk_uuids]}
+            for _, row in matched_docs.iterrows():
+                doc_title = row.get("title", "Unknown")
+                chunk_id = row.get("id")
+                if doc_title not in doc_chunks:
+                    doc_chunks[doc_title] = []
+                doc_chunks[doc_title].append(chunk_id)
+
+            if doc_chunks:
+                citation_to_chunks[marker] = doc_chunks
+                # Collect all needed chunks for batch fetch
+                for chunks in doc_chunks.values():
+                    all_needed_chunks.update([str(c) for c in chunks[:10]])  # Limit to 10 per doc
+
+        logger.info(f"Collected {len(all_needed_chunks)} unique chunks across {len(citation_contexts)} citations")
+
+        # OPTIMIZATION 2: Batch fetch all chunks at once
+        chunk_cache = self._batch_fetch_chunks(list(all_needed_chunks))
+        logger.info(f"Batch fetched {len(chunk_cache)} chunks from storage")
+
+        # OPTIMIZATION 3: Batch embed all citation contexts at once
+        context_texts = [c["context_text"] for c in citation_contexts]
+        try:
+            context_embeddings = self.embedding_provider.embed_batch(context_texts)
+            logger.info(f"Batch embedded {len(context_embeddings)} citation contexts")
+        except Exception as e:
+            logger.error(f"Batch embedding failed: {e}")
+            context_embeddings = None
+
+        # Process each citation with cached data
+        citation_mappings = {}
+        all_sources_dict = {}  # {doc_name: source_dict} to deduplicate
+
+        for idx, citation in enumerate(citation_contexts):
+            marker = citation["marker"]
+            context_text = citation["context_text"]
+
+            if marker not in citation_to_chunks:
+                logger.warning(f"No chunks found for citation {marker}")
+                continue
+
+            doc_chunks = citation_to_chunks[marker]
+            logger.info(f"Citation {marker} references {len(doc_chunks)} documents")
+
+            # Semantic matching using cached embeddings and chunks
+            best_source = None
+            best_similarity = -1
+
+            if len(doc_chunks) == 1:
+                # Only one document - use it
+                doc_title = list(doc_chunks.keys())[0]
+                chunk_uuids_for_doc = doc_chunks[doc_title]
+                best_source = self._create_source_from_chunks_cached(
+                    doc_title, chunk_uuids_for_doc, reranked_sources, chunk_cache
+                )
+                best_similarity = 1.0
+            else:
+                # Multiple documents - use semantic matching with cached embeddings
+                if context_embeddings is not None:
+                    try:
+                        context_embedding = context_embeddings[idx]
+
+                        # Collect doc texts from cache for batch embedding
+                        doc_texts = []
+                        doc_titles = []
+                        for doc_title, chunk_uuids_for_doc in doc_chunks.items():
+                            first_chunk = chunk_cache.get(str(chunk_uuids_for_doc[0]))
+                            if first_chunk and first_chunk.content:
+                                doc_texts.append(first_chunk.content[:500])
+                                doc_titles.append(doc_title)
+
+                        if doc_texts:
+                            # Batch embed all candidate documents
+                            doc_embeddings = self.embedding_provider.embed_batch(doc_texts)
+
+                            # Find best match
+                            similarities = cosine_similarity([context_embedding], doc_embeddings)[0]
+                            best_idx = np.argmax(similarities)
+                            best_similarity = similarities[best_idx]
+                            best_doc_title = doc_titles[best_idx]
+
+                            best_source = self._create_source_from_chunks_cached(
+                                best_doc_title, doc_chunks[best_doc_title], reranked_sources, chunk_cache
+                            )
+
+                    except Exception as e:
+                        logger.warning(f"Semantic matching failed for citation {marker}: {e}")
+
+                # Fallback: use first document
+                if not best_source:
+                    doc_title = list(doc_chunks.keys())[0]
+                    chunk_uuids_for_doc = doc_chunks[doc_title]
+                    best_source = self._create_source_from_chunks_cached(
+                        doc_title, chunk_uuids_for_doc, reranked_sources, chunk_cache
+                    )
+                    best_similarity = 0.5
+
+            if not best_source:
+                logger.warning(f"No best source found for citation {marker}")
+                continue
+
+            # Build Harvard citation for this specific source
+            harvard_citation = self._build_harvard_citation(best_source, reranked_sources)
+            citation_mappings[marker] = harvard_citation
+
+            # Add to all_sources (deduplicate by document name)
+            doc_name = best_source.get("document_name")
+            if doc_name not in all_sources_dict:
+                all_sources_dict[doc_name] = best_source
+            else:
+                # Merge pages and chunks
+                existing = all_sources_dict[doc_name]
+                existing["pages"] = sorted(list(set(existing.get("pages", []) + best_source.get("pages", []))))[:5]
+                existing["chunk_uuids"] = list(set(existing.get("chunk_uuids", []) + best_source.get("chunk_uuids", [])))
+                existing["chunk_count"] = len(existing["chunk_uuids"])
+
+            logger.info(f"Matched citation {marker} → {doc_name} (similarity: {best_similarity:.3f}, pages: {best_source.get('pages', [])})")
+
+        all_sources = list(all_sources_dict.values())
+        return citation_mappings, all_sources
+
+    def _batch_fetch_chunks(self, chunk_uuids: List[str]) -> Dict[str, Any]:
+        """
+        Batch fetch chunks from storage to minimize database queries.
+
+        Returns:
+            Dict mapping chunk_uuid → chunk object
+        """
+        chunk_cache = {}
+
+        # Batch query chunks (limit to 100 at a time to avoid overwhelming DB)
+        batch_size = 100
+        for i in range(0, len(chunk_uuids), batch_size):
+            batch = chunk_uuids[i:i+batch_size]
+            for chunk_uuid in batch:
+                try:
+                    chunk = self.storage.get_chunk_by_id(chunk_uuid)
+                    if chunk:
+                        chunk_cache[chunk_uuid] = chunk
+                except Exception as e:
+                    logger.debug(f"Could not fetch chunk {chunk_uuid}: {e}")
+                    continue
+
+        return chunk_cache
+
+    def _create_source_from_chunks_cached(
+        self,
+        doc_title: str,
+        chunk_uuids: List[str],
+        reranked_sources: List[Dict[str, Any]],
+        chunk_cache: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Create a source dict from specific chunks using cached chunk data.
+        This avoids repeated storage queries.
+        """
+        pages = set()
+        document_id = None
+
+        # Get page numbers from these SPECIFIC chunks using cache
+        for chunk_uuid in chunk_uuids[:20]:  # Limit to 20 chunks for performance
+            chunk = chunk_cache.get(str(chunk_uuid))
+            if chunk and chunk.chunk_metadata:
+                page = chunk.chunk_metadata.get("page_number")
+                if page is not None:
+                    pages.add(page)
+                if not document_id:
+                    document_id = chunk.document_id
+
+        return {
+            "document_name": doc_title,
+            "document_id": str(document_id) if document_id else None,
+            "pages": sorted(list(pages))[:5],  # First 5 pages only
+            "chunk_uuids": [str(c) for c in chunk_uuids],
+            "chunk_count": len(chunk_uuids)
+        }
+
+    def _create_source_from_chunks(
+        self,
+        doc_title: str,
+        chunk_uuids: List[str],
+        reranked_sources: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Create a source dict from specific chunks, including page numbers from those chunks.
+        (DEPRECATED: Use _create_source_from_chunks_cached with chunk cache for better performance)
+        """
+        pages = set()
+        document_id = None
+
+        # Get page numbers from these SPECIFIC chunks (not just first 10)
+        for chunk_uuid in chunk_uuids[:20]:  # Limit to 20 chunks for performance
+            try:
+                chunk = self.storage.get_chunk_by_id(str(chunk_uuid))
+                if chunk and chunk.chunk_metadata:
+                    page = chunk.chunk_metadata.get("page_number")
+                    if page is not None:
+                        pages.add(page)
+                    if not document_id:
+                        document_id = chunk.document_id
+            except Exception as e:
+                logger.debug(f"Could not get chunk {chunk_uuid}: {e}")
+                continue
+
+        return {
+            "document_name": doc_title,
+            "document_id": str(document_id) if document_id else None,
+            "pages": sorted(list(pages))[:5],  # First 5 pages only
+            "chunk_uuids": [str(c) for c in chunk_uuids],
+            "chunk_count": len(chunk_uuids)
+        }
+
+    def _apply_citation_mappings(self, answer_text: str, citation_mappings: Dict[str, str]) -> str:
+        """
+        Replace citation markers with Harvard-style references.
+
+        Args:
+            answer_text: Original answer with [Data: ...] markers
+            citation_mappings: {marker: harvard_citation}
+
+        Returns:
+            Formatted answer with Harvard citations
+        """
+        result = answer_text
+        for marker, harvard_citation in citation_mappings.items():
+            replacement = f' ({harvard_citation})'
+            # Simple string replacement
+            result = result.replace(f' {marker}', replacement)
+            result = result.replace(marker, replacement)
+            logger.debug(f"Replaced '{marker}' with '{replacement}'")
+
+        return result
 
     def _parse_citation_ids(self, answer_text: str) -> Dict[str, set]:
         """Parse inline GraphRAG citations and extract specific IDs."""
