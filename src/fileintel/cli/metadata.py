@@ -18,6 +18,31 @@ from .shared import (
 app = typer.Typer(help="Document metadata extraction operations.")
 
 
+def _normalize_value(value):
+    """Normalize a value for metadata comparison.
+
+    Handles:
+    - None vs empty string
+    - Lists with different ordering or formatting
+    - String vs number comparison (e.g., "2023" vs 2023)
+    - Boolean strings (e.g., "True" vs True)
+    """
+    if value is None or value == "":
+        return None
+
+    # Convert booleans to strings for comparison
+    if isinstance(value, bool):
+        return str(value)
+
+    # Handle lists - sort for order-independent comparison
+    if isinstance(value, list):
+        # Convert all items to strings and sort
+        return sorted([str(item) for item in value])
+
+    # Convert to string for uniform comparison
+    return str(value)
+
+
 @app.command("extract")
 def extract_document_metadata(
     document_id: str = typer.Argument(
@@ -361,25 +386,71 @@ def import_collection_table(
         cli_handler.display_warning("No updates found in CSV file")
         raise typer.Exit(0)
 
-    cli_handler.console.print(f"[green]Found {len(updates)} document(s) to update[/green]")
+    cli_handler.console.print(f"[green]Found {len(updates)} document(s) in CSV[/green]")
+
+    # Fetch current metadata to show actual differences
+    def _get_current_metadata(doc_id):
+        """Fetch current metadata for a document."""
+        try:
+            result = cli_handler.api._request("GET", f"metadata/document/{doc_id}")
+            return result.get("data", {}).get("metadata", {})
+        except Exception:
+            return {}
+
+    # Analyze changes
+    cli_handler.console.print("[blue]Comparing with current metadata...[/blue]")
+    actual_changes = []
+    no_changes = []
+
+    for update in updates:
+        doc_id = update["document_id"]
+        new_metadata = update["metadata"]
+        current_metadata = _get_current_metadata(doc_id)
+
+        # Find fields that are actually different
+        changed_fields = []
+        for field, new_value in new_metadata.items():
+            current_value = current_metadata.get(field)
+            # Normalize for comparison (handle None vs empty string, etc.)
+            if _normalize_value(new_value) != _normalize_value(current_value):
+                changed_fields.append(field)
+
+        if changed_fields:
+            actual_changes.append({
+                "document_id": doc_id,
+                "changed_fields": changed_fields,
+                "metadata": new_metadata
+            })
+        else:
+            no_changes.append(doc_id)
 
     # Show preview
     if dry_run:
         cli_handler.console.print("\n[bold yellow]DRY RUN - No changes will be made[/bold yellow]\n")
 
-    cli_handler.console.print("[bold]Updates to apply:[/bold]")
-    for i, update in enumerate(updates[:5], 1):  # Show first 5
-        doc_id = update["document_id"][:8] + "..."
-        fields = ", ".join(update["metadata"].keys())
-        cli_handler.console.print(f"  {i}. {doc_id}: {fields}")
+    if actual_changes:
+        cli_handler.console.print("[bold]Documents with changes:[/bold]")
+        for i, change in enumerate(actual_changes[:5], 1):  # Show first 5
+            doc_id = change["document_id"][:8] + "..."
+            fields = ", ".join(change["changed_fields"])
+            cli_handler.console.print(f"  {i}. {doc_id}: {fields}")
 
-    if len(updates) > 5:
-        cli_handler.console.print(f"  ... and {len(updates) - 5} more documents")
+        if len(actual_changes) > 5:
+            cli_handler.console.print(f"  ... and {len(actual_changes) - 5} more documents with changes")
+
+    if no_changes:
+        cli_handler.console.print(f"\n[dim]Documents with no changes: {len(no_changes)}[/dim]")
 
     cli_handler.console.print(f"\nMode: {'REPLACE' if replace else 'MERGE'}")
+    cli_handler.console.print(f"Total: {len(actual_changes)} to update, {len(no_changes)} unchanged")
 
     if dry_run:
         cli_handler.console.print("\n[yellow]Dry run complete. Use without --dry-run to apply changes.[/yellow]")
+        raise typer.Exit(0)
+
+    # Skip if no changes
+    if not actual_changes:
+        cli_handler.console.print("\n[green]No changes detected. All metadata is already up to date.[/green]")
         raise typer.Exit(0)
 
     # Confirm action
@@ -387,10 +458,13 @@ def import_collection_table(
         cli_handler.console.print("Import cancelled")
         raise typer.Exit(0)
 
-    # Call API to perform bulk update
+    # Call API to perform bulk update (only for documents with actual changes)
     def _bulk_update(api):
         payload = {
-            "updates": updates,
+            "updates": [
+                {"document_id": change["document_id"], "metadata": change["metadata"]}
+                for change in actual_changes
+            ],
             "replace": replace
         }
         return api._request("POST", "metadata/bulk-update", json=payload)

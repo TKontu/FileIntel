@@ -111,16 +111,61 @@ class CitationFormatter:
                 elif author_surname:
                     return f"({author_surname})"
 
-            # Fallback to simplified filename
+            # Fallback to simplified filename with page numbers if available
             filename = chunk.get("original_filename", chunk.get("filename", "Unknown"))
             # Remove extension for cleaner in-text citation
             if "." in filename:
                 filename = filename.rsplit(".", 1)[0]
+
+            # Include page numbers even in fallback citation
+            chunk_metadata = chunk.get("metadata", chunk.get("chunk_metadata", {}))
+            page_number = chunk_metadata.get("page_number")
+            if not page_number:
+                page_range = chunk_metadata.get("page_range")
+                if page_range:
+                    page_number = page_range
+                else:
+                    pages = chunk_metadata.get("pages")
+                    if pages:
+                        if isinstance(pages, list) and pages:
+                            if len(pages) == 1:
+                                page_number = str(pages[0])
+                            else:
+                                # Format as range or list
+                                if pages == list(range(pages[0], pages[-1] + 1)):
+                                    page_number = f"{pages[0]}-{pages[-1]}"
+                                else:
+                                    page_number = ",".join(str(p) for p in pages)
+
+            if page_number:
+                # Format page reference
+                if isinstance(page_number, str):
+                    if "-" in page_number:
+                        return f"({filename}, pp. {page_number})"
+                    elif "," in page_number:
+                        return f"({filename}, pp. {page_number})"
+                    else:
+                        return f"({filename}, p. {page_number})"
+                else:
+                    return f"({filename}, p. {page_number})"
+
             return f"({filename})"
 
         except Exception as e:
             logger.warning(f"Error formatting in-text citation: {e}")
+            # Even in error case, try to include page numbers if available
             filename = chunk.get("original_filename", chunk.get("filename", "Unknown"))
+            try:
+                chunk_metadata = chunk.get("metadata", chunk.get("chunk_metadata", {}))
+                pages = chunk_metadata.get("pages", [])
+                if pages and isinstance(pages, list) and len(pages) > 0:
+                    if len(pages) == 1:
+                        return f"({filename}, p. {pages[0]})"
+                    else:
+                        pages_str = ",".join(str(p) for p in pages)
+                        return f"({filename}, pp. {pages_str})"
+            except:
+                pass  # If page extraction fails, just return filename
             return f"({filename})"
 
     def format_full_citation(self, chunk: Dict[str, Any]) -> str:
