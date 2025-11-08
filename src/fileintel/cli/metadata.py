@@ -393,11 +393,14 @@ def import_collection_table(
 
     cli_handler.console.print(f"[green]Found {len(updates)} document(s) in CSV[/green]")
 
+    # Get API client
+    api = cli_handler.get_api_client()
+
     # Fetch current metadata to show actual differences
     def _get_current_metadata(doc_id):
         """Fetch current metadata for a document."""
         try:
-            result = cli_handler.api._request("GET", f"metadata/document/{doc_id}")
+            result = api._request("GET", f"metadata/document/{doc_id}")
             metadata = result.get("data", {}).get("metadata", {})
             # Debug first call
             if doc_id == updates[0]["document_id"]:
