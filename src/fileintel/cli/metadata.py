@@ -412,8 +412,19 @@ def import_collection_table(
         for field, new_value in new_metadata.items():
             current_value = current_metadata.get(field)
             # Normalize for comparison (handle None vs empty string, etc.)
-            if _normalize_value(new_value) != _normalize_value(current_value):
+            normalized_new = _normalize_value(new_value)
+            normalized_current = _normalize_value(current_value)
+
+            if normalized_new != normalized_current:
                 changed_fields.append(field)
+                # Debug: Print first difference for troubleshooting
+                if len(actual_changes) == 0 and len(changed_fields) == 1:
+                    cli_handler.console.print(f"[dim]Debug - First difference found:[/dim]")
+                    cli_handler.console.print(f"[dim]  Field: {field}[/dim]")
+                    cli_handler.console.print(f"[dim]  CSV value: {repr(new_value)} (type: {type(new_value).__name__})[/dim]")
+                    cli_handler.console.print(f"[dim]  DB value: {repr(current_value)} (type: {type(current_value).__name__})[/dim]")
+                    cli_handler.console.print(f"[dim]  Normalized CSV: {repr(normalized_new)}[/dim]")
+                    cli_handler.console.print(f"[dim]  Normalized DB: {repr(normalized_current)}[/dim]")
 
         if changed_fields:
             actual_changes.append({
