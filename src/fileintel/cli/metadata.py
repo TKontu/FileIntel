@@ -24,6 +24,7 @@ def _normalize_value(value):
     Handles:
     - None vs empty string
     - Lists with different ordering or formatting
+    - Single-item list vs string (CSV export artifact)
     - String vs number comparison (e.g., "2023" vs 2023)
     - Boolean strings (e.g., "True" vs True)
     """
@@ -36,8 +37,12 @@ def _normalize_value(value):
 
     # Handle lists - sort for order-independent comparison
     if isinstance(value, list):
-        # Convert all items to strings and sort
-        return sorted([str(item) for item in value])
+        # Single-item list should match the string value
+        # This handles CSV export artifact: ["Wright"] exported as "Wright"
+        if len(value) == 1:
+            return str(value[0])
+        # Multi-item lists: convert to sorted tuple for consistent comparison
+        return tuple(sorted([str(item) for item in value]))
 
     # Convert to string for uniform comparison
     return str(value)
