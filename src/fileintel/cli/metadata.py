@@ -398,8 +398,14 @@ def import_collection_table(
         """Fetch current metadata for a document."""
         try:
             result = cli_handler.api._request("GET", f"metadata/document/{doc_id}")
-            return result.get("data", {}).get("metadata", {})
-        except Exception:
+            metadata = result.get("data", {}).get("metadata", {})
+            # Debug first call
+            if doc_id == updates[0]["document_id"]:
+                cli_handler.console.print(f"[dim]Debug - Fetched metadata for first doc:[/dim]")
+                cli_handler.console.print(f"[dim]  author_surnames in DB: {repr(metadata.get('author_surnames'))}[/dim]")
+            return metadata
+        except Exception as e:
+            cli_handler.console.print(f"[dim]Error fetching metadata: {e}[/dim]")
             return {}
 
     # Analyze changes
