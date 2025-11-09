@@ -383,6 +383,7 @@ async def local_search(
     local_callbacks.on_context = on_context
     callbacks.append(local_callbacks)
 
+    logger.info(f"🚀 Starting local_search_streaming for query: '{query[:50]}...'")
     logger.debug("Executing local search query: %s", query)
     async for chunk in local_search_streaming(
         config=config,
@@ -398,6 +399,8 @@ async def local_search(
         callbacks=callbacks,
     ):
         full_response += chunk
+        logger.info(f"📝 Received chunk of length {len(chunk)}")
+    logger.info(f"✅ local_search_streaming completed, total response length: {len(full_response)}")
     logger.debug("Query response: %s", truncate(full_response, 400))
     return full_response, context_data
 

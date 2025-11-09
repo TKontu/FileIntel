@@ -719,6 +719,9 @@ Reformatted Answer (with all citations preserved):"""
 
         graphrag_config = await self._get_cached_config(collection_id)
 
+        logger.info(f"🔍 Starting local_search() call for query: '{query[:50]}...'")
+        logger.info(f"📊 DataFrames loaded - entities: {len(dataframes['entities'])}, communities: {len(dataframes['communities'])}, text_units: {len(dataframes.get('text_units', []))}")
+
         result, context = await local_search(
             config=graphrag_config,
             entities=dataframes["entities"],
@@ -731,6 +734,8 @@ Reformatted Answer (with all citations preserved):"""
             response_type="text",
             query=query,
         )
+
+        logger.info(f"✅ local_search() completed successfully")
 
         # Sync GraphRAG logger level with application config (local_search calls init_loggers)
         self._sync_graphrag_logger_level()
