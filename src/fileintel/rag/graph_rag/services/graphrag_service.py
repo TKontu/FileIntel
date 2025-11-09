@@ -722,24 +722,24 @@ Reformatted Answer (with all citations preserved):"""
         logger.info(f"🔍 Starting local_search() call for query: '{query[:50]}...'")
         logger.info(f"📊 DataFrames loaded - entities: {len(dataframes['entities'])}, communities: {len(dataframes['communities'])}, text_units: {len(dataframes.get('text_units', []))}")
 
-        # Run local_search in thread pool executor to avoid blocking event loop
+        # Run local_search in a thread pool to avoid blocking the event loop
         # local_search internally has synchronous blocking operations:
         # - build_context() calls similarity_search_by_text() which does:
         #   1. Synchronous embedding API call (text_embedder.embed)
         #   2. Synchronous LanceDB vector search
         # See: src/graphrag/query/context_builder/entity_extraction.py:58
         #
-        # We use run_in_executor to run the async local_search in a separate thread
-        # with its own event loop, preventing it from blocking the main event loop
-        import concurrent.futures
-        loop = asyncio.get_event_loop()
-
-        def run_local_search_sync():
-            """Run local_search in a new event loop in a separate thread."""
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
+        # Since local_search is async but contains blocking sync code, we run it
+        # in a thread pool where it can safely block without affecting the main loop
+        def run_local_search_in_thread():
+            """Run local_search synchronously in a thread with its own event loop."""
+            import asyncio as thread_asyncio
+            # Create a fresh event loop for this thread
+            thread_loop = thread_asyncio.new_event_loop()
+            thread_asyncio.set_event_loop(thread_loop)
             try:
-                return new_loop.run_until_complete(local_search(
+                # Run the async local_search in this thread's event loop
+                result = thread_loop.run_until_complete(local_search(
                     config=graphrag_config,
                     entities=dataframes["entities"],
                     communities=dataframes["communities"],
@@ -751,11 +751,13 @@ Reformatted Answer (with all citations preserved):"""
                     response_type="text",
                     query=query,
                 ))
+                return result
             finally:
-                new_loop.close()
+                thread_loop.close()
+                thread_asyncio.set_event_loop(None)
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            result, context = await loop.run_in_executor(executor, run_local_search_sync)
+        # Run in thread pool using asyncio.to_thread (Python 3.9+)
+        result, context = await asyncio.to_thread(run_local_search_in_thread)
 
         logger.info(f"✅ local_search() completed successfully")
 
