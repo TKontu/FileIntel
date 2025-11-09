@@ -722,17 +722,25 @@ Reformatted Answer (with all citations preserved):"""
         logger.info(f"🔍 Starting local_search() call for query: '{query[:50]}...'")
         logger.info(f"📊 DataFrames loaded - entities: {len(dataframes['entities'])}, communities: {len(dataframes['communities'])}, text_units: {len(dataframes.get('text_units', []))}")
 
-        result, context = await local_search(
-            config=graphrag_config,
-            entities=dataframes["entities"],
-            communities=dataframes["communities"],
-            community_reports=dataframes["community_reports"],
-            text_units=dataframes.get("text_units"),
-            relationships=dataframes.get("relationships"),
-            covariates=covariates,
-            community_level=self.settings.graphrag.community_levels,
-            response_type="text",
-            query=query,
+        # Run local_search in thread pool to avoid blocking event loop
+        # local_search internally has synchronous blocking operations:
+        # - build_context() calls similarity_search_by_text() which does:
+        #   1. Synchronous embedding API call (text_embedder.embed)
+        #   2. Synchronous LanceDB vector search
+        # See: src/graphrag/query/context_builder/entity_extraction.py:58
+        result, context = await asyncio.to_thread(
+            lambda: asyncio.run(local_search(
+                config=graphrag_config,
+                entities=dataframes["entities"],
+                communities=dataframes["communities"],
+                community_reports=dataframes["community_reports"],
+                text_units=dataframes.get("text_units"),
+                relationships=dataframes.get("relationships"),
+                covariates=covariates,
+                community_level=self.settings.graphrag.community_levels,
+                response_type="text",
+                query=query,
+            ))
         )
 
         logger.info(f"✅ local_search() completed successfully")
