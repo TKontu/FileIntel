@@ -44,7 +44,9 @@ class GraphRAGDataFrameCache:
                 data = await self.redis_client.get(key)
                 if data:
                     self.cache_hits += 1
-                    df = pd.read_json(data)
+                    # CRITICAL FIX: Run blocking pandas deserialization in thread pool for gevent compatibility
+                    # pd.read_json() blocks for large DataFrames (e.g., 109MB community_clusters)
+                    df = await asyncio.to_thread(pd.read_json, data)
                     self.lru_cache[key] = df
                     return df
             except Exception as e:
@@ -58,7 +60,10 @@ class GraphRAGDataFrameCache:
         self.lru_cache[key] = df
         if self.redis_client:
             try:
-                await self.redis_client.set(key, df.to_json(), ex=ttl)
+                # CRITICAL FIX: Run blocking pandas serialization in thread pool for gevent compatibility
+                # df.to_json() blocks for large DataFrames (e.g., 109MB community_clusters)
+                json_data = await asyncio.to_thread(df.to_json)
+                await self.redis_client.set(key, json_data, ex=ttl)
             except Exception as e:
                 print(f"Redis set failed: {e}")
 
