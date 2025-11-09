@@ -733,3 +733,126 @@ def extract_document_metadata(
             "error": str(e),
             "status": "failed",
         }
+
+
+@app.task(
+    bind=True,
+    base=BaseFileIntelTask,
+    name="fileintel.tasks.generate_citation",
+    max_retries=3,
+    default_retry_delay=60,
+    rate_limit=LLM_RATE_LIMIT,
+    acks_late=True,
+)
+def generate_citation(
+    self,
+    text_segment: str,
+    collection_id: str,
+    document_id: Optional[str] = None,
+    min_similarity: Optional[float] = None,
+    include_llm_analysis: bool = False,
+    top_k: Optional[int] = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Generate citation for a text segment using vector similarity search.
+
+    Args:
+        text_segment: The text that needs citation (10-5000 chars)
+        collection_id: Collection to search in
+        document_id: Optional specific document to search within
+        min_similarity: Minimum similarity threshold (0.0-1.0)
+        include_llm_analysis: Use LLM for relevance analysis
+        top_k: Number of candidates to retrieve
+        **kwargs: Additional parameters
+
+    Returns:
+        Dict containing:
+        - citation: {in_text, full, style}
+        - source: {document_id, chunk_id, similarity_score, text_excerpt, ...}
+        - confidence: "high"|"medium"|"low"
+        - relevance_note: str (if include_llm_analysis)
+        - warning: str (if applicable)
+        - status: "completed" or "failed"
+    """
+    self.validate_input(
+        ["text_segment", "collection_id"],
+        text_segment=text_segment,
+        collection_id=collection_id
+    )
+
+    config = get_config()
+
+    try:
+        self.update_progress(0, 3, "Initializing citation generation")
+
+        from fileintel.celery_config import get_shared_storage
+        from fileintel.services.citation_service import CitationGenerationService
+
+        # Get storage
+        storage = get_shared_storage()
+
+        try:
+            self.update_progress(1, 3, "Searching for matching source")
+
+            # Initialize citation service
+            citation_service = CitationGenerationService(config, storage)
+
+            # Generate citation
+            result = citation_service.generate_citation(
+                text_segment=text_segment,
+                collection_id=collection_id,
+                document_id=document_id,
+                min_similarity=min_similarity,
+                include_llm_analysis=include_llm_analysis,
+                top_k=top_k
+            )
+
+            self.update_progress(2, 3, "Citation generated successfully")
+
+            # Add status to result
+            result["status"] = "completed"
+            result["text_segment"] = text_segment[:100] + "..." if len(text_segment) > 100 else text_segment
+
+            self.update_progress(3, 3, "Citation generation completed")
+            return result
+
+        finally:
+            storage.close()
+
+    except ValueError as e:
+        # Input validation errors
+        logger.error(f"Citation generation validation error: {e}")
+        return {
+            "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "validation_error",
+            "status": "failed",
+        }
+
+    except RuntimeError as e:
+        # No source found errors
+        logger.warning(f"Citation generation: No source found: {e}")
+        return {
+            "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "no_source_found",
+            "status": "failed",
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating citation: {e}", exc_info=True)
+
+        # Retry for API errors
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e, countdown=60)
+
+        return {
+            "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "internal_error",
+            "status": "failed",
+        }

@@ -506,18 +506,66 @@ async def get_document_chunks(
 
 # Processing Operations
 @router.post(
-    "/collections/{collection_identifier}/process", response_model=ApiResponseV2
+    "/collections/{collection_identifier}/process",
+    response_model=ApiResponseV2,
+    summary="Process collection documents (async task)",
+    description="""
+    Submit a collection for document processing using async Celery tasks.
+
+    Returns task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve results.
+
+    **Operation Types:**
+    - `complete_analysis`: Full pipeline (processing + embeddings + GraphRAG)
+    - `document_processing_only`: Only process documents into chunks (skip embeddings/GraphRAG)
+
+    **Processing Steps:**
+    1. Document extraction (MinerU) - Converts PDFs/docs to structured text
+    2. Text chunking - Splits into vector and graph chunks
+    3. Embeddings generation (optional) - Creates vector embeddings for semantic search
+    4. GraphRAG indexing (optional) - Builds knowledge graph
+
+    **Smart Re-processing:**
+    - Automatically skips documents that already have chunks
+    - Only processes new/unprocessed documents
+    - Updates collection status throughout processing
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Monitor progress
+    3. When `status=SUCCESS` → Check collection status endpoint for results
+
+    **Example Request:**
+    ```json
+    {
+      "operation_type": "complete_analysis",
+      "build_graph": true,
+      "extract_metadata": true,
+      "generate_embeddings": true,
+      "parameters": {}
+    }
+    ```
+
+    **Example Response:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "task_id": "abc-123-def-456",
+        "task_type": "complete_analysis",
+        "status": "PENDING",
+        "collection_id": "collection-uuid",
+        "estimated_duration": 300
+      }
+    }
+    ```
+    """
 )
 async def submit_collection_processing_task(
     collection_identifier: str,
     request: TaskSubmissionRequest,
     storage: PostgreSQLStorage = Depends(get_storage),
 ) -> ApiResponseV2:
-    """
-    Submit a collection for complete processing using Celery tasks.
-
-    This endpoint replaces the v1 job-based processing with distributed task execution.
-    """
+    """Submit a collection for complete processing using Celery tasks."""
     try:
         # Validate collection exists
         collection = await get_collection_by_identifier(storage, collection_identifier)
@@ -1046,21 +1094,66 @@ async def get_collection_processing_status(
 @router.post(
     "/collections/{collection_identifier}/upload-and-process",
     response_model=ApiResponseV2,
+    summary="Upload and process documents (multipart form)",
+    description="""
+    Upload multiple documents to a collection and optionally process them immediately.
+
+    Combines file upload with automatic processing in a single convenient endpoint.
+
+    **Features:**
+    - Global deduplication - Detects duplicate files across all collections
+    - Automatic processing - Optionally starts processing task after upload
+    - Batch upload - Upload multiple files at once
+    - Smart linking - Links existing documents to multiple collections
+
+    **Form Parameters:**
+    - `files` (required): One or more files to upload (multipart/form-data)
+    - `process_immediately` (default: true): Start processing after upload
+    - `build_graph` (default: true): Build GraphRAG index
+    - `extract_metadata` (default: true): Extract LLM metadata
+    - `generate_embeddings` (default: true): Generate vector embeddings
+
+    **Duplicate Handling:**
+    - Files are fingerprinted using content hash
+    - Duplicates are detected and linked (not re-uploaded)
+    - Response includes both uploaded and duplicate counts
+
+    **Example cURL Request:**
+    ```bash
+    curl -X POST 'http://localhost:8000/api/v2/collections/papers/upload-and-process' \\
+      -F 'files=@paper1.pdf' \\
+      -F 'files=@paper2.pdf' \\
+      -F 'process_immediately=true' \\
+      -F 'build_graph=true' \\
+      -F 'generate_embeddings=true'
+    ```
+
+    **Example Response:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "uploaded_files": 2,
+        "duplicates_skipped": 0,
+        "file_paths": ["/path/to/file1.pdf", "/path/to/file2.pdf"],
+        "task_id": "abc-123",
+        "processing_status": "submitted",
+        "estimated_duration": 600
+      }
+    }
+    ```
+    """
 )
 async def upload_and_process_documents(
     collection_identifier: str,
-    files: List[UploadFile] = File(...),
-    process_immediately: bool = Form(default=True),
-    build_graph: bool = Form(default=True),
-    extract_metadata: bool = Form(default=True),
-    generate_embeddings: bool = Form(default=True),
+    files: List[UploadFile] = File(..., description="Files to upload (multipart)"),
+    process_immediately: bool = Form(default=True, description="Start processing after upload"),
+    build_graph: bool = Form(default=True, description="Build GraphRAG index"),
+    extract_metadata: bool = Form(default=True, description="Extract LLM metadata"),
+    generate_embeddings: bool = Form(default=True, description="Generate embeddings"),
     storage: PostgreSQLStorage = Depends(get_storage),
 ) -> ApiResponseV2:
-    """
-    Upload documents to a collection and optionally process them immediately.
-
-    Combines file upload with task submission in a single endpoint.
-    """
+    """Upload documents and optionally process them immediately."""
     try:
         from fileintel.core.config import get_config
         from fileintel.core.validation import validate_batch_size, validate_file_size

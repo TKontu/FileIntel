@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Dict, Any
 from enum import Enum
 from abc import ABC, abstractmethod
+from pathlib import Path
 import httpx
 from tenacity import (
     retry,
@@ -21,6 +22,7 @@ from tenacity import (
 from .base import LLMResponse, validate_response
 from ..storage.postgresql_storage import PostgreSQLStorage
 from ..core.config import Settings
+from ..prompt_management import AnswerFormatManager, load_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +196,53 @@ class UnifiedLLMProvider:
             retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException)),
         )
 
+        # Get prompts directory from environment or use relative path (shared across initializations)
+        import os
+        prompts_dir = os.getenv('FILEINTEL_PROMPTS_DIR')
+
+        # Initialize answer format manager with robust path resolution
+        try:
+            if prompts_dir:
+                formats_dir = Path(prompts_dir) / "examples"
+            else:
+                # Fallback to relative path
+                project_root = Path(__file__).parent.parent.parent.parent
+                formats_dir = project_root / "prompts" / "examples"
+
+            if formats_dir.exists():
+                self.format_manager = AnswerFormatManager(formats_dir)
+                logger.info(f"AnswerFormatManager initialized: {formats_dir}")
+            else:
+                logger.warning(f"Format templates directory not found: {formats_dir}")
+                logger.warning("Answer format templates unavailable - using default format only")
+                self.format_manager = None
+        except Exception as e:
+            logger.error(f"Failed to initialize AnswerFormatManager: {e}")
+            self.format_manager = None
+
+        # Load vector RAG templates with robust path resolution
+        try:
+            if prompts_dir:
+                templates_dir = Path(prompts_dir) / "templates" / "vector_rag"
+            else:
+                project_root = Path(__file__).parent.parent.parent.parent
+                templates_dir = project_root / "prompts" / "templates" / "vector_rag"
+
+            if templates_dir.exists():
+                self._load_vector_rag_templates(templates_dir)
+            else:
+                logger.warning(f"Vector RAG templates not found: {templates_dir}")
+                logger.warning("Using fallback hardcoded prompts")
+                # Set to None to trigger fallback
+                self.base_instruction_template = None
+                self.citation_rules_template = None
+                self.query_type_templates = None
+        except Exception as e:
+            logger.error(f"Failed to load vector RAG templates: {e}")
+            self.base_instruction_template = None
+            self.citation_rules_template = None
+            self.query_type_templates = None
+
         logger.info(
             f"Unified LLM Provider initialized for {self.provider_type.value} "
             f"(timeout={config.llm.http_timeout_seconds}s, retries={config.llm.max_retries}, "
@@ -236,6 +285,34 @@ class UnifiedLLMProvider:
             logger.warning(
                 f"No valid API key configured for {self.provider_type.value}"
             )
+
+    def _load_vector_rag_templates(self, templates_dir: Path) -> None:
+        """Load vector RAG prompt templates."""
+        try:
+            self.base_instruction_template = load_prompt_template(
+                str(templates_dir / "base_instruction.md")
+            )
+            self.citation_rules_template = load_prompt_template(
+                str(templates_dir / "citation_rules.md")
+            )
+
+            # Load query type specific instructions
+            query_types_dir = templates_dir / "query_type_instructions"
+            self.query_type_templates = {
+                "factual": load_prompt_template(str(query_types_dir / "factual.md")),
+                "analytical": load_prompt_template(str(query_types_dir / "analytical.md")),
+                "summarization": load_prompt_template(str(query_types_dir / "summarization.md")),
+                "comparison": load_prompt_template(str(query_types_dir / "comparison.md")),
+                "general": load_prompt_template(str(query_types_dir / "general.md")),
+            }
+
+            logger.info(f"Loaded vector RAG templates from {templates_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to load vector RAG templates: {e}. Using fallback hardcoded prompts.")
+            # Set to None so _build_rag_prompt can fall back to hardcoded prompts
+            self.base_instruction_template = None
+            self.citation_rules_template = None
+            self.query_type_templates = None
 
     def generate_response(
         self,
@@ -365,6 +442,7 @@ class UnifiedLLMProvider:
         query_type: str = "general",
         max_tokens: Optional[int] = None,
         temperature: float = 0.1,
+        answer_format: str = "default",
         **kwargs,
     ) -> LLMResponse:
         """
@@ -376,6 +454,7 @@ class UnifiedLLMProvider:
             query_type: Type of query ('factual', 'analytical', 'summarization', 'comparison')
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
+            answer_format: Answer format template name (default: "default")
             **kwargs: Additional parameters
 
         Returns:
@@ -404,8 +483,8 @@ class UnifiedLLMProvider:
 
         context = "\n\n".join(context_parts)
 
-        # Generate query-type specific prompt
-        prompt = self._build_rag_prompt(query, context, query_type)
+        # Generate query-type specific prompt with optional answer format
+        prompt = self._build_rag_prompt(query, context, query_type, answer_format)
 
         # LOG THE ACTUAL PROMPT
         logger.debug("="*80)
@@ -421,7 +500,13 @@ class UnifiedLLMProvider:
             **kwargs,
         )
 
-    def _build_rag_prompt(self, query: str, context: str, query_type: str) -> str:
+    def _build_rag_prompt(
+        self,
+        query: str,
+        context: str,
+        query_type: str,
+        answer_format: str = "default"
+    ) -> str:
         """
         Build query-type specific RAG prompt.
 
@@ -429,10 +514,71 @@ class UnifiedLLMProvider:
             query: User's question
             context: Retrieved context
             query_type: Type of query for specialized prompting
+            answer_format: Answer format template name (default: "default")
 
         Returns:
             Formatted prompt string
         """
+        # Try template-based approach first, fall back to hardcoded if templates not loaded
+        if self.query_type_templates is not None:
+            return self._build_rag_prompt_from_templates(query, context, query_type, answer_format)
+        else:
+            return self._build_rag_prompt_fallback(query, context, query_type)
+
+    def _build_rag_prompt_from_templates(
+        self,
+        query: str,
+        context: str,
+        query_type: str,
+        answer_format: str = "default"
+    ) -> str:
+        """Build RAG prompt using loaded templates."""
+        # Get base instruction
+        base_instruction = self.base_instruction_template
+
+        # Get query-type specific instruction
+        specific_instruction = self.query_type_templates.get(
+            query_type,
+            self.query_type_templates["general"]
+        )
+
+        # Get answer format template if not default
+        answer_format_section = ""
+        if answer_format != "default":
+            if self.format_manager is not None:
+                try:
+                    format_template = self.format_manager.get_format_template(answer_format)
+                    answer_format_section = f"\n\n{format_template}\n"
+                except (ValueError, IOError) as e:
+                    logger.warning(f"Failed to load answer format '{answer_format}': {e}")
+                    # Continue without format section
+            else:
+                logger.warning(f"Format manager unavailable - cannot apply format '{answer_format}'")
+
+        # Get citation rules
+        citation_rules = self.citation_rules_template
+
+        # Assemble prompt
+        prompt = f"""{base_instruction} {specific_instruction}
+
+Question: {query}
+
+Retrieved Sources:
+{context}
+
+Please provide your answer based on the sources above. If the sources don't contain sufficient information to fully answer the question, indicate what information is available and what might be missing.
+{answer_format_section}
+{citation_rules}"""
+
+        return prompt
+
+    def _build_rag_prompt_fallback(
+        self,
+        query: str,
+        context: str,
+        query_type: str
+    ) -> str:
+        """Fallback to hardcoded prompts if templates fail to load."""
         base_instruction = "Based on the following retrieved documents, answer the user's question accurately and comprehensively."
 
         if query_type == "factual":

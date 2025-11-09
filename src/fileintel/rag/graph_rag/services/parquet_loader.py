@@ -28,6 +28,8 @@ class ParquetLoader:
             "entities": "entities.parquet",
             "communities": "communities.parquet",
             "community_reports": "community_reports.parquet",
+            "text_units": "text_units.parquet",
+            "relationships": "relationships.parquet",
         }
 
         dataframes = {}

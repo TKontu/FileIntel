@@ -44,7 +44,77 @@ class MetadataExtractionResponse(BaseModel):
     message: str
 
 
-@router.post("/extract", response_model=ApiResponseV2)
+@router.post(
+    "/extract",
+    response_model=ApiResponseV2,
+    summary="Extract document metadata (async task)",
+    description="""
+    Extract structured metadata from a document using LLM analysis.
+
+    Returns task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve extracted metadata.
+
+    **What Gets Extracted:**
+    - Title, authors, publication date
+    - Document type (academic paper, report, book, etc.)
+    - Abstract/summary
+    - Keywords and topics
+    - DOI/ISBN/other identifiers
+    - Publisher information
+
+    **How It Works:**
+    1. Analyzes first N chunks of document (configurable via `max_chunks`)
+    2. Uses LLM to extract structured metadata
+    3. Merges with existing file metadata
+    4. Stores in document_metadata field
+
+    **Parameters:**
+    - `document_id` (required): Document UUID to analyze
+    - `force_reextract` (default: false): Re-extract even if metadata exists
+    - `max_chunks` (default: 6): Number of chunks to analyze (more = better but slower)
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Monitor progress
+    3. When `status=SUCCESS` → Metadata available in result
+    4. GET `/api/v2/metadata/document/{document_id}` → Retrieve stored metadata
+
+    **Example Request:**
+    ```json
+    {
+      "document_id": "3b9e6ac7-2152-4133-bd87-2cd0ffc09863",
+      "force_reextract": false,
+      "max_chunks": 6
+    }
+    ```
+
+    **Example Response:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "task_id": "abc-123-def-456",
+        "document_id": "3b9e6ac7-2152-4133-bd87-2cd0ffc09863",
+        "status": "started",
+        "message": "Metadata extraction started for document 'paper.pdf'"
+      }
+    }
+    ```
+
+    **Task Result Format:**
+    ```json
+    {
+      "title": "Introduction to Machine Learning",
+      "authors": ["Smith, J.", "Jones, A."],
+      "publication_date": "2023-05-15",
+      "document_type": "academic_paper",
+      "abstract": "This paper introduces...",
+      "keywords": ["machine learning", "neural networks"],
+      "doi": "10.1234/example.2023.001",
+      "llm_extracted": true
+    }
+    ```
+    """
+)
 async def extract_document_metadata_endpoint(
     request: MetadataExtractionRequest,
     background_tasks: BackgroundTasks,
@@ -193,11 +263,74 @@ async def get_document_metadata(
         )
 
 
-@router.post("/collection/{collection_identifier}/extract-all", response_model=ApiResponseV2)
+@router.post(
+    "/collection/{collection_identifier}/extract-all",
+    response_model=ApiResponseV2,
+    summary="Extract metadata for all documents in collection (async tasks)",
+    description="""
+    Batch extract metadata for all documents in a collection using LLM analysis.
+
+    Submits multiple async tasks (one per document). Use `/api/v2/tasks/{task_id}` to monitor each task.
+
+    **Smart Processing:**
+    - Automatically skips documents that already have extracted metadata
+    - Only processes documents without LLM metadata (unless force_reextract=true)
+    - Submits tasks with rate limiting (pause every 10 tasks to avoid overwhelming LLM)
+
+    **Query Parameters:**
+    - `force_reextract` (default: false): Re-extract all documents, even if metadata exists
+    - `max_chunks` (default: 3): Number of chunks to analyze per document
+
+    **Use Cases:**
+    - Initial metadata extraction for new collection
+    - Re-extracting metadata after prompt improvements
+    - Filling in missing metadata for partial extractions
+
+    **Workflow:**
+    1. POST to this endpoint → Get list of `task_id`s
+    2. Monitor each task via `/api/v2/tasks/{task_id}`
+    3. Check collection status via `/api/v2/metadata/collection/{id}/status`
+
+    **Example Request:**
+    ```bash
+    POST /api/v2/metadata/collection/papers/extract-all?force_reextract=false&max_chunks=6
+    ```
+
+    **Example Response:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "collection_id": "collection-uuid",
+        "collection_name": "Research Papers",
+        "total_documents": 50,
+        "documents_processed": 30,
+        "tasks_started": [
+          {
+            "document_id": "doc-1",
+            "filename": "paper1.pdf",
+            "task_id": "task-abc-123"
+          },
+          {
+            "document_id": "doc-2",
+            "filename": "paper2.pdf",
+            "task_id": "task-def-456"
+          }
+        ]
+      },
+      "message": "Started metadata extraction for 30 documents in collection 'Research Papers'"
+    }
+    ```
+
+    **Rate Limiting:**
+    - Automatic 1-second pause every 10 tasks
+    - Prevents overwhelming LLM provider with concurrent requests
+    """
+)
 async def extract_collection_metadata(
     collection_identifier: str,
     force_reextract: bool = Query(False, description="Force re-extraction for all documents"),
-    max_chunks: int = Query(3, description="Number of chunks to use for extraction (default: 3)"),
+    max_chunks: int = Query(6, description="Number of chunks to analyze per document (default: 6)"),
     storage: PostgreSQLStorage = Depends(get_storage),
 ):
     """Extract metadata for all documents in a collection."""

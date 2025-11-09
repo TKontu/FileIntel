@@ -18,6 +18,7 @@ from . import document_tasks
 from . import llm_tasks
 from . import graphrag_tasks
 from . import workflow_tasks
+from . import hybrid_tasks
 
 __all__ = [
     "BaseFileIntelTask",
@@ -25,4 +26,5 @@ __all__ = [
     "llm_tasks",
     "graphrag_tasks",
     "workflow_tasks",
+    "hybrid_tasks",
 ]

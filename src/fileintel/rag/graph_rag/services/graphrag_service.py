@@ -5,7 +5,9 @@ import pandas as pd
 import asyncio
 import logging
 import shutil
+import threading
 from typing import List, Dict, Any
+from pathlib import Path
 from fileintel.storage.models import DocumentChunk
 from fileintel.storage.postgresql_storage import PostgreSQLStorage
 from fileintel.rag.graph_rag.adapters.data_adapter import GraphRAGDataAdapter
@@ -15,6 +17,7 @@ from fileintel.rag.reranker_service import RerankerService
 from .parquet_loader import ParquetLoader
 from .dataframe_cache import GraphRAGDataFrameCache
 from .._graphrag_imports import global_search, local_search, build_index, GraphRagConfig
+from fileintel.prompt_management import AnswerFormatManager
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,31 @@ class GraphRAGService:
                 logger.info("RerankerService initialized for GraphRAG")
             except Exception as e:
                 logger.warning(f"Failed to initialize RerankerService: {e}. Continuing without reranking.")
+
+        # Initialize answer format manager and LLM provider for format application
+        try:
+            # Try to get prompts directory from environment or use relative path
+            prompts_dir = os.getenv('FILEINTEL_PROMPTS_DIR')
+            if prompts_dir:
+                formats_dir = Path(prompts_dir) / "examples"
+            else:
+                # Fallback to relative path
+                project_root = Path(__file__).parent.parent.parent.parent.parent
+                formats_dir = project_root / "prompts" / "examples"
+
+            if formats_dir.exists():
+                self.format_manager = AnswerFormatManager(formats_dir)
+                logger.info(f"AnswerFormatManager initialized for GraphRAG: {formats_dir}")
+            else:
+                logger.warning(f"Format templates directory not found: {formats_dir}")
+                self.format_manager = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize AnswerFormatManager: {e}")
+            self.format_manager = None
+
+        # Initialize LLM provider for answer reformatting (lazy - only when needed)
+        self._llm_provider = None
+        self._llm_provider_lock = threading.Lock()
 
     def _sync_graphrag_logger_level(self):
         """
@@ -76,7 +104,13 @@ class GraphRAGService:
             )
         return self._config_cache[collection_id]
 
-    async def query(self, query: str, collection_id: str, search_type: str = "global") -> Dict[str, Any]:
+    async def query(
+        self,
+        query: str,
+        collection_id: str,
+        search_type: str = "global",
+        answer_format: str = "default"
+    ) -> Dict[str, Any]:
         """
         Standard query interface with citation tracing. Routes to global or local search.
 
@@ -84,6 +118,7 @@ class GraphRAGService:
             query: The search query
             collection_id: Collection to search
             search_type: "global" for global search, "local" for local search (default: "global")
+            answer_format: Answer format template name (default: "default")
 
         Returns:
             Dict with answer (formatted with citations), sources, confidence, and metadata
@@ -172,13 +207,81 @@ class GraphRAGService:
         # Calculate confidence based on result quality
         confidence = self._calculate_confidence(raw_response, traced_sources)
 
+        # Apply answer format if requested (and format manager available)
+        final_answer = formatted_answer
+        if answer_format != "default" and self.format_manager is not None:
+            try:
+                final_answer = await self._apply_answer_format(formatted_answer, answer_format)
+            except Exception as e:
+                logger.warning(f"Failed to apply answer format '{answer_format}': {e}. Using default format.")
+                # Keep formatted_answer as fallback
+
         return {
-            "answer": formatted_answer,      # Formatted with Harvard citations
+            "answer": final_answer,          # Formatted with Harvard citations + answer format
             "raw_answer": answer,            # Original with [Data: Reports (X)]
             "sources": traced_sources,
             "confidence": confidence,
-            "metadata": {"search_type": search_type},
+            "metadata": {"search_type": search_type, "answer_format": answer_format},
         }
+
+    async def _apply_answer_format(self, answer: str, answer_format: str) -> str:
+        """
+        Apply answer format template to GraphRAG response via LLM reformatting.
+
+        Args:
+            answer: Original answer with citations
+            answer_format: Format template name
+
+        Returns:
+            Reformatted answer with citations preserved
+        """
+        # Get format template
+        try:
+            format_template = self.format_manager.get_format_template(answer_format)
+        except (ValueError, IOError) as e:
+            logger.warning(f"Failed to load format template '{answer_format}': {e}")
+            return answer  # Return original if template unavailable
+
+        # Lazy-initialize LLM provider with thread safety (double-checked locking)
+        if self._llm_provider is None:
+            with self._llm_provider_lock:
+                # Double-check after acquiring lock
+                if self._llm_provider is None:
+                    from fileintel.llm_integration.unified_provider import UnifiedLLMProvider
+                    self._llm_provider = UnifiedLLMProvider(self.settings, self.storage)
+
+        # Build reformatting prompt (preserving citations is critical)
+        reformat_prompt = f"""Reformat the following answer according to the specified format instructions.
+
+CRITICAL: You MUST preserve ALL citations exactly as they appear in the original answer. Do not modify, remove, or change citation formats.
+
+Format Instructions:
+{format_template}
+
+Original Answer (with citations):
+{answer}
+
+Reformatted Answer (with all citations preserved):"""
+
+        # Use LLM to reformat (run in thread to avoid blocking)
+        try:
+            response = await asyncio.to_thread(
+                self._llm_provider.generate_response,
+                prompt=reformat_prompt,
+                max_tokens=1000,
+                temperature=0.1
+            )
+
+            if hasattr(response, "content"):
+                return response.content
+            elif isinstance(response, dict) and "content" in response:
+                return response["content"]
+            else:
+                return str(response)
+
+        except Exception as e:
+            logger.error(f"LLM reformatting failed: {e}")
+            return answer  # Fallback to original
 
     async def build_index(self, documents: List[DocumentChunk], collection_id: str):
         """

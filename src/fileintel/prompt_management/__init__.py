@@ -22,6 +22,9 @@ from .simple_prompts import (
     TRUNCATION_MESSAGE,
 )
 
+# Import answer format manager
+from .format_manager import AnswerFormatManager
+
 # Export modern simple functions only
 __all__ = [
     "load_prompt_template",
@@ -38,4 +41,5 @@ __all__ = [
     "PROMPT_TEMPLATES",
     "CHARS_PER_TOKEN_ESTIMATE",
     "TRUNCATION_MESSAGE",
+    "AnswerFormatManager",
 ]

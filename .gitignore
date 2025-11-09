@@ -18,7 +18,7 @@ __pycache__/
 .coverage
 
 # Logs - Ignores the entire 'logs' directory
-/logs/
+/logs/*
 
 # Build artifacts
 dist/
@@ -26,8 +26,8 @@ build/
 *.egg-info/
 
 # Input/Output directories
-/input/
-/output/
+/input/*
+/output/*
 
 # User-uploaded files (example, adjust if needed)
 /uploads/
@@ -46,7 +46,7 @@ result.md
 result.json
 fileintel-image.tar
 debug_similarity.py
-cheatsheets/*
+cheatsheets/
 graphrag_indices/*
 *.tar
 /examples/*
@@ -59,4 +59,8 @@ graphrag_indices/*
 
 #Claude
 .claude/*
-.env.fileintel.verified
+
+local/
+
+
+

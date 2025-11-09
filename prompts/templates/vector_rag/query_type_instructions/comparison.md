@@ -1,0 +1,1 @@
+Compare and contrast the information from different sources. Highlight similarities, differences, and any conflicting information.

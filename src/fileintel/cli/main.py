@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from . import collections, documents, tasks, query, graphrag, metadata
+from . import collections, documents, tasks, query, graphrag, metadata, cite
 from .shared import cli_handler
 
 app = typer.Typer(
@@ -31,6 +31,7 @@ app.add_typer(tasks.app, name="tasks", help="Monitor and manage Celery tasks.")
 app.add_typer(query.app, name="query", help="Query collections using RAG.")
 app.add_typer(graphrag.app, name="graphrag", help="GraphRAG operations.")
 app.add_typer(metadata.app, name="metadata", help="Extract and manage document metadata.")
+app.add_typer(cite.app, name="cite", help="Generate citations for text segments.")
 
 
 @app.command("version")

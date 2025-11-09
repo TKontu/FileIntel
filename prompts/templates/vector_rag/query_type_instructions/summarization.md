@@ -1,0 +1,1 @@
+Provide a comprehensive summary that captures the key points and main themes from the sources. Organize the information logically.

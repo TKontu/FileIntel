@@ -45,6 +45,8 @@ class VectorRAGService:
         top_k: int = 5,
         similarity_metric: str = "cosine",
         min_similarity: float = 0.0,
+        answer_format: str = "default",
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Perform vector similarity search and generate answer.
@@ -56,6 +58,8 @@ class VectorRAGService:
             top_k: Number of similar chunks to retrieve
             similarity_metric: 'cosine', 'l2', or 'inner_product'
             min_similarity: Minimum similarity threshold (0-1)
+            answer_format: Answer format template name (default: "default")
+            **kwargs: Additional parameters
 
         Returns:
             Dict containing answer, sources, and metadata
@@ -166,7 +170,7 @@ class VectorRAGService:
 
             # Generate answer based on retrieved chunks with query type classification
             query_type = self._classify_query_type(query)
-            answer = self._generate_answer(query, similar_chunks, query_type)
+            answer = self._generate_answer(query, similar_chunks, query_type, answer_format)
 
             # Format sources using enhanced citation formatting
             sources = []
@@ -227,10 +231,23 @@ class VectorRAGService:
             }
 
     def _generate_answer(
-        self, query: str, chunks: List[Dict[str, Any]], query_type: str = "general"
+        self,
+        query: str,
+        chunks: List[Dict[str, Any]],
+        query_type: str = "general",
+        answer_format: str = "default"
     ) -> str:
         """
         Generate answer based on retrieved chunks using specialized RAG response generation.
+
+        Args:
+            query: User's question
+            chunks: Retrieved document chunks
+            query_type: Type of query for specialized prompting
+            answer_format: Answer format template name (default: "default")
+
+        Returns:
+            Generated answer text
         """
         if not chunks:
             return "No relevant information found to answer the query."
@@ -251,6 +268,7 @@ class VectorRAGService:
                 query_type=query_type,
                 max_tokens=600,
                 temperature=0.1,
+                answer_format=answer_format,
             )
 
             if hasattr(response, "content"):

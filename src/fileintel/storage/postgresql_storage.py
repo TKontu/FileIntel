@@ -257,6 +257,14 @@ class PostgreSQLStorage(StorageInterface):
         """Update GraphRAG index status (building, ready, failed, updating)."""
         return self.graphrag_storage.update_graphrag_index_status(collection_id, status)
 
+    def update_graphrag_index_status_atomic(
+        self, collection_id: str, status: str, error_message: str = None
+    ) -> bool:
+        """Atomically update GraphRAG index status with row-level locking."""
+        return self.graphrag_storage.update_graphrag_index_status_atomic(
+            collection_id, status, error_message
+        )
+
     def remove_graphrag_index_info(self, collection_id: str) -> bool:
         """Remove GraphRAG index information."""
         return self.graphrag_storage.remove_graphrag_index_info(collection_id)

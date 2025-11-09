@@ -1,0 +1,1 @@
+Focus on providing specific facts, dates, numbers, and concrete information. If exact information isn't available, clearly state what is known and what is uncertain.

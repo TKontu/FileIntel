@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fileintel.api.dependencies import (
     get_storage,
@@ -25,11 +25,21 @@ router = APIRouter(dependencies=[Depends(get_api_key)])
 
 
 class QueryRequest(BaseModel):
-    question: str
-    search_type: Optional[str] = "adaptive"  # vector, graph, adaptive, global, local
-    max_results: Optional[int] = 5
-    include_sources: Optional[bool] = True
-    query_mode: Optional[str] = "sync"  # "sync" (default) or "async" for backwards compatibility
+    question: str = Field(..., description="The question to ask about the collection")
+    search_type: Optional[str] = Field(
+        default="adaptive",
+        description="RAG search type: 'vector' (semantic search), 'graph' (knowledge graph), 'adaptive' (auto-select), 'global' (GraphRAG global), or 'local' (GraphRAG local)"
+    )
+    max_results: Optional[int] = Field(default=5, description="Maximum number of results to retrieve")
+    include_sources: Optional[bool] = Field(default=True, description="Include source citations in response")
+    query_mode: Optional[str] = Field(
+        default="sync",
+        description="Query execution mode: 'sync' (wait for result) or 'async' (return task ID)"
+    )
+    answer_format: Optional[str] = Field(
+        default="default",
+        description="Answer format: 'default' (standard), 'single_paragraph' (concise single paragraph), 'table' (markdown table), 'list' (bulleted/numbered), 'json' (structured JSON), 'essay' (multi-paragraph), or 'markdown' (rich formatting)"
+    )
 
 
 class QueryResponse(BaseModel):
@@ -42,7 +52,66 @@ class QueryResponse(BaseModel):
     processing_time_ms: Optional[int] = None
 
 
-@router.post("/collections/{collection_identifier}/query", response_model=ApiResponseV2)
+@router.post(
+    "/collections/{collection_identifier}/query",
+    response_model=ApiResponseV2,
+    summary="Query collection using RAG (async task)",
+    description="""
+    Submit a query to a collection using RAG (Retrieval-Augmented Generation).
+
+    Returns a task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve results.
+
+    **Search Types:**
+    - `vector`: Semantic similarity search (best for factual questions)
+    - `graph`: Knowledge graph search (best for relationship queries)
+    - `adaptive`: Auto-selects best method using LLM (recommended)
+    - `global`: GraphRAG global community summaries (broad analysis)
+    - `local`: GraphRAG local entity relationships (specific entities)
+
+    **Answer Formats:**
+    - `default`: Standard prose answer
+    - `single_paragraph`: Concise single paragraph
+    - `table`: Markdown table format
+    - `list`: Bulleted/numbered list
+    - `json`: Structured JSON
+    - `essay`: Multi-paragraph detailed essay
+    - `markdown`: Rich markdown formatting
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Check status
+    3. When `status=SUCCESS` → Get answer from result
+
+    **Example Request:**
+    ```json
+    {
+      "question": "What are the main themes in the documents?",
+      "search_type": "adaptive",
+      "max_results": 5,
+      "include_sources": true,
+      "answer_format": "default"
+    }
+    ```
+
+    **Example Response:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "task_id": "abc-123",
+        "status": "processing",
+        "query_type": "adaptive_vector",
+        "collection_id": "col-456",
+        "question": "What are the main themes?",
+        "message": "Query submitted for async processing",
+        "status_endpoint": "/api/v2/tasks/abc-123"
+      }
+    }
+    ```
+
+    **Note:** All queries run asynchronously via Celery tasks for scalability.
+    """
+)
 @api_error_handler("query collection")
 async def query_collection(
     collection_identifier: str,
@@ -122,79 +191,130 @@ async def _submit_query_task(
         if request.search_type in ["graph", "global"]:
             # Submit global graph query task
             task_result = query_graph_global.delay(
-                query=request.question, collection_id=collection.id
+                query=request.question,
+                collection_id=collection.id,
+                answer_format=request.answer_format
             )
             query_type = "graph_global"
 
         elif request.search_type == "local":
             # Submit local graph query task
             task_result = query_graph_local.delay(
-                query=request.question, collection_id=collection.id
+                query=request.question,
+                collection_id=collection.id,
+                answer_format=request.answer_format
             )
             query_type = "graph_local"
 
         elif request.search_type == "adaptive":
-            # Adaptive routing: analyze query and create chain directly
-            # This avoids nested task IDs - user gets single task ID for the complete chain
+            # LLM-based adaptive routing: classify query intent and route optimally
             from celery import chain
             from celery.exceptions import OperationalError as CeleryOperationalError
             import socket
+            from fileintel.rag.query_classifier import QueryClassifier
 
-            # Routing logic: determine local vs global strategy
-            query_lower = request.question.lower()
+            # Initialize classifier with current config
+            config = get_config()
+            classifier = QueryClassifier(config)
 
-            # Keywords that suggest local search
-            local_indicators = ["who is", "what is", "tell me about", "specific", "person", "company", "entity"]
-            # Keywords that suggest global search
-            global_indicators = ["overall", "summary", "general", "trend", "pattern", "across", "all", "total"]
-
-            local_score = sum(1 for indicator in local_indicators if indicator in query_lower)
-            global_score = sum(1 for indicator in global_indicators if indicator in query_lower)
-
-            # Default to global search for broad queries, local for specific
-            use_local = local_score > global_score and len(request.question.split()) <= 10
-            search_type = "local" if use_local else "global"
-
-            logger.info(
-                f"Adaptive routing: chose '{search_type}' search "
-                f"(local_score={local_score}, global_score={global_score})"
-            )
-
-            # Import tasks
-            from fileintel.tasks.graphrag_tasks import enhance_adaptive_result
-
-            # Create chain: search task | enhancement task
-            # Wrap in try/except to handle Celery broker failures
+            # Classify query using LLM/hybrid/keyword method (based on config)
             try:
-                if use_local:
-                    task_result = chain(
-                        query_graph_local.s(request.question, collection.id),
-                        # Use .s() to accept the result from previous task as first argument
-                        enhance_adaptive_result.s(
-                            strategy=search_type,
-                            local_score=local_score,
-                            global_score=global_score,
-                            query=request.question,
-                            collection_id=collection.id
-                        )
-                    ).apply_async()
-                else:
-                    task_result = chain(
-                        query_graph_global.s(request.question, collection.id),
-                        # Use .s() to accept the result from previous task as first argument
-                        enhance_adaptive_result.s(
-                            strategy=search_type,
-                            local_score=local_score,
-                            global_score=global_score,
-                            query=request.question,
-                            collection_id=collection.id
-                        )
-                    ).apply_async()
+                classification = classifier.classify(request.question)
+                query_class = classification["type"].lower()  # "vector", "graph", or "hybrid"
+                confidence = classification.get("confidence", 0.0)
+                reasoning = classification.get("reasoning", "No reasoning provided")
+                method = classification.get("method", "unknown")
+                cached = classification.get("cached", False)
 
-                query_type = "adaptive"
+                logger.info(
+                    f"Adaptive routing classified as '{query_class}' "
+                    f"(confidence: {confidence:.2f}, method: {method}, cached: {cached}). "
+                    f"Reasoning: {reasoning}"
+                )
+            except Exception as e:
+                # Fallback to graph_global if classification completely fails
+                logger.error(f"Query classification failed: {e}. Falling back to graph_global")
+                query_class = "graph"
+                confidence = 0.5
+                reasoning = f"Classification error: {str(e)}"
+
+            # Route based on classification
+            try:
+                if query_class == "vector":
+                    # Route to Vector RAG
+                    task_result = query_vector.delay(
+                        query=request.question,
+                        collection_id=collection.id,
+                        top_k=request.max_results,
+                        answer_format=request.answer_format
+                    )
+                    query_type = "adaptive_vector"
+                    logger.info(f"Adaptive routing: executing vector search (confidence: {confidence:.2f})")
+
+                elif query_class == "graph":
+                    # Route to GraphRAG - determine local vs global using heuristic
+                    query_lower = request.question.lower()
+                    local_indicators = ["who is", "what is", "tell me about", "specific", "person", "company", "entity"]
+                    use_local = any(ind in query_lower for ind in local_indicators) and len(request.question.split()) <= 10
+
+                    if use_local:
+                        task_result = query_graph_local.delay(
+                            request.question,
+                            collection.id,
+                            answer_format=request.answer_format
+                        )
+                        query_type = "adaptive_graph_local"
+                        logger.info(f"Adaptive routing: executing graph local search (confidence: {confidence:.2f})")
+                    else:
+                        task_result = query_graph_global.delay(
+                            request.question,
+                            collection.id,
+                            answer_format=request.answer_format
+                        )
+                        query_type = "adaptive_graph_global"
+                        logger.info(f"Adaptive routing: executing graph global search (confidence: {confidence:.2f})")
+
+                elif query_class == "hybrid":
+                    # Execute hybrid query: vector + graph combined
+                    from fileintel.tasks.hybrid_tasks import combine_hybrid_results
+
+                    # Create chain: vector → graph → combine
+                    task_result = chain(
+                        # First: Vector search
+                        query_vector.si(
+                            query=request.question,
+                            collection_id=collection.id,
+                            top_k=request.max_results,
+                            answer_format=request.answer_format
+                        ),
+                        # Second: Graph search (run in parallel would be better, but chain is simpler)
+                        query_graph_global.si(
+                            request.question,
+                            collection.id,
+                            answer_format=request.answer_format
+                        ),
+                        # Third: Combine results using LLM synthesis
+                        combine_hybrid_results.s(
+                            query=request.question,
+                            collection_id=collection.id,
+                            answer_format=request.answer_format
+                        )
+                    ).apply_async()
+                    query_type = "adaptive_hybrid"
+                    logger.info(f"Adaptive routing: executing hybrid search (vector + graph, confidence: {confidence:.2f})")
+
+                else:
+                    # Unknown classification - fallback to graph_global
+                    logger.warning(f"Unknown classification type '{query_class}', falling back to graph_global")
+                    task_result = query_graph_global.delay(
+                        request.question,
+                        collection.id,
+                        answer_format=request.answer_format
+                    )
+                    query_type = "adaptive_graph_global"
 
             except (ConnectionError, CeleryOperationalError, socket.error, TimeoutError) as e:
-                logger.error(f"Failed to submit adaptive query chain: {e}")
+                logger.error(f"Failed to submit adaptive query: {e}")
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -203,7 +323,7 @@ async def _submit_query_task(
                     )
                 )
             except Exception as e:
-                logger.error(f"Unexpected error creating adaptive query chain: {e}")
+                logger.error(f"Unexpected error creating adaptive query: {e}")
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to create adaptive query: {str(e)}"
@@ -214,7 +334,8 @@ async def _submit_query_task(
             task_result = query_vector.delay(
                 query=request.question,
                 collection_id=collection.id,
-                top_k=request.max_results
+                top_k=request.max_results,
+                answer_format=request.answer_format
             )
             query_type = "vector"
 
@@ -323,7 +444,8 @@ async def query_document(
                 query=request.question,
                 collection_id=collection.id,
                 document_id=document.id,  # Restrict to specific document
-                top_k=request.max_results or 5
+                top_k=request.max_results or 5,
+                answer_format=request.answer_format
             )
 
             # Log task submission
@@ -385,6 +507,7 @@ async def list_query_endpoints() -> ApiResponseV2:
                         "search_type": "vector|graph|adaptive|global|local (default: adaptive)",
                         "max_results": "Number of results (default: 5)",
                         "include_sources": "Include source documents (default: true)",
+                        "answer_format": "default|single_paragraph|table|list|json|essay|markdown (default: default)",
                     },
                 },
             },

@@ -370,6 +370,60 @@ class RAGSettings(BaseModel):
     )
 
 
+class CitationSettings(BaseModel):
+    """Citation generation configuration."""
+
+    min_similarity: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity threshold for source matching (0.0-1.0)"
+    )
+
+    default_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of candidate sources to retrieve before selecting best match"
+    )
+
+    confidence_thresholds: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "high": 0.85,
+            "medium": 0.70,
+            "low": 0.0
+        },
+        description="Confidence level thresholds based on similarity score and metadata quality"
+    )
+
+    max_excerpt_length: int = Field(
+        default=300,
+        ge=50,
+        le=1000,
+        description="Maximum length of text excerpt in source details"
+    )
+
+    enable_llm_analysis: bool = Field(
+        default=False,
+        description="Enable optional LLM-based relevance analysis (adds latency)"
+    )
+
+    llm_analysis_model: str = Field(
+        default="gemma3-4B",
+        description="LLM model for optional relevance analysis (small/fast model recommended)"
+    )
+
+    llm_analysis_max_tokens: int = Field(
+        default=150,
+        description="Max tokens for LLM relevance analysis"
+    )
+
+    llm_analysis_temperature: float = Field(
+        default=0.3,
+        description="Temperature for LLM analysis (lower = more focused)"
+    )
+
+
 class MinerUSettings(BaseModel):
     # API type selection: "selfhosted" for FastAPI or "commercial" for async task API
     api_type: str = Field(default="selfhosted")
@@ -589,6 +643,9 @@ class Settings(BaseModel):
 
     # Shared cache configuration (used by both Vector RAG and GraphRAG)
     cache: CacheSettings = Field(default_factory=CacheSettings)
+
+    # Citation generation configuration
+    citation: CitationSettings = Field(default_factory=CitationSettings)
 
     document_processing: DocumentProcessingSettings = Field(
         default_factory=DocumentProcessingSettings

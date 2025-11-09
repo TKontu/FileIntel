@@ -39,13 +39,12 @@ from fileintel.llm_integration.openai_provider import OpenAIProvider
 from fileintel.llm_integration.embedding_provider import (
     OpenAIEmbeddingProvider,
 )
-from fileintel.prompt_management.composer import PromptComposer
-from fileintel.prompt_management.loader import PromptLoader
-from fileintel.document_processing.factory import ReaderFactory
-from fileintel.document_processing.chunking import TextChunker
-from fileintel.document_processing.metadata_extractor import (
-    MetadataExtractor,
-)
+# Commented out - these modules no longer exist after refactoring
+# from fileintel.prompt_management.composer import PromptComposer
+# from fileintel.prompt_management.loader import PromptLoader
+# from fileintel.document_processing.factory import ReaderFactory
+# from fileintel.document_processing.chunking import TextChunker
+# from fileintel.document_processing.metadata_extractor import MetadataExtractor
 
 # from fileintel.worker.batch_manager import BatchProcessor  # Removed - migrated to Celery
 # from fileintel.worker.job_processor_registry import JobProcessorRegistry  # Removed - migrated to Celery

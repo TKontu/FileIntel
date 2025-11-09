@@ -271,7 +271,7 @@ def build_graph_index(
     base=BaseFileIntelTask, bind=True, queue="graphrag_queries", rate_limit="60/m", max_retries=3
 )
 def query_graph_global(
-    self, query: str, collection_id: str, **kwargs
+    self, query: str, collection_id: str, answer_format: str = "default", **kwargs
 ) -> Dict[str, Any]:
     """
     Perform global GraphRAG query across the entire graph.
@@ -279,6 +279,7 @@ def query_graph_global(
     Args:
         query: Query string
         collection_id: Collection to query
+        answer_format: Answer format template name (default: "default")
         **kwargs: Additional query parameters
 
     Returns:
@@ -308,7 +309,12 @@ def query_graph_global(
         import asyncio
         loop = asyncio.get_event_loop()
         future = asyncio.run_coroutine_threadsafe(
-            graphrag_service.query(query, collection_id, search_type="global"),
+            graphrag_service.query(
+                query,
+                collection_id,
+                search_type="global",
+                answer_format=answer_format
+            ),
             loop
         )
         search_result = future.result()  # Wait for completion
@@ -350,13 +356,14 @@ def query_graph_global(
     rate_limit="60/m",
     max_retries=3,
 )
-def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[str, Any]:
+def query_graph_local(self, query: str, collection_id: str, answer_format: str = "default", **kwargs) -> Dict[str, Any]:
     """
     Perform local GraphRAG query focused on specific entities.
 
     Args:
         query: Query string
         collection_id: Collection to query
+        answer_format: Answer format template name (default: "default")
         **kwargs: Additional query parameters
 
     Returns:
@@ -386,7 +393,12 @@ def query_graph_local(self, query: str, collection_id: str, **kwargs) -> Dict[st
         import asyncio
         loop = asyncio.get_event_loop()
         future = asyncio.run_coroutine_threadsafe(
-            graphrag_service.query(query, collection_id, search_type="local"),
+            graphrag_service.query(
+                query,
+                collection_id,
+                search_type="local",
+                answer_format=answer_format
+            ),
             loop
         )
         search_result = future.result()  # Wait for completion

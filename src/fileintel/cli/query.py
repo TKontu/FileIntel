@@ -21,17 +21,33 @@ def query_collection(
         ..., help="The question to ask about the collection."
     ),
     rag_type: Optional[str] = typer.Option(
-        "auto", "--type", "-t", help="RAG type: 'vector', 'graph', or 'auto'."
+        "auto", "--type", "-t", help="RAG type: 'vector', 'graph', 'global', 'local', or 'auto'."
+    ),
+    answer_format: Optional[str] = typer.Option(
+        "default",
+        "--format",
+        "-f",
+        help="Answer format: 'default', 'single_paragraph', 'table', 'list', 'json', 'essay', or 'markdown'."
     ),
 ):
     """Query a collection with a question using RAG."""
 
     def _query(api):
         # Map CLI rag_type to API search_type
-        search_type_map = {"auto": "adaptive", "vector": "vector", "graph": "graph"}
+        search_type_map = {
+            "auto": "adaptive",
+            "vector": "vector",
+            "graph": "graph",
+            "global": "global",
+            "local": "local"
+        }
         search_type = search_type_map.get(rag_type, "adaptive")
 
-        payload = {"question": question, "search_type": search_type}
+        payload = {
+            "question": question,
+            "search_type": search_type,
+            "answer_format": answer_format
+        }
         return api._request(
             "POST", f"collections/{collection_identifier}/query", json=payload
         )
@@ -96,6 +112,12 @@ def query_document(
     ),
     document_id: str = typer.Argument(..., help="The ID of the document to query."),
     question: str = typer.Argument(..., help="The question to ask about the document."),
+    answer_format: Optional[str] = typer.Option(
+        "default",
+        "--format",
+        "-f",
+        help="Answer format: 'default', 'single_paragraph', 'table', 'list', 'json', 'essay', or 'markdown'."
+    ),
 ):
     """Query a specific document with a question."""
 
@@ -103,6 +125,7 @@ def query_document(
         payload = {
             "question": question,
             "search_type": "vector",  # Document queries use vector search
+            "answer_format": answer_format
         }
         return api._request(
             "POST",
@@ -166,6 +189,12 @@ def test_query_system(
     test_question: str = typer.Option(
         "What is this collection about?", "--question", "-q", help="Test question."
     ),
+    answer_format: Optional[str] = typer.Option(
+        "default",
+        "--format",
+        "-f",
+        help="Answer format: 'default', 'single_paragraph', 'table', 'list', 'json', 'essay', or 'markdown'."
+    ),
 ):
     """Test the query system with a simple question."""
     cli_handler.console.print(
@@ -175,7 +204,11 @@ def test_query_system(
     try:
 
         def _test_query(api):
-            payload = {"question": test_question, "search_type": "adaptive"}
+            payload = {
+                "question": test_question,
+                "search_type": "adaptive",
+                "answer_format": answer_format
+            }
             return api._request(
                 "POST", f"collections/{collection_identifier}/query", json=payload
             )

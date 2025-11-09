@@ -38,21 +38,74 @@ class GraphRAGIndexResponse(BaseModel):
     message: str
 
 
-@router.post("/index", response_model=ApiResponseV2)
+@router.post(
+    "/index",
+    response_model=ApiResponseV2,
+    summary="Create GraphRAG knowledge graph index (async task)",
+    description="""
+    Build or rebuild GraphRAG knowledge graph index for a collection.
+
+    Returns task ID immediately. Use `/api/v2/tasks/{task_id}` to monitor indexing progress.
+
+    **What is GraphRAG?**
+    GraphRAG extracts entities, relationships, and communities from documents to build
+    a knowledge graph enabling advanced semantic search and reasoning.
+
+    **Indexing Phases:**
+    1. **Entity Extraction** - Identifies people, places, concepts, etc.
+    2. **Relationship Extraction** - Maps connections between entities
+    3. **Community Detection** - Groups related entities into communities
+    4. **Summary Generation** - Creates hierarchical summaries of communities
+
+    **Checkpoint Resume:**
+    - `force_rebuild=false` (default): Automatically resumes from last checkpoint if interrupted
+    - `force_rebuild=true`: Rebuilds entire index from scratch (ignores checkpoints)
+
+    **Prerequisites:**
+    - Documents must be processed (chunks created)
+    - Collection must have at least one document
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Monitor indexing progress
+    3. GET `/api/v2/graphrag/{collection_id}/status` → Check index status
+    4. When complete, use GraphRAG search types in query endpoint
+
+    **Example Request:**
+    ```json
+    {
+      "collection_id": "research-papers",
+      "force_rebuild": false
+    }
+    ```
+
+    **Example Response:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "task_id": "abc-123-def-456",
+        "collection_id": "collection-uuid",
+        "status": "started",
+        "message": "GraphRAG indexing started for collection 'Research Papers'"
+      }
+    }
+    ```
+
+    **Indexing Duration:**
+    - Small collections (< 10 docs): 5-15 minutes
+    - Medium collections (10-50 docs): 15-60 minutes
+    - Large collections (> 50 docs): 1-4 hours
+
+    **Note:** GraphRAG indexing uses LLMs extensively and may incur significant API costs for large collections.
+    """
+)
 async def create_graphrag_index(
     request: GraphRAGIndexRequest,
     background_tasks: BackgroundTasks,
     storage: PostgreSQLStorage = Depends(get_storage),
 ):
-    """
-    Create or rebuild GraphRAG index for a collection.
-
-    This endpoint now supports automatic checkpoint resume, allowing indexing to
-    continue from the last successful workflow step if interrupted.
-
-    - force_rebuild=False (default): Automatically resumes from checkpoints if available
-    - force_rebuild=True: Ignores checkpoints and rebuilds from scratch
-    """
+    """Create or rebuild GraphRAG index for a collection with checkpoint resume support."""
     try:
         config = get_config()
         # Get collection by identifier (ID or name)

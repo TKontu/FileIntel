@@ -401,14 +401,9 @@ def import_collection_table(
         """Fetch current metadata for a document."""
         try:
             result = api._request("GET", f"metadata/document/{doc_id}")
-            metadata = result.get("data", {}).get("metadata", {})
-            # Debug first call
-            if doc_id == updates[0]["document_id"]:
-                cli_handler.console.print(f"[dim]Debug - Fetched metadata for first doc:[/dim]")
-                cli_handler.console.print(f"[dim]  author_surnames in DB: {repr(metadata.get('author_surnames'))}[/dim]")
-            return metadata
+            return result.get("data", {}).get("metadata", {})
         except Exception as e:
-            cli_handler.console.print(f"[dim]Error fetching metadata: {e}[/dim]")
+            # Silently return empty dict on error - will treat all fields as changed
             return {}
 
     # Analyze changes
@@ -425,20 +420,9 @@ def import_collection_table(
         changed_fields = []
         for field, new_value in new_metadata.items():
             current_value = current_metadata.get(field)
-            # Normalize for comparison (handle None vs empty string, etc.)
-            normalized_new = _normalize_value(new_value)
-            normalized_current = _normalize_value(current_value)
-
-            if normalized_new != normalized_current:
+            # Normalize for comparison (handle None vs empty string, list vs string, etc.)
+            if _normalize_value(new_value) != _normalize_value(current_value):
                 changed_fields.append(field)
-                # Debug: Print first difference for troubleshooting
-                if len(actual_changes) == 0 and len(changed_fields) == 1:
-                    cli_handler.console.print(f"[dim]Debug - First difference found:[/dim]")
-                    cli_handler.console.print(f"[dim]  Field: {field}[/dim]")
-                    cli_handler.console.print(f"[dim]  CSV value: {repr(new_value)} (type: {type(new_value).__name__})[/dim]")
-                    cli_handler.console.print(f"[dim]  DB value: {repr(current_value)} (type: {type(current_value).__name__})[/dim]")
-                    cli_handler.console.print(f"[dim]  Normalized CSV: {repr(normalized_new)}[/dim]")
-                    cli_handler.console.print(f"[dim]  Normalized DB: {repr(normalized_current)}[/dim]")
 
         if changed_fields:
             actual_changes.append({
