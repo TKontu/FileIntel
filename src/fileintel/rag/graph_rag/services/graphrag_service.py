@@ -55,8 +55,8 @@ class GraphRAGService:
             if prompts_dir:
                 formats_dir = Path(prompts_dir) / "examples"
             else:
-                # Fallback to relative path
-                project_root = Path(__file__).parent.parent.parent.parent.parent
+                # Fallback to relative path (5 levels up: services -> graph_rag -> rag -> fileintel -> src -> project_root)
+                project_root = Path(__file__).parent.parent.parent.parent.parent.parent
                 formats_dir = project_root / "prompts" / "examples"
 
             if formats_dir.exists():

@@ -205,7 +205,7 @@ class UnifiedLLMProvider:
             if prompts_dir:
                 formats_dir = Path(prompts_dir) / "examples"
             else:
-                # Fallback to relative path
+                # Fallback to relative path (4 levels up: llm_integration -> fileintel -> src -> project_root)
                 project_root = Path(__file__).parent.parent.parent.parent
                 formats_dir = project_root / "prompts" / "examples"
 
@@ -225,6 +225,7 @@ class UnifiedLLMProvider:
             if prompts_dir:
                 templates_dir = Path(prompts_dir) / "templates" / "vector_rag"
             else:
+                # Use same project_root as above (4 levels up)
                 project_root = Path(__file__).parent.parent.parent.parent
                 templates_dir = project_root / "prompts" / "templates" / "vector_rag"
 
