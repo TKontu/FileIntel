@@ -186,7 +186,48 @@ async def upload_document_to_collection(
     file: UploadFile = File(...),
     storage: PostgreSQLStorage = Depends(get_storage),
 ) -> ApiResponseV2:
-    """Upload a single document to a collection."""
+    """
+    Upload a single document to a collection.
+
+    **Global Deduplication:**
+
+    Documents are deduplicated globally across the entire system using content fingerprinting:
+    - Each file is fingerprinted using a normalized content hash
+    - If the same file exists anywhere (in any collection), it is detected as a duplicate
+    - Duplicate files are linked to the new collection without re-uploading
+    - Storage is saved by reusing the existing file on disk
+    - Response includes `duplicate: true` and lists existing collections containing the file
+
+    **Response Fields:**
+    - `document_id`: UUID of the document (existing or newly created)
+    - `duplicate`: Boolean indicating if this was a duplicate
+    - `message`: Explanation of what happened
+    - `file_path`: Path to the file on disk (reused for duplicates)
+
+    **Example Response (New File):**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "document_id": "new-uuid",
+        "duplicate": false,
+        "message": "Document uploaded successfully"
+      }
+    }
+    ```
+
+    **Example Response (Duplicate):**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "document_id": "existing-uuid",
+        "duplicate": true,
+        "message": "Duplicate file detected, linked to existing document"
+      }
+    }
+    ```
+    """
     try:
         import asyncio
         from fileintel.core.config import get_config
@@ -331,7 +372,24 @@ async def upload_document_to_collection(
 async def get_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
-    """Get a specific document by ID or ID prefix."""
+    """
+    Get a specific document by ID or ID prefix.
+
+    **ID Resolution:**
+    - Supports full UUID (36 characters): Exact match lookup
+    - Supports partial UUID (< 36 characters): Prefix matching
+      - Searches for documents where ID starts with the provided prefix
+      - Returns document if exactly one match found
+      - Returns 400 error if multiple documents match (ambiguous)
+      - Returns 404 if no documents match
+
+    **Examples:**
+    - `3b9e6ac7-2152-4133-bd87-2cd0ffc09863` - Full UUID (exact match)
+    - `3b9e6ac7` - 8-char prefix (matches if unique)
+    - `3b9` - 3-char prefix (may be ambiguous, returns error if multiple matches)
+
+    **Use Case:** Prefix matching allows convenient CLI usage without copying full UUIDs
+    """
     import asyncio
 
     # Log document retrieval request
@@ -385,7 +443,12 @@ async def get_document(
 async def delete_document(
     document_id: str, storage: PostgreSQLStorage = Depends(get_storage)
 ) -> ApiResponseV2:
-    """Delete a specific document by ID or ID prefix."""
+    """
+    Delete a specific document by ID or ID prefix.
+
+    **ID Resolution:** Same as GET endpoint - supports full UUID or prefix matching.
+    See GET /documents/{document_id} for details on prefix matching behavior.
+    """
     import asyncio
 
     # Log document deletion request
@@ -525,9 +588,17 @@ async def get_document_chunks(
     4. GraphRAG indexing (optional) - Builds knowledge graph
 
     **Smart Re-processing:**
-    - Automatically skips documents that already have chunks
-    - Only processes new/unprocessed documents
-    - Updates collection status throughout processing
+
+    The endpoint intelligently handles re-processing scenarios:
+
+    - **Some documents unprocessed:** Only processes documents without chunks (skips already processed)
+    - **All documents processed:** Skips MinerU entirely, jumps directly to embeddings/GraphRAG
+      - Returns `task_type: "embeddings_and_graphrag"` instead of operation_type
+      - Synthetic "skipped" results generated for already-processed documents
+      - Status message clarifies: "Skipped re-processing N documents (already have chunks)"
+    - **No documents:** Returns error (empty collection)
+
+    This optimization saves processing time when running the same operation multiple times.
 
     **Workflow:**
     1. POST to this endpoint → Get `task_id`
@@ -1004,6 +1075,28 @@ async def get_collection_processing_status(
     Get the current processing status for a collection.
 
     Returns information about any active or recent tasks for the collection.
+
+    **Status Validation:**
+
+    This endpoint performs automatic validation to detect stale processing states.
+    If the collection status is "processing" but the associated task has completed
+    (SUCCESS/FAILURE/REVOKED), a `warning` field is included in the response:
+
+    ```json
+    {
+      "warning": "Collection status is 'processing' but task SUCCESS. This may indicate a callback failure."
+    }
+    ```
+
+    This detection helps identify situations where task completion callbacks failed
+    to update the collection status, allowing manual intervention if needed.
+
+    **Available Operations:**
+
+    The response includes an `available_operations` list showing which operations
+    can currently be run based on the collection's status:
+    - Operations available when status is: created, completed, failed
+    - Operations blocked when status is: processing
     """
     try:
         # Validate collection exists
@@ -1114,9 +1207,21 @@ async def get_collection_processing_status(
     - `generate_embeddings` (default: true): Generate vector embeddings
 
     **Duplicate Handling:**
-    - Files are fingerprinted using content hash
-    - Duplicates are detected and linked (not re-uploaded)
+    - Files are fingerprinted using content hash (SHA256)
+    - Duplicates are detected globally across all collections and within target collection
+    - Duplicates are linked (not re-uploaded) to save storage space
     - Response includes both uploaded and duplicate counts
+    - Duplicate `reason` field explains why duplicate was detected
+
+    **Concurrency Safety:**
+
+    The endpoint is designed to handle high concurrency safely. If multiple clients upload
+    the same file simultaneously to the same collection:
+    - Uses optimistic locking with double-check pattern
+    - Only one upload succeeds, others detect the race condition
+    - Race condition duplicates are marked with `reason: "Duplicate created by concurrent request (race condition)"`
+    - This is normal behavior under high load and ensures data consistency
+    - Orphaned files from failed uploads are automatically cleaned up
 
     **Example cURL Request:**
     ```bash
@@ -1135,10 +1240,34 @@ async def get_collection_processing_status(
       "data": {
         "uploaded_files": 2,
         "duplicates_skipped": 0,
+        "duplicates": [],
         "file_paths": ["/path/to/file1.pdf", "/path/to/file2.pdf"],
         "task_id": "abc-123",
         "processing_status": "submitted",
         "estimated_duration": 600
+      }
+    }
+    ```
+
+    **Example Response with Duplicates:**
+    ```json
+    {
+      "success": true,
+      "data": {
+        "uploaded_files": 1,
+        "duplicates_skipped": 1,
+        "duplicates": [
+          {
+            "filename": "paper2.pdf",
+            "existing_document_id": "doc-uuid",
+            "content_hash": "sha256...",
+            "file_size": 1024000,
+            "reason": "Duplicate file already exists in collection"
+          }
+        ],
+        "file_paths": ["/path/to/file1.pdf"],
+        "task_id": "abc-123",
+        "processing_status": "submitted"
       }
     }
     ```

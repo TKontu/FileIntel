@@ -300,9 +300,31 @@ async def get_task_result(task_id: str) -> ApiResponseV2:
 @router.get("/tasks/metrics", response_model=ApiResponseV2)
 async def get_task_metrics() -> ApiResponseV2:
     """
-    Get comprehensive metrics about the Celery task system.
+    Get task system metrics.
 
-    Provides insights into system performance and queue status.
+    **Current Limitations:**
+
+    This endpoint provides limited metrics due to architecture constraints:
+
+    - ✅ `active_tasks`: Real-time count of currently running tasks
+    - ✅ `worker_count`: Number of active Celery workers
+    - ⚠️ `pending_tasks`: Always 0 (requires broker query implementation)
+    - ⚠️ `completed_tasks`: Always 0 (requires task result backend)
+    - ⚠️ `failed_tasks`: Always 0 (requires task result backend)
+    - ⚠️ `average_task_duration`: Always null (requires historical data storage)
+    - ⚠️ `queue_lengths`: Empty dict (requires broker query implementation)
+
+    **To Get Full Metrics:**
+
+    For comprehensive task history and metrics, implement:
+    1. Celery result backend (Redis/PostgreSQL) for completed/failed task tracking
+    2. Broker query integration for queue depth monitoring
+    3. Custom metrics collection for duration tracking
+
+    **Current Use Case:**
+
+    This endpoint is useful for checking worker availability and current load,
+    but not for historical analysis or detailed queue monitoring.
     """
     try:
         # Check if Celery is available
@@ -351,29 +373,32 @@ async def get_task_logs(
     """
     Get logs for a specific task.
 
-    Note: This is a placeholder. Real implementation would require
-    centralized logging with task correlation.
-    """
-    try:
-        # In a real implementation, this would query centralized logs
-        # For now, return a placeholder response
-        return ApiResponseV2(
-            success=True,
-            data={
-                "task_id": task_id,
-                "logs": [
-                    f"Log entry for task {task_id} - this would contain actual log data",
-                    "Real implementation requires centralized logging setup",
-                ],
-                "lines_returned": 2,
-                "lines_requested": lines,
-            },
-            timestamp=datetime.utcnow(),
-        )
+    **Status: NOT IMPLEMENTED**
 
-    except (ValueError, ConnectionError, RuntimeError) as e:
-        logger.error(f"Error getting task logs for {task_id}: {e}")
-        return ApiResponseV2(success=False, error=str(e), timestamp=datetime.utcnow())
+    This endpoint is a placeholder and does not return real log data.
+
+    To implement, you would need:
+    1. Centralized logging system (ELK stack, Loki, CloudWatch, etc.)
+    2. Task ID correlation in all log messages
+    3. Log aggregation and querying infrastructure
+
+    Currently returns placeholder data only.
+    """
+    # Return 501 Not Implemented status
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "error": "Task logs endpoint not implemented",
+            "message": "This feature requires centralized logging infrastructure. "
+                      "Currently returns no real data.",
+            "task_id": task_id,
+            "implementation_requirements": [
+                "Centralized logging system (ELK, Loki, CloudWatch)",
+                "Task ID correlation in log messages",
+                "Log query and aggregation infrastructure"
+            ]
+        }
+    )
 
 
 @router.post("/tasks/batch/cancel", response_model=ApiResponseV2)
@@ -473,7 +498,19 @@ async def retry_task(task_id: str) -> ApiResponseV2:
     """
     Retry a failed task.
 
-    Creates a new task with the same parameters as the failed task.
+    **Status: NOT IMPLEMENTED**
+
+    Task retry functionality requires persistent storage of task parameters.
+
+    To implement, you would need:
+    1. Store task name, args, kwargs when task is submitted
+    2. Persist this data in database or task result backend
+    3. Retrieve stored parameters when retry is requested
+    4. Submit new task with same parameters
+
+    **Current Limitation:** Task parameters are not stored, so retry is not possible.
+
+    **Workaround:** Re-submit the original request that created the task.
     """
     try:
         task_info = get_task_status(task_id)
@@ -487,14 +524,21 @@ async def retry_task(task_id: str) -> ApiResponseV2:
                 detail=f"Task {task_id} is not in failed state (current state: {task_info['state']})",
             )
 
-        # In a real implementation, you'd need to store original task parameters
-        # to be able to retry with the same parameters
-        # For now, return a placeholder response
-
-        return ApiResponseV2(
-            success=False,
-            error="Task retry not implemented - requires storing original task parameters",
-            timestamp=datetime.utcnow(),
+        # Return 501 Not Implemented
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "Task retry not implemented",
+                "message": "This feature requires persistent storage of task parameters.",
+                "task_id": task_id,
+                "current_state": task_info["state"],
+                "implementation_requirements": [
+                    "Persistent storage of task parameters (name, args, kwargs)",
+                    "Database or task result backend integration",
+                    "Parameter retrieval and re-submission logic"
+                ],
+                "workaround": "Re-submit the original API request that created this task"
+            }
         )
 
     except HTTPException:

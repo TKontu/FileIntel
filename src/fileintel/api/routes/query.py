@@ -61,6 +61,15 @@ class QueryResponse(BaseModel):
 
     Returns a task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve results.
 
+    **IMPORTANT: Async-Only Architecture**
+
+    All queries execute asynchronously as Celery tasks regardless of the `query_mode` parameter.
+    This ensures the API remains non-blocking and can handle high request concurrency.
+    - The API acts as a non-blocking router
+    - All processing happens in Celery workers
+    - Synchronous mode is NOT supported - `query_mode: "sync"` is automatically converted to async
+    - Always returns a `task_id` immediately
+
     **Search Types:**
     - `vector`: Semantic similarity search (best for factual questions)
     - `graph`: Knowledge graph search (best for relationship queries)
@@ -79,7 +88,7 @@ class QueryResponse(BaseModel):
 
     **Workflow:**
     1. POST to this endpoint → Get `task_id`
-    2. GET `/api/v2/tasks/{task_id}` → Check status
+    2. GET `/api/v2/tasks/{task_id}` → Monitor progress
     3. When `status=SUCCESS` → Get answer from result
 
     **Example Request:**
@@ -108,8 +117,6 @@ class QueryResponse(BaseModel):
       }
     }
     ```
-
-    **Note:** All queries run asynchronously via Celery tasks for scalability.
     """
 )
 @api_error_handler("query collection")

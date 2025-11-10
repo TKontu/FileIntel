@@ -391,10 +391,18 @@ def query_graph_local(self, query: str, collection_id: str, answer_format: str =
         # Perform local search using GraphRAG service's query() method
         # This calls local_search() internally + applies citation tracing and formatting
         #
-        # Use asyncio.run() instead of get_event_loop() + run_coroutine_threadsafe()
-        # because local_search contains blocking sync operations that would deadlock
-        # if run in an existing event loop. asyncio.run() creates a fresh isolated loop.
+        # GraphRAG's local_search is async but contains blocking sync operations
+        # (embedding API calls, LanceDB queries). Celery already has an event loop running,
+        # so we use nest_asyncio to allow nested loops for this specific use case.
         import asyncio
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+            logger.info("Applied nest_asyncio to allow nested event loops for GraphRAG")
+        except ImportError:
+            logger.warning("nest_asyncio not installed, trying without it (may fail)")
+
+        # Now we can safely use asyncio.run() even though Celery has a loop running
         search_result = asyncio.run(
             graphrag_service.query(
                 query,

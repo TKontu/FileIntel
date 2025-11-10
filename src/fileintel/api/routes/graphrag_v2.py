@@ -328,6 +328,19 @@ async def get_graphrag_communities(
 
     Returns hierarchical community structure with level information from database.
     Fast database queries (< 100ms) replace slower parquet file loading (2-5s).
+
+    **Smart Title Enhancement:**
+
+    Community titles are automatically enhanced for better readability:
+    - Generic titles like "Community 0", "Community 1" are detected
+    - If community has a summary, the first sentence is extracted as title
+    - Only applied if extracted title is 10-100 characters
+    - Original generic title is replaced with descriptive content
+    - Makes community lists more informative without reading full summaries
+
+    **Example:**
+    - Before: `"title": "Community 0"`
+    - After: `"title": "Research on Machine Learning Applications"`
     """
     try:
         config = get_config()
@@ -416,6 +429,9 @@ async def get_graphrag_community_by_id(
 
     Returns detailed community information from database including summary and entities.
     Fast database query (< 100ms) replaces slower parquet file loading (2-5s).
+
+    **Smart Title Enhancement:** Same automatic title enhancement as community list endpoint.
+    See GET /communities for details.
     """
     try:
         config = get_config()
