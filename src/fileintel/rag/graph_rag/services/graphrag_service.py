@@ -1580,29 +1580,43 @@ Reformatted Answer (with all citations preserved):"""
 
             else:
                 # For Reports and Entities, get entity IDs first, then text units
-                entity_ids = set()
+                entity_short_ids = set()  # Changed name to clarify these are human_readable_ids (integers)
+
                 if cit_type == "Reports":
+                    # CRITICAL: Communities.entity_ids contains UUID strings (entity.id field)
+                    # But citations contain integers (entity.human_readable_id field)
+                    # We need to convert UUIDs → human_readable_ids
                     comm_mask = communities_df["community"].isin(ids)
+                    entity_uuids = set()
                     for entity_list in communities_df[comm_mask]["entity_ids"]:
                         if entity_list is not None and len(entity_list) > 0:
-                            entity_ids.update(entity_list)
-                elif cit_type == "Entities":
-                    entity_ids.update(ids)
+                            entity_uuids.update(entity_list)
 
-                if not entity_ids:
+                    if entity_uuids:
+                        # Convert entity UUIDs to human_readable_ids by looking them up
+                        uuid_mask = entities_df["id"].isin(entity_uuids)
+                        matched_by_uuid = entities_df[uuid_mask]
+                        entity_short_ids = set(matched_by_uuid["human_readable_id"].dropna().astype(int).tolist())
+                        logger.debug(f"Citation {marker}: {len(entity_uuids)} entity UUIDs from communities → {len(entity_short_ids)} human_readable_ids")
+
+                elif cit_type == "Entities":
+                    # Entity citations already contain human_readable_ids (integers)
+                    entity_short_ids.update(ids)
+
+                if not entity_short_ids:
                     logger.debug(f"Citation {marker}: No entity IDs found for {cit_type} {ids}")
                     continue
 
                 # Step 2: Get text units for these specific entities
                 # CRITICAL: Citations use short_id (human_readable_id), not id!
                 # GraphRAG shows short_id to LLM in context, so citations contain short_id values
-                entity_mask = entities_df["human_readable_id"].isin(entity_ids)
+                entity_mask = entities_df["human_readable_id"].isin(entity_short_ids)
                 matched_entities = entities_df[entity_mask]
-                logger.debug(f"Citation {marker}: {len(entity_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
+                logger.debug(f"Citation {marker}: {len(entity_short_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
 
                 if len(matched_entities) == 0:
-                    logger.warning(f"Citation {marker}: None of the {len(entity_ids)} entity short_ids found in entities DataFrame")
-                    logger.warning(f"  Citation short_ids: {sorted(list(entity_ids))[:10]}")
+                    logger.warning(f"Citation {marker}: None of the {len(entity_short_ids)} entity short_ids found in entities DataFrame")
+                    logger.warning(f"  Citation short_ids: {sorted(list(entity_short_ids))[:10]}")
                     logger.warning(f"  DataFrame human_readable_id range: {entities_df['human_readable_id'].min()} - {entities_df['human_readable_id'].max()}")
                     logger.warning(f"  DataFrame entity count: {len(entities_df)}")
                     logger.warning(f"  Sample DataFrame human_readable_ids: {sorted(entities_df['human_readable_id'].dropna().head(10).tolist())}")
