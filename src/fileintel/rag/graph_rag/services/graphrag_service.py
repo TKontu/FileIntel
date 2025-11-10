@@ -1392,6 +1392,27 @@ Reformatted Answer (with all citations preserved):"""
             logger.error(f"Required parquet files not found in {workspace_path}")
             return {}, []
 
+        # CRITICAL: Ensure ID columns are consistent types for lookups
+        # GraphRAG citations use int IDs, but parquet files may have string IDs
+        logger.debug(f"Entity ID column type: {entities_df['id'].dtype}")
+        logger.debug(f"Community column type: {communities_df['community'].dtype if 'community' in communities_df.columns else 'N/A'}")
+
+        # Convert ID columns to int for consistent lookups
+        try:
+            if entities_df['id'].dtype == 'object' or entities_df['id'].dtype == 'string':
+                entities_df['id'] = pd.to_numeric(entities_df['id'], errors='coerce').astype('Int64')
+                logger.info(f"Converted entities_df['id'] from {entities_df['id'].dtype} to Int64")
+        except Exception as e:
+            logger.warning(f"Failed to convert entity IDs to numeric: {e}")
+
+        try:
+            if 'community' in communities_df.columns:
+                if communities_df['community'].dtype == 'object' or communities_df['community'].dtype == 'string':
+                    communities_df['community'] = pd.to_numeric(communities_df['community'], errors='coerce').astype('Int64')
+                    logger.info(f"Converted communities_df['community'] to Int64")
+        except Exception as e:
+            logger.warning(f"Failed to convert community IDs to numeric: {e}")
+
         # OPTIMIZATION 1a: Calculate information density for all text units
         # Density = number of entities + relationships (semantic richness indicator)
         logger.info("Calculating information density for text units...")
@@ -1427,16 +1448,27 @@ Reformatted Answer (with all citations preserved):"""
                 entity_ids.update(ids)
 
             if not entity_ids:
+                logger.debug(f"Citation {marker}: No entity IDs found for {cit_type} {ids}")
                 continue
 
             # Step 2: Get text units for these specific entities
             text_unit_ids = set()
             entity_mask = entities_df["id"].isin(entity_ids)
-            for tu_list in entities_df[entity_mask]["text_unit_ids"]:
+            matched_entities = entities_df[entity_mask]
+            logger.debug(f"Citation {marker}: {len(entity_ids)} entity IDs → {len(matched_entities)} matched in DataFrame")
+
+            if len(matched_entities) == 0:
+                logger.warning(f"Citation {marker}: None of the {len(entity_ids)} entity IDs found in entities DataFrame")
+                logger.debug(f"Sample entity IDs from citation: {list(entity_ids)[:5]}")
+                logger.debug(f"Sample entity IDs from DataFrame: {entities_df['id'].head().tolist()}")
+                continue
+
+            for tu_list in matched_entities["text_unit_ids"]:
                 if tu_list is not None and len(tu_list) > 0:
                     text_unit_ids.update(tu_list)
 
             if not text_unit_ids:
+                logger.warning(f"Citation {marker}: {len(matched_entities)} entities matched but no text_unit_ids found")
                 continue
 
             citation_to_text_units[marker] = text_unit_ids
