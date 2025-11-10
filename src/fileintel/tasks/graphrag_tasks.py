@@ -390,18 +390,19 @@ def query_graph_local(self, query: str, collection_id: str, answer_format: str =
 
         # Perform local search using GraphRAG service's query() method
         # This calls local_search() internally + applies citation tracing and formatting
+        #
+        # Use asyncio.run() instead of get_event_loop() + run_coroutine_threadsafe()
+        # because local_search contains blocking sync operations that would deadlock
+        # if run in an existing event loop. asyncio.run() creates a fresh isolated loop.
         import asyncio
-        loop = asyncio.get_event_loop()
-        future = asyncio.run_coroutine_threadsafe(
+        search_result = asyncio.run(
             graphrag_service.query(
                 query,
                 collection_id,
                 search_type="local",
                 answer_format=answer_format
-            ),
-            loop
+            )
         )
-        search_result = future.result()  # Wait for completion
 
         self.update_progress(2, 3, "Processing query results")
 
