@@ -729,9 +729,10 @@ Reformatted Answer (with all citations preserved):"""
         logger.info("Pre-computing query embedding to avoid blocking...")
         try:
             # Get query embedding async to warm up the embedding service
+            # Use the same method as vector_rag_service.py:85
             await asyncio.to_thread(
-                self.embedding_provider.embed,
-                query
+                self.embedding_provider.get_embeddings,
+                [query]
             )
             logger.info("Query embedding pre-computed successfully")
         except Exception as e:
