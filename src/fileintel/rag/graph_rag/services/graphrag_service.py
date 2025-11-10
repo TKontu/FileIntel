@@ -1423,7 +1423,8 @@ Reformatted Answer (with all citations preserved):"""
         import re
 
         # Find all citation markers with surrounding context (sentence)
-        citation_pattern = r'\[Data: (Reports|Entities|Relationships) \(([0-9, ]+)\)\]'
+        # Sources = text unit IDs (direct mapping to chunks)
+        citation_pattern = r'\[Data: (Reports|Entities|Relationships|Sources) \(([0-9, ]+)\)\]'
 
         citation_contexts = []
         for match in re.finditer(citation_pattern, answer_text):
@@ -1564,7 +1565,13 @@ Reformatted Answer (with all citations preserved):"""
             # Step 1: Get text unit IDs based on citation type
             text_unit_ids = set()
 
-            if cit_type == "Relationships":
+            if cit_type == "Sources":
+                # Sources citations contain text unit IDs directly (no lookup needed)
+                # [Data: Sources (8137, 43990)] → text_unit_ids = {8137, 43990}
+                text_unit_ids.update(ids)
+                logger.debug(f"Citation {marker}: {len(ids)} source IDs (text units) added directly")
+
+            elif cit_type == "Relationships":
                 # Direct lookup of relationships by human_readable_id
                 if relationships_df is not None:
                     rel_mask = relationships_df["human_readable_id"].isin(ids)
@@ -1884,6 +1891,18 @@ Reformatted Answer (with all citations preserved):"""
                 logger.warning(f"No best source found for citation {marker}")
                 continue
 
+            # Fetch document metadata once for both Harvard and in-text citations
+            document_id = best_source.get("document_id")
+            document_metadata = {}
+            if document_id:
+                try:
+                    doc = self.storage.get_document(document_id)
+                    if doc and doc.document_metadata:
+                        document_metadata = doc.document_metadata
+                        logger.debug(f"Fetched metadata for {best_doc_title}: {document_metadata.keys()}")
+                except Exception as e:
+                    logger.debug(f"Could not fetch metadata for document {document_id}: {e}")
+
             # Build Harvard citation for this specific source
             harvard_citation = self._build_harvard_citation(best_source, reranked_sources)
             citation_mappings[marker] = harvard_citation
@@ -1891,10 +1910,10 @@ Reformatted Answer (with all citations preserved):"""
             # Enrich source with citation fields for proper display (matches Vector RAG format)
             from fileintel.citation import format_in_text_citation
 
-            # Build chunk-like dict for in-text citation
+            # Build chunk-like dict for in-text citation WITH METADATA for proper Harvard format
             chunk_data_for_citation = {
-                "document_id": best_source.get("document_id"),
-                "document_metadata": {},  # Metadata already used in harvard_citation
+                "document_id": document_id,
+                "document_metadata": document_metadata,  # Include metadata for Harvard-style citations
                 "original_filename": best_doc_title,
                 "chunk_metadata": {"pages": best_source.get("pages", [])}
             }
@@ -1922,10 +1941,10 @@ Reformatted Answer (with all citations preserved):"""
                 existing["similarity_score"] = max(existing.get("similarity_score", 0), best_similarity)
                 existing["relevance_score"] = existing["similarity_score"]
 
-                # Regenerate in_text_citation with merged pages
+                # Regenerate in_text_citation with merged pages (reuse fetched metadata)
                 chunk_data_for_merged = {
                     "document_id": existing.get("document_id"),
-                    "document_metadata": {},
+                    "document_metadata": document_metadata,  # Reuse metadata fetched above
                     "original_filename": doc_name,
                     "chunk_metadata": {"pages": merged_pages}
                 }
