@@ -271,7 +271,7 @@ def build_graph_index(
     base=BaseFileIntelTask, bind=True, queue="graphrag_queries", rate_limit="60/m", max_retries=3
 )
 def query_graph_global(
-    self, query: str, collection_id: str, answer_format: str = "default", **kwargs
+    self, query: str, collection_id: str, answer_format: str = "default", include_cited_chunks: bool = False, **kwargs
 ) -> Dict[str, Any]:
     """
     Perform global GraphRAG query across the entire graph.
@@ -280,6 +280,7 @@ def query_graph_global(
         query: Query string
         collection_id: Collection to query
         answer_format: Answer format template name (default: "default")
+        include_cited_chunks: Include full text content of cited chunks (default: False)
         **kwargs: Additional query parameters
 
     Returns:
@@ -313,7 +314,8 @@ def query_graph_global(
                 query,
                 collection_id,
                 search_type="global",
-                answer_format=answer_format
+                answer_format=answer_format,
+                include_cited_chunks=include_cited_chunks
             ),
             loop
         )
@@ -332,6 +334,10 @@ def query_graph_global(
             "confidence": search_result.get("confidence", 0.8),
             "status": "completed",
         }
+
+        # Include cited chunks if present in search result
+        if "cited_chunks" in search_result:
+            result["cited_chunks"] = search_result["cited_chunks"]
 
         self.update_progress(3, 3, "Global GraphRAG query completed")
         return result
@@ -357,7 +363,7 @@ def query_graph_global(
     rate_limit="60/m",
     max_retries=3,
 )
-def query_graph_local(self, query: str, collection_id: str, answer_format: str = "default", **kwargs) -> Dict[str, Any]:
+def query_graph_local(self, query: str, collection_id: str, answer_format: str = "default", include_cited_chunks: bool = False, **kwargs) -> Dict[str, Any]:
     """
     Perform local GraphRAG query focused on specific entities.
 
@@ -365,6 +371,7 @@ def query_graph_local(self, query: str, collection_id: str, answer_format: str =
         query: Query string
         collection_id: Collection to query
         answer_format: Answer format template name (default: "default")
+        include_cited_chunks: Include full text content of cited chunks (default: False)
         **kwargs: Additional query parameters
 
     Returns:
@@ -401,7 +408,8 @@ def query_graph_local(self, query: str, collection_id: str, answer_format: str =
                 query,
                 collection_id,
                 search_type="local",
-                answer_format=answer_format
+                answer_format=answer_format,
+                include_cited_chunks=include_cited_chunks
             )
         )
 
@@ -418,6 +426,10 @@ def query_graph_local(self, query: str, collection_id: str, answer_format: str =
             "confidence": search_result.get("confidence", 0.9),
             "status": "completed",
         }
+
+        # Include cited chunks if present in search result
+        if "cited_chunks" in search_result:
+            result["cited_chunks"] = search_result["cited_chunks"]
 
         self.update_progress(3, 3, "Local GraphRAG query completed")
         return result
@@ -646,7 +658,7 @@ def enhance_adaptive_result(
     max_retries=3
 )
 def query_vector(
-    self, query: str, collection_id: str, top_k: int = 5, **kwargs
+    self, query: str, collection_id: str, top_k: int = 5, answer_format: str = "default", include_cited_chunks: bool = False, **kwargs
 ) -> Dict[str, Any]:
     """
     Perform vector similarity search with RAG.
@@ -655,6 +667,8 @@ def query_vector(
         query: Query string
         collection_id: Collection to query
         top_k: Number of similar chunks to retrieve
+        answer_format: Answer format template name (default: "default")
+        include_cited_chunks: Include full text content of cited chunks (default: False)
         **kwargs: Additional query parameters
 
     Returns:
@@ -681,6 +695,8 @@ def query_vector(
             query=query,
             collection_id=collection_id,
             top_k=top_k,
+            answer_format=answer_format,
+            include_cited_chunks=include_cited_chunks,
             **kwargs
         )
 
@@ -697,6 +713,10 @@ def query_vector(
             "chunks_retrieved": result.get("metadata", {}).get("chunks_retrieved", 0),
             "status": "completed",
         }
+
+        # Include cited chunks if present in result
+        if "cited_chunks" in result:
+            task_result["cited_chunks"] = result["cited_chunks"]
 
         self.update_progress(3, 3, "Vector RAG query completed")
         return task_result

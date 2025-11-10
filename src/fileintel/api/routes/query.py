@@ -32,6 +32,7 @@ class QueryRequest(BaseModel):
     )
     max_results: Optional[int] = Field(default=5, description="Maximum number of results to retrieve")
     include_sources: Optional[bool] = Field(default=True, description="Include source citations in response")
+    include_cited_chunks: Optional[bool] = Field(default=False, description="Include full text content of cited chunks in response")
     query_mode: Optional[str] = Field(
         default="sync",
         description="Query execution mode: 'sync' (wait for result) or 'async' (return task ID)"
@@ -200,7 +201,8 @@ async def _submit_query_task(
             task_result = query_graph_global.delay(
                 query=request.question,
                 collection_id=collection.id,
-                answer_format=request.answer_format
+                answer_format=request.answer_format,
+                include_cited_chunks=request.include_cited_chunks
             )
             query_type = "graph_global"
 
@@ -209,7 +211,8 @@ async def _submit_query_task(
             task_result = query_graph_local.delay(
                 query=request.question,
                 collection_id=collection.id,
-                answer_format=request.answer_format
+                answer_format=request.answer_format,
+                include_cited_chunks=request.include_cited_chunks
             )
             query_type = "graph_local"
 
@@ -253,7 +256,8 @@ async def _submit_query_task(
                         query=request.question,
                         collection_id=collection.id,
                         top_k=request.max_results,
-                        answer_format=request.answer_format
+                        answer_format=request.answer_format,
+                        include_cited_chunks=request.include_cited_chunks
                     )
                     query_type = "adaptive_vector"
                     logger.info(f"Adaptive routing: executing vector search (confidence: {confidence:.2f})")
@@ -268,7 +272,8 @@ async def _submit_query_task(
                         task_result = query_graph_local.delay(
                             request.question,
                             collection.id,
-                            answer_format=request.answer_format
+                            answer_format=request.answer_format,
+                            include_cited_chunks=request.include_cited_chunks
                         )
                         query_type = "adaptive_graph_local"
                         logger.info(f"Adaptive routing: executing graph local search (confidence: {confidence:.2f})")
@@ -276,7 +281,8 @@ async def _submit_query_task(
                         task_result = query_graph_global.delay(
                             request.question,
                             collection.id,
-                            answer_format=request.answer_format
+                            answer_format=request.answer_format,
+                            include_cited_chunks=request.include_cited_chunks
                         )
                         query_type = "adaptive_graph_global"
                         logger.info(f"Adaptive routing: executing graph global search (confidence: {confidence:.2f})")
@@ -292,13 +298,15 @@ async def _submit_query_task(
                             query=request.question,
                             collection_id=collection.id,
                             top_k=request.max_results,
-                            answer_format=request.answer_format
+                            answer_format=request.answer_format,
+                            include_cited_chunks=request.include_cited_chunks
                         ),
                         # Second: Graph search (run in parallel would be better, but chain is simpler)
                         query_graph_global.si(
                             request.question,
                             collection.id,
-                            answer_format=request.answer_format
+                            answer_format=request.answer_format,
+                            include_cited_chunks=request.include_cited_chunks
                         ),
                         # Third: Combine results using LLM synthesis
                         combine_hybrid_results.s(
@@ -316,7 +324,8 @@ async def _submit_query_task(
                     task_result = query_graph_global.delay(
                         request.question,
                         collection.id,
-                        answer_format=request.answer_format
+                        answer_format=request.answer_format,
+                        include_cited_chunks=request.include_cited_chunks
                     )
                     query_type = "adaptive_graph_global"
 
@@ -342,7 +351,8 @@ async def _submit_query_task(
                 query=request.question,
                 collection_id=collection.id,
                 top_k=request.max_results,
-                answer_format=request.answer_format
+                answer_format=request.answer_format,
+                include_cited_chunks=request.include_cited_chunks
             )
             query_type = "vector"
 

@@ -46,6 +46,7 @@ class VectorRAGService:
         similarity_metric: str = "cosine",
         min_similarity: float = 0.0,
         answer_format: str = "default",
+        include_cited_chunks: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -59,10 +60,11 @@ class VectorRAGService:
             similarity_metric: 'cosine', 'l2', or 'inner_product'
             min_similarity: Minimum similarity threshold (0-1)
             answer_format: Answer format template name (default: "default")
+            include_cited_chunks: Include full text content of cited chunks in response (default: False)
             **kwargs: Additional parameters
 
         Returns:
-            Dict containing answer, sources, and metadata
+            Dict containing answer, sources, metadata, and optionally cited_chunks
         """
         try:
             # Validate collection exists (direct sync call)
@@ -206,7 +208,42 @@ class VectorRAGService:
             # Calculate confidence based on similarity scores
             confidence = self._calculate_confidence(similar_chunks)
 
-            return {
+            # Collect cited chunks if requested
+            cited_chunks = []
+            if include_cited_chunks:
+                logger.info(f"Including full content for {len(similar_chunks)} cited chunks")
+                for chunk in similar_chunks:
+                    try:
+                        # Get chunk metadata for page/position info
+                        chunk_meta = chunk.get("metadata", chunk.get("chunk_metadata", {}))
+                        doc_meta = chunk.get("document_metadata", {})
+
+                        # Use .get() with defaults for required fields to be defensive
+                        chunk_id = chunk.get("chunk_id")
+                        text = chunk.get("text", "")
+
+                        if not chunk_id or not text:
+                            logger.warning(f"Skipping chunk with missing chunk_id or text")
+                            continue
+
+                        cited_chunks.append({
+                            "chunk_id": chunk_id,
+                            "text": text,  # Full text, not truncated
+                            "document_title": chunk.get("original_filename", "Unknown"),
+                            "page": chunk_meta.get("page_number") or chunk_meta.get("page") or doc_meta.get("page"),
+                            "metadata": {
+                                **chunk_meta,
+                                "similarity_score": chunk.get("similarity", 0.0),
+                                "position": chunk.get("chunk_index", chunk.get("position", 0))
+                            }
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to extract cited chunk data: {e}")
+                        continue
+
+                logger.info(f"Collected {len(cited_chunks)} cited chunks with full content")
+
+            result = {
                 "answer": answer,
                 "sources": sources,
                 "confidence": confidence,
@@ -216,6 +253,12 @@ class VectorRAGService:
                     "chunks_retrieved": len(similar_chunks),
                 },
             }
+
+            # Add cited chunks if requested and available
+            if include_cited_chunks and cited_chunks:
+                result["cited_chunks"] = cited_chunks
+
+            return result
 
         except Exception as e:
             logger.error(f"Error in vector RAG query: {e}")

@@ -109,7 +109,8 @@ class GraphRAGService:
         query: str,
         collection_id: str,
         search_type: str = "global",
-        answer_format: str = "default"
+        answer_format: str = "default",
+        include_cited_chunks: bool = False
     ) -> Dict[str, Any]:
         """
         Standard query interface with citation tracing. Routes to global or local search.
@@ -119,9 +120,11 @@ class GraphRAGService:
             collection_id: Collection to search
             search_type: "global" for global search, "local" for local search (default: "global")
             answer_format: Answer format template name (default: "default")
+            include_cited_chunks: Include full text content of cited chunks in response (default: False)
 
         Returns:
             Dict with answer (formatted with citations), sources, confidence, and metadata
+            If include_cited_chunks=True, also includes 'cited_chunks' field with full chunk content
         """
         # Validate collection exists (run in thread to avoid blocking)
         collection = await asyncio.to_thread(self.storage.get_collection, collection_id)
@@ -185,6 +188,7 @@ class GraphRAGService:
         # SERVER-SIDE: Trace citations and format answer with Harvard references
         formatted_answer = answer
         traced_sources = sources
+        cited_chunks = []
         try:
             # Get workspace path for this collection
             index_info = await asyncio.to_thread(
@@ -193,8 +197,8 @@ class GraphRAGService:
 
             if index_info and index_info.get("index_path"):
                 workspace_path = index_info["index_path"]
-                formatted_answer, traced_sources = await self._trace_and_format_citations(
-                    answer, collection_id, workspace_path, sources
+                formatted_answer, traced_sources, cited_chunks = await self._trace_and_format_citations(
+                    answer, collection_id, workspace_path, sources, include_cited_chunks
                 )
             else:
                 logger.warning(f"Citation tracing skipped: No index_path found for collection {collection_id}")
@@ -216,13 +220,20 @@ class GraphRAGService:
                 logger.warning(f"Failed to apply answer format '{answer_format}': {e}. Using default format.")
                 # Keep formatted_answer as fallback
 
-        return {
+        result = {
             "answer": final_answer,          # Formatted with Harvard citations + answer format
             "raw_answer": answer,            # Original with [Data: Reports (X)]
             "sources": traced_sources,
             "confidence": confidence,
             "metadata": {"search_type": search_type, "answer_format": answer_format},
         }
+
+        # Add cited chunks if requested and available
+        if include_cited_chunks and cited_chunks:
+            result["cited_chunks"] = cited_chunks
+            logger.info(f"Included {len(cited_chunks)} cited chunks in response")
+
+        return result
 
     async def _apply_answer_format(self, answer: str, answer_format: str) -> str:
         """
@@ -1065,9 +1076,76 @@ Reformatted Answer (with all citations preserved):"""
         # Return default confidence if we have sources, otherwise reduce confidence
         return default_confidence if sources else default_confidence * 0.5
 
+    async def _fetch_chunk_contents(
+        self,
+        chunk_uuids: List[str],
+        collection_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch full text content for chunk UUIDs from PostgreSQL.
+
+        Args:
+            chunk_uuids: List of chunk UUIDs to fetch
+            collection_id: Collection ID
+
+        Returns:
+            List of dicts with {chunk_id, text, document_title, page, metadata}
+            Full chunk text is included without truncation
+        """
+        if not chunk_uuids:
+            return []
+
+        try:
+            # Fetch chunks from PostgreSQL using individual fetch (no bulk method available)
+            # Batch the requests to avoid overwhelming storage
+            chunk_data = []
+            batch_size = 100
+
+            for i in range(0, len(chunk_uuids), batch_size):
+                batch_uuids = chunk_uuids[i:i+batch_size]
+
+                for chunk_uuid in batch_uuids:
+                    try:
+                        # Fetch chunk using sync storage method in thread
+                        chunk = await asyncio.to_thread(
+                            self.storage.get_chunk_by_id,
+                            chunk_uuid
+                        )
+
+                        if chunk:
+                            # Extract chunk data with safe attribute access
+                            # DocumentChunk model has: id, chunk_text, chunk_metadata, document (relationship)
+                            # Try to get document title from related document if available
+                            doc_title = "Unknown"
+                            if hasattr(chunk, 'document') and chunk.document:
+                                doc_title = getattr(chunk.document, 'original_filename', 'Unknown')
+
+                            # Page number might be in chunk_metadata
+                            chunk_meta = getattr(chunk, 'chunk_metadata', {}) or {}
+                            page_num = chunk_meta.get('page_number') or chunk_meta.get('page')
+
+                            chunk_data.append({
+                                "chunk_id": getattr(chunk, 'id', chunk_uuid),
+                                "text": getattr(chunk, 'chunk_text', ''),  # FULL text, no truncation
+                                "document_title": doc_title,
+                                "page": page_num,
+                                "metadata": chunk_meta
+                            })
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch chunk {chunk_uuid}: {e}")
+                        continue
+
+            logger.info(f"Fetched {len(chunk_data)} / {len(chunk_uuids)} cited chunks with full content")
+            return chunk_data
+
+        except Exception as e:
+            logger.error(f"Failed to fetch chunk contents: {e}")
+            return []
+
     async def _trace_and_format_citations(
-        self, answer: str, collection_id: str, workspace_path: str, reranked_sources: List[Dict[str, Any]]
-    ) -> tuple[str, List[Dict[str, Any]]]:
+        self, answer: str, collection_id: str, workspace_path: str, reranked_sources: List[Dict[str, Any]],
+        include_cited_chunks: bool = False
+    ) -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         SERVER-SIDE: Trace GraphRAG citations to source documents and format with Harvard citations.
 
@@ -1076,9 +1154,10 @@ Reformatted Answer (with all citations preserved):"""
             collection_id: Collection ID
             workspace_path: Path to GraphRAG output directory (e.g., /data/.../output)
             reranked_sources: Sources that have been reranked (if enabled)
+            include_cited_chunks: If True, fetch and return full chunk content
 
         Returns:
-            Tuple of (formatted_answer, traced_sources)
+            Tuple of (formatted_answer, traced_sources, cited_chunks)
         """
         import re
         import os
@@ -1089,22 +1168,24 @@ Reformatted Answer (with all citations preserved):"""
 
         if not citation_contexts:
             # No citations to trace
-            return answer, reranked_sources
+            return answer, reranked_sources, []
 
         logger.info(f"Tracing {len(citation_contexts)} individual citations")
 
         # 2. SERVER-SIDE: Trace each citation individually to maintain citation→chunk mapping
-        citation_mappings, all_sources = await asyncio.to_thread(
+        citation_mappings, all_sources, cited_chunks = await asyncio.to_thread(
             self._trace_citations_individually,
             citation_contexts,
             workspace_path,
-            reranked_sources
+            reranked_sources,
+            include_cited_chunks,
+            collection_id
         )
 
         if not citation_mappings:
             logger.warning("Citation tracing failed or returned no mappings - returning raw answer without citations")
             # Return raw answer with GraphRAG's original inline citations and reranked sources
-            return answer, reranked_sources
+            return answer, reranked_sources, []
 
         logger.info(f"Traced {len(citation_mappings)} citations to {len(all_sources)} unique sources")
 
@@ -1112,7 +1193,7 @@ Reformatted Answer (with all citations preserved):"""
         # Also pass citation_contexts to remove low-quality/failed citations
         formatted_answer = self._apply_citation_mappings(answer, citation_mappings, citation_contexts)
 
-        return formatted_answer, all_sources
+        return formatted_answer, all_sources, cited_chunks
 
     def _trace_citations_server_side(
         self,
@@ -1356,16 +1437,26 @@ Reformatted Answer (with all citations preserved):"""
         self,
         citation_contexts: List[Dict[str, Any]],
         workspace_path: str,
-        reranked_sources: List[Dict[str, Any]]
-    ) -> tuple[Dict[str, str], List[Dict[str, Any]]]:
+        reranked_sources: List[Dict[str, Any]],
+        include_cited_chunks: bool = False,
+        collection_id: str = None
+    ) -> tuple[Dict[str, str], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Trace each citation individually to maintain citation→chunk→page mapping.
         OPTIMIZED for massive collections with batch operations.
 
+        Args:
+            citation_contexts: List of citation contexts to trace
+            workspace_path: Path to GraphRAG workspace
+            reranked_sources: List of reranked sources
+            include_cited_chunks: If True, fetch and return full chunk content
+            collection_id: Collection ID (required if include_cited_chunks=True)
+
         Returns:
-            Tuple of (citation_mappings, all_sources)
+            Tuple of (citation_mappings, all_sources, cited_chunks)
             - citation_mappings: {marker: harvard_citation}
             - all_sources: List of unique source documents referenced
+            - cited_chunks: List of chunk content dicts (empty if include_cited_chunks=False)
         """
         import pandas as pd
         import os
@@ -1385,6 +1476,7 @@ Reformatted Answer (with all citations preserved):"""
         # Load required parquet files once (cached in memory for all citations)
         communities_df = load_parquet_safe("communities.parquet")
         entities_df = load_parquet_safe("entities.parquet")
+        relationships_df = load_parquet_safe("relationships.parquet")
         text_units_df = load_parquet_safe("text_units.parquet")
         documents_df = load_parquet_safe("documents.parquet")
 
@@ -1437,42 +1529,60 @@ Reformatted Answer (with all citations preserved):"""
             cit_type = citation["type"]
             ids = citation["ids"]
 
-            # Step 1: Get entity IDs for this specific citation
-            entity_ids = set()
-            if cit_type == "Reports":
-                comm_mask = communities_df["community"].isin(ids)
-                for entity_list in communities_df[comm_mask]["entity_ids"]:
-                    if entity_list is not None and len(entity_list) > 0:
-                        entity_ids.update(entity_list)
-            elif cit_type == "Entities":
-                entity_ids.update(ids)
-
-            if not entity_ids:
-                logger.debug(f"Citation {marker}: No entity IDs found for {cit_type} {ids}")
-                continue
-
-            # Step 2: Get text units for these specific entities
-            # CRITICAL: Citations use short_id (human_readable_id), not id!
-            # GraphRAG shows short_id to LLM in context, so citations contain short_id values
+            # Step 1: Get text unit IDs based on citation type
             text_unit_ids = set()
-            entity_mask = entities_df["human_readable_id"].isin(entity_ids)
-            matched_entities = entities_df[entity_mask]
-            logger.debug(f"Citation {marker}: {len(entity_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
 
-            if len(matched_entities) == 0:
-                logger.warning(f"Citation {marker}: None of the {len(entity_ids)} entity short_ids found in entities DataFrame")
-                logger.warning(f"  Citation short_ids: {sorted(list(entity_ids))[:10]}")
-                logger.warning(f"  DataFrame human_readable_id range: {entities_df['human_readable_id'].min()} - {entities_df['human_readable_id'].max()}")
-                logger.warning(f"  DataFrame entity count: {len(entities_df)}")
-                logger.warning(f"  Sample DataFrame human_readable_ids: {sorted(entities_df['human_readable_id'].dropna().head(10).tolist())}")
-                continue
+            if cit_type == "Relationships":
+                # Direct lookup of relationships by human_readable_id
+                if relationships_df is not None:
+                    rel_mask = relationships_df["human_readable_id"].isin(ids)
+                    matched_rels = relationships_df[rel_mask]
+                    logger.debug(f"Citation {marker}: {len(ids)} relationship IDs → {len(matched_rels)} matched")
 
-            for tu_list in matched_entities["text_unit_ids"]:
-                if tu_list is not None and len(tu_list) > 0:
-                    text_unit_ids.update(tu_list)
+                    for tu_list in matched_rels["text_unit_ids"]:
+                        if tu_list is not None and len(tu_list) > 0:
+                            text_unit_ids.update(tu_list)
+                else:
+                    logger.warning(f"Citation {marker}: Relationships DataFrame not loaded")
+                    continue
 
+            else:
+                # For Reports and Entities, get entity IDs first, then text units
+                entity_ids = set()
+                if cit_type == "Reports":
+                    comm_mask = communities_df["community"].isin(ids)
+                    for entity_list in communities_df[comm_mask]["entity_ids"]:
+                        if entity_list is not None and len(entity_list) > 0:
+                            entity_ids.update(entity_list)
+                elif cit_type == "Entities":
+                    entity_ids.update(ids)
+
+                if not entity_ids:
+                    logger.debug(f"Citation {marker}: No entity IDs found for {cit_type} {ids}")
+                    continue
+
+                # Step 2: Get text units for these specific entities
+                # CRITICAL: Citations use short_id (human_readable_id), not id!
+                # GraphRAG shows short_id to LLM in context, so citations contain short_id values
+                entity_mask = entities_df["human_readable_id"].isin(entity_ids)
+                matched_entities = entities_df[entity_mask]
+                logger.debug(f"Citation {marker}: {len(entity_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
+
+                if len(matched_entities) == 0:
+                    logger.warning(f"Citation {marker}: None of the {len(entity_ids)} entity short_ids found in entities DataFrame")
+                    logger.warning(f"  Citation short_ids: {sorted(list(entity_ids))[:10]}")
+                    logger.warning(f"  DataFrame human_readable_id range: {entities_df['human_readable_id'].min()} - {entities_df['human_readable_id'].max()}")
+                    logger.warning(f"  DataFrame entity count: {len(entities_df)}")
+                    logger.warning(f"  Sample DataFrame human_readable_ids: {sorted(entities_df['human_readable_id'].dropna().head(10).tolist())}")
+                    continue
+
+                for tu_list in matched_entities["text_unit_ids"]:
+                    if tu_list is not None and len(tu_list) > 0:
+                        text_unit_ids.update(tu_list)
+
+            # Check if we found any text units (applies to all citation types)
             if not text_unit_ids:
-                logger.warning(f"Citation {marker}: {len(matched_entities)} entities matched but no text_unit_ids found")
+                logger.warning(f"Citation {marker}: No text_unit_ids found for {cit_type} citation with IDs {ids}")
                 continue
 
             citation_to_text_units[marker] = text_unit_ids
@@ -1704,9 +1814,10 @@ Reformatted Answer (with all citations preserved):"""
                 best_similarity = sum(sources_by_doc[best_doc_title]["similarities"]) / len(sources_by_doc[best_doc_title]["similarities"])
 
                 # QUALITY THRESHOLD: Only include citations with reasonable similarity
-                # With citation-specific filtering, we can be more lenient (0.65+)
+                # With citation-specific filtering, we can be more lenient (0.55+)
                 # GraphRAG already filtered to relevant entities, so moderate similarity is acceptable
-                SIMILARITY_THRESHOLD = 0.65
+                # Lowered from 0.65 to 0.55 to include more relevant citations
+                SIMILARITY_THRESHOLD = 0.55
                 if best_similarity < SIMILARITY_THRESHOLD:
                     logger.warning(f"Citation {marker} has low similarity ({best_similarity:.3f} < {SIMILARITY_THRESHOLD}) - excluding citation")
                     # Don't add to citation_mappings - marker will be removed from text
@@ -1745,7 +1856,46 @@ Reformatted Answer (with all citations preserved):"""
             logger.info(f"Matched citation {marker} → {doc_name} (pages: {best_source.get('pages', [])})")
 
         all_sources = list(all_sources_dict.values())
-        return citation_mappings, all_sources
+
+        # Collect cited chunks if requested
+        cited_chunks = []
+        if include_cited_chunks and collection_id:
+            # Collect all chunk UUIDs that were actually cited
+            all_cited_chunk_uuids = set()
+            for source in all_sources:
+                chunk_uuids = source.get("chunk_uuids", [])
+                all_cited_chunk_uuids.update(chunk_uuids)
+
+            if all_cited_chunk_uuids:
+                logger.info(f"Fetching full content for {len(all_cited_chunk_uuids)} cited chunks...")
+                # Fetch chunk contents - need to use asyncio.run since this is a sync method
+                # but _fetch_chunk_contents is async
+                try:
+                    import asyncio
+                    # Check if we're already in an event loop
+                    # This should NOT happen since we're called via asyncio.to_thread()
+                    # which isolates us from the parent loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # Unexpected: We're in an event loop
+                        logger.error(
+                            f"UNEXPECTED: Already in event loop while fetching cited chunks. "
+                            f"This indicates asyncio.to_thread() isolation failed. "
+                            f"Cannot fetch {len(all_cited_chunk_uuids)} chunks - returning empty."
+                        )
+                        # Return empty rather than risk deadlock
+                        cited_chunks = []
+                    except RuntimeError:
+                        # Expected: No event loop - safe to use asyncio.run()
+                        cited_chunks = asyncio.run(
+                            self._fetch_chunk_contents(list(all_cited_chunk_uuids), collection_id)
+                        )
+                        logger.info(f"Successfully fetched content for {len(cited_chunks)} cited chunks")
+                except Exception as e:
+                    logger.error(f"Failed to fetch cited chunk contents: {e}", exc_info=True)
+                    cited_chunks = []
+
+        return citation_mappings, all_sources, cited_chunks
 
     def _batch_fetch_chunks(self, chunk_uuids: List[str]) -> Dict[str, Any]:
         """
