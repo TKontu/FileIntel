@@ -1393,17 +1393,17 @@ Reformatted Answer (with all citations preserved):"""
             return {}, []
 
         # CRITICAL: Ensure ID columns are consistent types for lookups
-        # GraphRAG citations use int IDs, but parquet files may have string IDs
-        logger.debug(f"Entity ID column type: {entities_df['id'].dtype}")
+        # GraphRAG citations use int short_ids (human_readable_id), not the UUID id field
+        logger.debug(f"Entity human_readable_id column type: {entities_df['human_readable_id'].dtype}")
         logger.debug(f"Community column type: {communities_df['community'].dtype if 'community' in communities_df.columns else 'N/A'}")
 
-        # Convert ID columns to int for consistent lookups
+        # Convert human_readable_id to int for consistent lookups (citations are int)
         try:
-            if entities_df['id'].dtype == 'object' or entities_df['id'].dtype == 'string':
-                entities_df['id'] = pd.to_numeric(entities_df['id'], errors='coerce').astype('Int64')
-                logger.info(f"Converted entities_df['id'] from {entities_df['id'].dtype} to Int64")
+            if entities_df['human_readable_id'].dtype == 'object' or entities_df['human_readable_id'].dtype == 'string':
+                entities_df['human_readable_id'] = pd.to_numeric(entities_df['human_readable_id'], errors='coerce').astype('Int64')
+                logger.info(f"Converted entities_df['human_readable_id'] to Int64")
         except Exception as e:
-            logger.warning(f"Failed to convert entity IDs to numeric: {e}")
+            logger.warning(f"Failed to convert entity human_readable_ids to numeric: {e}")
 
         try:
             if 'community' in communities_df.columns:
@@ -1452,15 +1452,19 @@ Reformatted Answer (with all citations preserved):"""
                 continue
 
             # Step 2: Get text units for these specific entities
+            # CRITICAL: Citations use short_id (human_readable_id), not id!
+            # GraphRAG shows short_id to LLM in context, so citations contain short_id values
             text_unit_ids = set()
-            entity_mask = entities_df["id"].isin(entity_ids)
+            entity_mask = entities_df["human_readable_id"].isin(entity_ids)
             matched_entities = entities_df[entity_mask]
-            logger.debug(f"Citation {marker}: {len(entity_ids)} entity IDs → {len(matched_entities)} matched in DataFrame")
+            logger.debug(f"Citation {marker}: {len(entity_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
 
             if len(matched_entities) == 0:
-                logger.warning(f"Citation {marker}: None of the {len(entity_ids)} entity IDs found in entities DataFrame")
-                logger.debug(f"Sample entity IDs from citation: {list(entity_ids)[:5]}")
-                logger.debug(f"Sample entity IDs from DataFrame: {entities_df['id'].head().tolist()}")
+                logger.warning(f"Citation {marker}: None of the {len(entity_ids)} entity short_ids found in entities DataFrame")
+                logger.warning(f"  Citation short_ids: {sorted(list(entity_ids))[:10]}")
+                logger.warning(f"  DataFrame human_readable_id range: {entities_df['human_readable_id'].min()} - {entities_df['human_readable_id'].max()}")
+                logger.warning(f"  DataFrame entity count: {len(entities_df)}")
+                logger.warning(f"  Sample DataFrame human_readable_ids: {sorted(entities_df['human_readable_id'].dropna().head(10).tolist())}")
                 continue
 
             for tu_list in matched_entities["text_unit_ids"]:
