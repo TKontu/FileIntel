@@ -108,6 +108,17 @@ class CitationFormatter:
                         return f"({author_surname}, {year}, p. {page_number})"
                 elif author_surname and year:
                     return f"({author_surname}, {year})"
+                elif author_surname and page_number:
+                    # Author without year, but WITH page number - still include the page!
+                    if isinstance(page_number, str):
+                        if "-" in page_number:
+                            return f"({author_surname}, pp. {page_number})"
+                        elif "," in page_number:
+                            return f"({author_surname}, pp. {page_number})"
+                        else:
+                            return f"({author_surname}, p. {page_number})"
+                    else:
+                        return f"({author_surname}, p. {page_number})"
                 elif author_surname:
                     return f"({author_surname})"
 
