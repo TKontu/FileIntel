@@ -29,6 +29,12 @@ def query_collection(
         "-f",
         help="Answer format: 'default', 'single_paragraph', 'table', 'list', 'json', 'essay', or 'markdown'."
     ),
+    include_chunks: bool = typer.Option(
+        False,
+        "--include-chunks",
+        "-c",
+        help="Include full text content of cited chunks in the response."
+    ),
 ):
     """Query a collection with a question using RAG."""
 
@@ -46,7 +52,8 @@ def query_collection(
         payload = {
             "question": question,
             "search_type": search_type,
-            "answer_format": answer_format
+            "answer_format": answer_format,
+            "include_cited_chunks": include_chunks
         }
         return api._request(
             "POST", f"collections/{collection_identifier}/query", json=payload
@@ -104,6 +111,30 @@ def query_collection(
             else:
                 cli_handler.console.print(f"  {i}. {full_citation} (relevance: {relevance:.3f})")
 
+    # Show cited chunks if available and requested
+    cited_chunks = response_data.get("cited_chunks", [])
+    if cited_chunks:
+        cli_handler.console.print(f"\n[bold blue]Cited Chunks ({len(cited_chunks)}):[/bold blue]")
+        for i, chunk in enumerate(cited_chunks, 1):
+            doc_title = chunk.get("document_title", "Unknown")
+            page = chunk.get("page")
+            chunk_text = chunk.get("text", "")
+
+            # Header with document and page info
+            header = f"[cyan]{i}. {doc_title}[/cyan]"
+            if page:
+                header += f" [dim](page {page})[/dim]"
+            cli_handler.console.print(f"\n  {header}")
+
+            # Display chunk text with smart truncation for CLI readability
+            # Show first 500 chars, or full text if shorter
+            if len(chunk_text) > 500:
+                display_text = chunk_text[:500] + "..."
+                cli_handler.console.print(f"  [dim]{display_text}[/dim]")
+                cli_handler.console.print(f"  [dim italic](truncated, full length: {len(chunk_text)} chars)[/dim italic]")
+            else:
+                cli_handler.console.print(f"  [dim]{chunk_text}[/dim]")
+
 
 @app.command("document")
 def query_document(
@@ -118,6 +149,12 @@ def query_document(
         "-f",
         help="Answer format: 'default', 'single_paragraph', 'table', 'list', 'json', 'essay', or 'markdown'."
     ),
+    include_chunks: bool = typer.Option(
+        False,
+        "--include-chunks",
+        "-c",
+        help="Include full text content of cited chunks in the response."
+    ),
 ):
     """Query a specific document with a question."""
 
@@ -125,7 +162,8 @@ def query_document(
         payload = {
             "question": question,
             "search_type": "vector",  # Document queries use vector search
-            "answer_format": answer_format
+            "answer_format": answer_format,
+            "include_cited_chunks": include_chunks
         }
         return api._request(
             "POST",
@@ -175,6 +213,30 @@ def query_document(
             text = source.get("text", "")
             similarity = source.get("similarity_score", 0)
             cli_handler.console.print(f"  {i}. {text} (similarity: {similarity:.3f})")
+
+    # Show cited chunks if available and requested
+    cited_chunks = response_data.get("cited_chunks", [])
+    if cited_chunks:
+        cli_handler.console.print(f"\n[bold blue]Cited Chunks ({len(cited_chunks)}):[/bold blue]")
+        for i, chunk in enumerate(cited_chunks, 1):
+            doc_title = chunk.get("document_title", "Unknown")
+            page = chunk.get("page")
+            chunk_text = chunk.get("text", "")
+
+            # Header with document and page info
+            header = f"[cyan]{i}. {doc_title}[/cyan]"
+            if page:
+                header += f" [dim](page {page})[/dim]"
+            cli_handler.console.print(f"\n  {header}")
+
+            # Display chunk text with smart truncation for CLI readability
+            # Show first 500 chars, or full text if shorter
+            if len(chunk_text) > 500:
+                display_text = chunk_text[:500] + "..."
+                cli_handler.console.print(f"  [dim]{display_text}[/dim]")
+                cli_handler.console.print(f"  [dim italic](truncated, full length: {len(chunk_text)} chars)[/dim italic]")
+            else:
+                cli_handler.console.print(f"  [dim]{chunk_text}[/dim]")
 
 
 @app.command("system-status")

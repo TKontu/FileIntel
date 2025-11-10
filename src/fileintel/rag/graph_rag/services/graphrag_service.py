@@ -150,45 +150,23 @@ class GraphRAGService:
         # Extract response from dict (global_search returns a dict from data_adapter)
         if isinstance(raw_response, dict):
             answer = raw_response.get("response", str(raw_response))
-
-            # Debug: Log what's in the context
             context = raw_response.get("context", {})
             logger.info(f"GraphRAG context type: {type(context)}, keys: {context.keys() if isinstance(context, dict) else 'N/A'}")
-
-            # Extract sources from context (check each key individually to avoid DataFrame boolean ambiguity)
-            sources = []
-            if isinstance(context, dict):
-                # Try common field names
-                for key in ["reports", "data", "sources"]:
-                    if key in context:
-                        potential_sources = context[key]
-                        # Convert DataFrame to list of dicts if needed
-                        import pandas as pd
-                        if isinstance(potential_sources, pd.DataFrame):
-                            sources = potential_sources.to_dict('records')
-                            logger.info(f"Extracted {len(sources)} sources from context['{key}'] (DataFrame)")
-                            break
-                        elif potential_sources and len(potential_sources) > 0:
-                            sources = potential_sources
-                            logger.info(f"Extracted {len(sources)} sources from context['{key}']")
-                            break
-            else:
-                # Context might be a SearchResult object
-                sources = getattr(context, "reports", []) or getattr(context, "data", []) or []
         else:
             answer = getattr(raw_response, "response", str(raw_response))
-            sources = getattr(raw_response, "context_data", [])
-            logger.info(f"Extracted {len(sources)} sources from context_data")
+            context = {}
 
-        logger.info(f"Total sources before reranking: {len(sources)}")
+        # ========================================================================
+        # PRIORITY 1: Citation Tracing (Primary Method)
+        # ========================================================================
+        # Try citation tracing first - traces specific citations in the answer
+        # to specific source documents. Most precise method.
 
-        # Rerank sources if enabled
-        sources = await self._rerank_sources_if_enabled(query, sources)
-
-        # SERVER-SIDE: Trace citations and format answer with Harvard references
         formatted_answer = answer
-        traced_sources = sources
+        traced_sources = []
         cited_chunks = []
+        citation_tracing_succeeded = False
+
         try:
             # Get workspace path for this collection
             index_info = await asyncio.to_thread(
@@ -197,16 +175,70 @@ class GraphRAGService:
 
             if index_info and index_info.get("index_path"):
                 workspace_path = index_info["index_path"]
+                logger.info("🎯 Using citation tracing (PRIMARY method)")
+
+                # Citation tracing doesn't need context sources - it builds sources from citations
                 formatted_answer, traced_sources, cited_chunks = await self._trace_and_format_citations(
-                    answer, collection_id, workspace_path, sources, include_cited_chunks
+                    answer, collection_id, workspace_path, [], include_cited_chunks
                 )
+
+                if traced_sources:
+                    citation_tracing_succeeded = True
+                    logger.info(f"✅ Citation tracing succeeded: {len(traced_sources)} sources traced from answer citations")
+                else:
+                    logger.warning("⚠️ Citation tracing returned no sources - will use fallback")
             else:
-                logger.warning(f"Citation tracing skipped: No index_path found for collection {collection_id}")
+                logger.info(f"ℹ️ Citation tracing unavailable: No index_path found for collection {collection_id}")
+
         except Exception as e:
             import traceback
-            logger.error(f"Citation tracing failed: {e}")
+            logger.error(f"❌ Citation tracing failed: {e}")
             logger.debug(f"Citation tracing traceback: {traceback.format_exc()}")
-            # Fallback to raw answer if tracing fails
+
+        # ========================================================================
+        # PRIORITY 2: Context Sources (Fallback Method)
+        # ========================================================================
+        # If citation tracing didn't work, fall back to sources from GraphRAG context
+
+        if not citation_tracing_succeeded:
+            logger.info("🔄 Using context sources (FALLBACK method)")
+
+            # Extract sources from context
+            # PRIORITY ORDER: sources > reports > data
+            # - sources: Actual source documents (best fallback)
+            # - reports: Community summaries (metadata only, not actual documents)
+            # - data: Generic fallback field
+            context_sources = []
+
+            if isinstance(context, dict):
+                # Try common field names in priority order
+                for key in ["sources", "reports", "data"]:
+                    if key in context:
+                        potential_sources = context[key]
+                        # Convert DataFrame to list of dicts if needed
+                        import pandas as pd
+                        if isinstance(potential_sources, pd.DataFrame):
+                            context_sources = potential_sources.to_dict('records')
+                            logger.info(f"Extracted {len(context_sources)} sources from context['{key}'] (DataFrame)")
+                            break
+                        elif potential_sources and len(potential_sources) > 0:
+                            context_sources = potential_sources
+                            logger.info(f"Extracted {len(context_sources)} sources from context['{key}']")
+                            break
+            else:
+                # Context might be a SearchResult object
+                context_sources = getattr(context, "sources", []) or getattr(context, "reports", []) or getattr(context, "data", []) or []
+
+            # Rerank context sources if enabled
+            context_sources = await self._rerank_sources_if_enabled(query, context_sources)
+
+            # Use context sources as fallback
+            traced_sources = context_sources
+
+            if traced_sources:
+                logger.info(f"✅ Using {len(traced_sources)} context sources as fallback")
+            else:
+                logger.warning("⚠️ No sources available from context or citation tracing")
 
         # Calculate confidence based on result quality
         confidence = self._calculate_confidence(raw_response, traced_sources)
@@ -1842,18 +1874,50 @@ Reformatted Answer (with all citations preserved):"""
             harvard_citation = self._build_harvard_citation(best_source, reranked_sources)
             citation_mappings[marker] = harvard_citation
 
+            # Enrich source with citation fields for proper display (matches Vector RAG format)
+            from fileintel.citation import format_in_text_citation
+
+            # Build chunk-like dict for in-text citation
+            chunk_data_for_citation = {
+                "document_id": best_source.get("document_id"),
+                "document_metadata": {},  # Metadata already used in harvard_citation
+                "original_filename": best_doc_title,
+                "chunk_metadata": {"pages": best_source.get("pages", [])}
+            }
+            in_text_citation = format_in_text_citation(chunk_data_for_citation)
+
+            # Add citation fields to source
+            best_source["citation"] = harvard_citation
+            best_source["in_text_citation"] = in_text_citation
+            best_source["similarity_score"] = best_similarity
+            best_source["relevance_score"] = best_similarity  # CLI compatibility
+            best_source["filename"] = best_doc_title  # CLI/API compatibility
+
             # Add to all_sources (deduplicate by document name)
             doc_name = best_source.get("document_name")
             if doc_name not in all_sources_dict:
                 all_sources_dict[doc_name] = best_source
             else:
-                # Merge pages and chunks
+                # Merge pages and chunks, keep highest similarity score
                 existing = all_sources_dict[doc_name]
-                existing["pages"] = sorted(list(set(existing.get("pages", []) + best_source.get("pages", []))))[:5]
+                merged_pages = sorted(list(set(existing.get("pages", []) + best_source.get("pages", []))))[:5]
+                existing["pages"] = merged_pages
                 existing["chunk_uuids"] = list(set(existing.get("chunk_uuids", []) + best_source.get("chunk_uuids", [])))
                 existing["chunk_count"] = len(existing["chunk_uuids"])
+                # Update similarity to highest score
+                existing["similarity_score"] = max(existing.get("similarity_score", 0), best_similarity)
+                existing["relevance_score"] = existing["similarity_score"]
 
-            logger.info(f"Matched citation {marker} → {doc_name} (pages: {best_source.get('pages', [])})")
+                # Regenerate in_text_citation with merged pages
+                chunk_data_for_merged = {
+                    "document_id": existing.get("document_id"),
+                    "document_metadata": {},
+                    "original_filename": doc_name,
+                    "chunk_metadata": {"pages": merged_pages}
+                }
+                existing["in_text_citation"] = format_in_text_citation(chunk_data_for_merged)
+
+            logger.info(f"Matched citation {marker} → {doc_name} (pages: {best_source.get('pages', [])}, similarity: {best_similarity:.3f})")
 
         all_sources = list(all_sources_dict.values())
 
