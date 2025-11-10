@@ -391,26 +391,53 @@ def query_graph_local(self, query: str, collection_id: str, answer_format: str =
         # Perform local search using GraphRAG service's query() method
         # This calls local_search() internally + applies citation tracing and formatting
         #
-        # GraphRAG's local_search is async but contains blocking sync operations
-        # (embedding API calls, LanceDB queries). Celery already has an event loop running,
-        # so we use nest_asyncio to allow nested loops for this specific use case.
+        # GraphRAG's local_search uses LanceDB which has async operations that create
+        # futures attached to different loops. Solution: Run in a worker thread with
+        # a completely fresh event loop, isolated from Celery's loop.
         import asyncio
-        try:
-            import nest_asyncio
-            nest_asyncio.apply()
-            logger.info("Applied nest_asyncio to allow nested event loops for GraphRAG")
-        except ImportError:
-            logger.warning("nest_asyncio not installed, trying without it (may fail)")
+        import concurrent.futures
+        import threading
 
-        # Now we can safely use asyncio.run() even though Celery has a loop running
-        search_result = asyncio.run(
-            graphrag_service.query(
-                query,
-                collection_id,
-                search_type="local",
-                answer_format=answer_format
-            )
-        )
+        search_result_container = {}
+        error_container = {}
+
+        def run_in_new_thread():
+            """Run local search in a thread with its own isolated event loop."""
+            try:
+                # Create a new event loop for this thread (no parent loop)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(
+                        graphrag_service.query(
+                            query,
+                            collection_id,
+                            search_type="local",
+                            answer_format=answer_format
+                        )
+                    )
+                    search_result_container['result'] = result
+                finally:
+                    loop.close()
+            except Exception as e:
+                error_container['error'] = e
+                logger.error(f"Error in local search thread: {e}", exc_info=True)
+
+        # Run in a thread and wait for completion
+        thread = threading.Thread(target=run_in_new_thread)
+        thread.start()
+        thread.join(timeout=600)  # 10 minute timeout
+
+        if thread.is_alive():
+            raise TimeoutError("Local search timed out after 10 minutes")
+
+        if 'error' in error_container:
+            raise error_container['error']
+
+        if 'result' not in search_result_container:
+            raise RuntimeError("Local search completed but no result returned")
+
+        search_result = search_result_container['result']
 
         self.update_progress(2, 3, "Processing query results")
 
