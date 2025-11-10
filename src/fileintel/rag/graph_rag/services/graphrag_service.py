@@ -722,10 +722,12 @@ Reformatted Answer (with all citations preserved):"""
         logger.info(f"🔍 Starting local_search() call for query: '{query[:50]}...'")
         logger.info(f"📊 DataFrames loaded - entities: {len(dataframes['entities'])}, communities: {len(dataframes['communities'])}, text_units: {len(dataframes.get('text_units', []))}")
 
-        # WORKAROUND: local_search internally calls text_embedder.embed() synchronously
-        # which blocks the event loop. To prevent hanging, we pre-compute the query
-        # embedding asynchronously, which warms up the cache/connection so the sync
-        # call inside local_search completes faster and doesn't deadlock.
+        # WORKAROUND: local_search has multiple blocking synchronous operations:
+        # 1. text_embedder.embed() - synchronous embedding API call
+        # 2. LanceDB similarity_search_by_vector() - synchronous vector database query
+        #
+        # We pre-compute the embedding to warm up the connection, then run the entire
+        # local_search in a thread pool since it contains blocking I/O operations
         logger.info("Pre-computing query embedding to avoid blocking...")
         try:
             # Get query embedding async to warm up the embedding service
@@ -738,20 +740,35 @@ Reformatted Answer (with all citations preserved):"""
         except Exception as e:
             logger.warning(f"Failed to pre-compute embedding: {e}, continuing anyway")
 
-        # Now call local_search - it will still block briefly on the embedding call,
-        # but the connection is warmed up and it should complete quickly
-        result, context = await local_search(
-            config=graphrag_config,
-            entities=dataframes["entities"],
-            communities=dataframes["communities"],
-            community_reports=dataframes["community_reports"],
-            text_units=dataframes.get("text_units"),
-            relationships=dataframes.get("relationships"),
-            covariates=covariates,
-            community_level=self.settings.graphrag.community_levels,
-            response_type="text",
-            query=query,
-        )
+        # Run local_search in thread pool because it contains blocking operations:
+        # - build_context() -> map_query_to_entities() -> similarity_search_by_text()
+        #   -> text_embedder.embed() (blocking API call)
+        #   -> LanceDB vector search (blocking DB I/O)
+        logger.info("Running local_search in thread pool to avoid blocking event loop...")
+
+        def run_local_search_sync():
+            """Run the async local_search in a sync context."""
+            import asyncio
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(local_search(
+                    config=graphrag_config,
+                    entities=dataframes["entities"],
+                    communities=dataframes["communities"],
+                    community_reports=dataframes["community_reports"],
+                    text_units=dataframes.get("text_units"),
+                    relationships=dataframes.get("relationships"),
+                    covariates=covariates,
+                    community_level=self.settings.graphrag.community_levels,
+                    response_type="text",
+                    query=query,
+                ))
+            finally:
+                loop.close()
+
+        result, context = await asyncio.to_thread(run_local_search_sync)
 
         logger.info(f"✅ local_search() completed successfully")
 
