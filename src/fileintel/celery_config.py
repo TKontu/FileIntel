@@ -763,18 +763,7 @@ def shutdown_worker_process(sender=None, **kwargs):
     _shared_engine = None
     _shared_session_factory = None
 
-    # Aggressive memory cleanup to prevent fork failures
-    # Force multiple GC passes to free all unreachable objects
-    for _ in range(3):
-        gc.collect()
-
-    # Try to return memory to OS (Python 3.13+, gracefully fails on older versions)
-    try:
-        import sys
-        if hasattr(sys, 'getallocatedblocks'):
-            # Clear any remaining memory pools
-            gc.collect(2)  # Full collection of all generations
-    except Exception:
-        pass
+    # Force garbage collection to free memory
+    gc.collect()
 
     logger.info(f"Worker process cleanup complete (PID: {os.getpid()})")

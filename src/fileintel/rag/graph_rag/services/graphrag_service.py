@@ -1537,43 +1537,13 @@ Reformatted Answer (with all citations preserved):"""
 
         # CRITICAL: Ensure ID columns are consistent types for lookups
         # GraphRAG citations use int short_ids (human_readable_id), not the UUID id field
+        # SAFETY: Don't modify DataFrames - convert lookup values instead to avoid SIGSEGV
+        # Log types for debugging
         logger.debug(f"Entity human_readable_id column type: {entities_df['human_readable_id'].dtype}")
         logger.debug(f"Community column type: {communities_df['community'].dtype if 'community' in communities_df.columns else 'N/A'}")
         logger.debug(f"Text unit ID column type: {text_units_df['id'].dtype if 'id' in text_units_df.columns else 'N/A'}")
-
-        # Convert text_units_df['id'] to int for Sources citations (which provide integer text unit IDs)
-        try:
-            if 'id' in text_units_df.columns:
-                if text_units_df['id'].dtype == 'object' or text_units_df['id'].dtype == 'string':
-                    text_units_df['id'] = pd.to_numeric(text_units_df['id'], errors='coerce').astype('Int64')
-                    logger.info(f"Converted text_units_df['id'] to Int64")
-        except Exception as e:
-            logger.warning(f"Failed to convert text unit IDs to numeric: {e}")
-
-        # Convert human_readable_id to int for consistent lookups (citations are int)
-        try:
-            if entities_df['human_readable_id'].dtype == 'object' or entities_df['human_readable_id'].dtype == 'string':
-                entities_df['human_readable_id'] = pd.to_numeric(entities_df['human_readable_id'], errors='coerce').astype('Int64')
-                logger.info(f"Converted entities_df['human_readable_id'] to Int64")
-        except Exception as e:
-            logger.warning(f"Failed to convert entity human_readable_ids to numeric: {e}")
-
-        try:
-            if 'community' in communities_df.columns:
-                if communities_df['community'].dtype == 'object' or communities_df['community'].dtype == 'string':
-                    communities_df['community'] = pd.to_numeric(communities_df['community'], errors='coerce').astype('Int64')
-                    logger.info(f"Converted communities_df['community'] to Int64")
-        except Exception as e:
-            logger.warning(f"Failed to convert community IDs to numeric: {e}")
-
-        # Also convert relationships['human_readable_id'] for Relationships citations
-        try:
-            if relationships_df is not None and 'human_readable_id' in relationships_df.columns:
-                if relationships_df['human_readable_id'].dtype == 'object' or relationships_df['human_readable_id'].dtype == 'string':
-                    relationships_df['human_readable_id'] = pd.to_numeric(relationships_df['human_readable_id'], errors='coerce').astype('Int64')
-                    logger.info(f"Converted relationships_df['human_readable_id'] to Int64")
-        except Exception as e:
-            logger.warning(f"Failed to convert relationship human_readable_ids to numeric: {e}")
+        if relationships_df is not None:
+            logger.debug(f"Relationship human_readable_id column type: {relationships_df['human_readable_id'].dtype if 'human_readable_id' in relationships_df.columns else 'N/A'}")
 
         # OPTIMIZATION 1a: Calculate information density for all text units
         # Density = number of entities + relationships (semantic richness indicator)
