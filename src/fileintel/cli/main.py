@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from . import collections, documents, tasks, query, graphrag, metadata, cite
+from . import collections, documents, tasks, query, graphrag, metadata, cite, plagiarism
 from .shared import cli_handler
 
 app = typer.Typer(
@@ -32,6 +32,7 @@ app.add_typer(query.app, name="query", help="Query collections using RAG.")
 app.add_typer(graphrag.app, name="graphrag", help="GraphRAG operations.")
 app.add_typer(metadata.app, name="metadata", help="Extract and manage document metadata.")
 app.add_typer(cite.app, name="cite", help="Generate citations for text segments.")
+app.add_typer(plagiarism.app, name="plagiarism", help="Detect plagiarism in documents.")
 
 
 @app.command("version")

@@ -856,3 +856,491 @@ def generate_citation(
             "error_type": "internal_error",
             "status": "failed",
         }
+
+
+@app.task(
+    base=BaseFileIntelTask,
+    name="fileintel.tasks.inject_citation",
+    max_retries=3,
+    default_retry_delay=60,
+    rate_limit=LLM_RATE_LIMIT,
+    acks_late=True,
+)
+def inject_citation_task(
+    self,
+    text_segment: str,
+    collection_id: str,
+    document_id: Optional[str] = None,
+    min_similarity: Optional[float] = None,
+    top_k: Optional[int] = None,
+    insertion_style: str = "footnote",
+    include_full_citation: bool = False,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Inject citation into text segment.
+
+    Finds the best matching source and injects a Harvard citation into the text
+    using the specified insertion style.
+
+    Args:
+        text_segment: Text to annotate (10-10000 chars)
+        collection_id: Collection to search in
+        document_id: Optional specific document to search within
+        min_similarity: Minimum similarity threshold (0.0-1.0)
+        top_k: Number of candidates to retrieve
+        insertion_style: 'inline', 'footnote', 'endnote', or 'markdown_link'
+        include_full_citation: Include full citation text
+        **kwargs: Additional parameters
+
+    Returns:
+        Dict containing:
+        - annotated_text: Text with citation injected
+        - original_text: Original input text
+        - citation: {in_text, full, style}
+        - source: {document_id, chunk_id, similarity_score, ...}
+        - confidence: "high"|"medium"|"low"
+        - insertion_style: Style used
+        - character_positions: {start, end}
+        - status: "completed" or "failed"
+    """
+    self.validate_input(
+        ["text_segment", "collection_id"],
+        text_segment=text_segment,
+        collection_id=collection_id
+    )
+
+    config = get_config()
+
+    try:
+        self.update_progress(0, 4, "Initializing citation injection")
+
+        from fileintel.celery_config import get_shared_storage
+        from fileintel.services.citation_service import CitationGenerationService
+
+        storage = get_shared_storage()
+
+        try:
+            self.update_progress(1, 4, "Finding source for citation")
+
+            # Use existing citation service to find source
+            citation_service = CitationGenerationService(config, storage)
+            citation_result = citation_service.generate_citation(
+                text_segment=text_segment,
+                collection_id=collection_id,
+                document_id=document_id,
+                min_similarity=min_similarity,
+                top_k=top_k,
+                include_llm_analysis=False  # Not needed for injection
+            )
+
+            # Check if citation generation failed
+            if citation_result.get("status") == "failed":
+                return {
+                    "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+                    "error": citation_result.get("error", "Citation generation failed"),
+                    "error_type": citation_result.get("error_type", "citation_failed"),
+                    "status": "failed"
+                }
+
+            self.update_progress(2, 4, "Formatting citation injection")
+
+            # Extract citation and source info
+            citation = citation_result["citation"]
+            source = citation_result["source"]
+            confidence = citation_result["confidence"]
+
+            # Inject citation based on style
+            annotated_text, start_pos, end_pos = _inject_citation_into_text(
+                text_segment,
+                citation,
+                insertion_style,
+                include_full_citation
+            )
+
+            self.update_progress(3, 4, "Building response")
+
+            result = {
+                "annotated_text": annotated_text,
+                "original_text": text_segment,
+                "citation": citation,
+                "source": source,
+                "confidence": confidence,
+                "insertion_style": insertion_style,
+                "character_positions": {
+                    "start": start_pos,
+                    "end": end_pos
+                },
+                "status": "completed"
+            }
+
+            # Add warning if present
+            if "warning" in citation_result:
+                result["warning"] = citation_result["warning"]
+
+            self.update_progress(4, 4, "Citation injection completed")
+            return result
+
+        finally:
+            storage.close()
+
+    except ValueError as e:
+        # Input validation errors
+        logger.error(f"Citation injection validation error: {e}")
+        return {
+            "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "validation_error",
+            "status": "failed",
+        }
+
+    except RuntimeError as e:
+        # No source found errors
+        logger.warning(f"Citation injection: No source found: {e}")
+        return {
+            "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "no_source_found",
+            "status": "failed",
+        }
+
+    except Exception as e:
+        logger.error(f"Error injecting citation: {e}", exc_info=True)
+
+        # Retry for API errors
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e, countdown=60)
+
+        return {
+            "text_segment": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "internal_error",
+            "status": "failed",
+        }
+
+
+def _inject_citation_into_text(
+    text: str,
+    citation: Dict[str, str],
+    style: str,
+    include_full: bool
+) -> tuple[str, int, int]:
+    """
+    Inject citation into text based on style.
+
+    Args:
+        text: Original text
+        citation: Citation dict with 'in_text' and 'full' keys
+        style: Injection style (inline, footnote, endnote, markdown_link)
+        include_full: Whether to include full citation
+
+    Returns:
+        Tuple of (annotated_text, start_position, end_position)
+    """
+    in_text = citation.get("in_text", "")
+    full = citation.get("full", "")
+
+    if style == "inline":
+        # Inject at end: "Text." → "Text. (Author, Year)"
+        # Strip trailing whitespace and periods, then add period + citation
+        clean_text = text.rstrip()
+        if clean_text.endswith('.'):
+            clean_text = clean_text[:-1]
+        annotated = f"{clean_text}. {in_text}"
+        start_pos = len(clean_text) + 2  # After ". "
+        end_pos = len(annotated)
+
+    elif style == "footnote":
+        # Add superscript footnote: "Text.[1]" + "\n\n[1] Full citation"
+        annotated = f"{text}¹"
+        if include_full:
+            annotated += f"\n\n[1] {full}"
+        start_pos = len(text)
+        end_pos = len(annotated)
+
+    elif style == "endnote":
+        # Similar to footnote but marked for endnote section
+        annotated = f"{text}[dn1]"
+        if include_full:
+            annotated += f"\n\n[dn1] {full}"
+        start_pos = len(text)
+        end_pos = len(annotated)
+
+    elif style == "markdown_link":
+        # Markdown link: "Text [(Author, Year)](#source-id)"
+        # Extract document_id from citation if available (not in citation dict directly)
+        source_id = "source"  # Fallback ID
+        annotated = f"{text} [{in_text}](#{source_id})"
+        if include_full:
+            annotated += f"\n\n[{source_id}]: {full}"
+        start_pos = len(text) + 1  # After space
+        end_pos = len(annotated) if not include_full else len(text) + 1 + len(f"[{in_text}](#{source_id})")
+
+    else:
+        # Default to inline if invalid style
+        clean_text = text.rstrip()
+        if clean_text.endswith('.'):
+            clean_text = clean_text[:-1]
+        annotated = f"{clean_text}. {in_text}"
+        start_pos = len(clean_text) + 2
+        end_pos = len(annotated)
+
+    return annotated, start_pos, end_pos
+
+
+@app.task(
+    base=BaseFileIntelTask,
+    name="fileintel.tasks.detect_plagiarism",
+    max_retries=3,
+    default_retry_delay=60,
+    rate_limit="60/m",  # Limit to 60 per minute to avoid overwhelming system
+    acks_late=True,
+)
+def detect_plagiarism_task(
+    self,
+    document_id: str,
+    collection_id: str,
+    min_similarity: float = 0.7,
+    chunk_overlap_factor: float = 0.3,
+    include_sources: bool = True,
+    group_by_source: bool = True,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Detect plagiarism by comparing document chunks against collection.
+
+    Analyzes each chunk of the document for similarity against all chunks
+    in the reference collection, identifies potential plagiarism, and
+    calculates statistics.
+
+    Args:
+        document_id: Document to analyze (from any collection)
+        collection_id: Reference collection to search against
+        min_similarity: Minimum similarity to flag (0.0-1.0, default 0.7)
+        chunk_overlap_factor: Min fraction of chunks matching to report source (0.0-1.0)
+        include_sources: Include detailed match information
+        group_by_source: Group results by source document
+        **kwargs: Additional parameters
+
+    Returns:
+        Dict containing:
+        - analyzed_document_id: Document analyzed
+        - analyzed_filename: Filename
+        - total_chunks: Total chunks in document
+        - flagged_chunks_count: Chunks flagged as suspicious
+        - suspicious_percentage: % of document flagged
+        - overall_plagiarism_risk: "high"|"medium"|"low"|"none"
+        - matches: List of source documents with matches
+        - status: "completed" or "failed"
+    """
+    from datetime import datetime
+
+    self.validate_input(
+        ["document_id", "collection_id"],
+        document_id=document_id,
+        collection_id=collection_id
+    )
+
+    try:
+        self.update_progress(0, 5, "Initializing plagiarism detection")
+
+        from fileintel.celery_config import get_shared_storage
+
+        storage = get_shared_storage()
+
+        try:
+            # Get document info
+            document = storage.get_document(document_id)
+            if not document:
+                return {
+                    "error": f"Document '{document_id}' not found",
+                    "error_type": "document_not_found",
+                    "status": "failed"
+                }
+
+            self.update_progress(1, 5, "Loading document chunks")
+
+            # Get all chunks from document (CORRECTED method name)
+            document_chunks = storage.get_all_chunks_for_document(document_id)
+
+            if not document_chunks:
+                return {
+                    "error": f"Document '{document_id}' has no chunks",
+                    "error_type": "no_chunks",
+                    "status": "failed"
+                }
+
+            # Filter chunks with embeddings
+            chunks_with_embeddings = [c for c in document_chunks if c.embedding is not None]
+
+            if not chunks_with_embeddings:
+                return {
+                    "error": f"Document chunks have no embeddings",
+                    "error_type": "no_embeddings",
+                    "status": "failed"
+                }
+
+            total_chunks = len(chunks_with_embeddings)
+            logger.info(f"Analyzing {total_chunks} chunks from document '{document.filename}'")
+
+            self.update_progress(2, 5, f"Analyzing {total_chunks} chunks for similarity")
+
+            # Find similar chunks for each document chunk
+            matches_by_source = {}
+            flagged_chunk_ids = set()
+
+            for i, chunk in enumerate(chunks_with_embeddings):
+                # Update progress every 10% of chunks
+                if i % max(1, total_chunks // 10) == 0:
+                    progress = 2 + (i / total_chunks) * 2  # Progress from 2 to 4
+                    self.update_progress(
+                        progress, 5,
+                        f"Processed {i}/{total_chunks} chunks"
+                    )
+
+                # Search for similar chunks in reference collection
+                similar_chunks = storage.find_relevant_chunks_in_collection(
+                    collection_id=collection_id,
+                    query_embedding=chunk.embedding,
+                    limit=20,
+                    similarity_threshold=min_similarity,
+                    exclude_chunks=[chunk.id]  # Don't match against self
+                )
+
+                # Process matches
+                for match in similar_chunks:
+                    source_doc_id = match['document_id']
+
+                    # Skip if matching against same document
+                    if source_doc_id == document_id:
+                        continue
+
+                    # Mark this chunk as flagged
+                    flagged_chunk_ids.add(chunk.id)
+
+                    # Initialize source entry if first match
+                    if source_doc_id not in matches_by_source:
+                        matches_by_source[source_doc_id] = {
+                            'source_document_id': source_doc_id,
+                            'source_filename': match.get('filename', 'Unknown'),
+                            'matched_chunks': [],
+                            'similarities': []
+                        }
+
+                    # Add match details
+                    match_info = {
+                        'analyzed_chunk_text': chunk.chunk_text[:200] if include_sources else "",  # Truncate for size
+                        'source_chunk_text': match['text'][:200] if include_sources else "",
+                        'similarity': match['similarity'],
+                        'source_page': match.get('metadata', {}).get('page_number')
+                    }
+
+                    matches_by_source[source_doc_id]['matched_chunks'].append(match_info)
+                    matches_by_source[source_doc_id]['similarities'].append(match['similarity'])
+
+            self.update_progress(4, 5, "Calculating statistics")
+
+            # Calculate statistics
+            flagged_chunks_count = len(flagged_chunk_ids)
+            suspicious_percentage = (flagged_chunks_count / total_chunks) * 100 if total_chunks > 0 else 0.0
+
+            # Determine risk level
+            if suspicious_percentage >= 50:
+                risk_level = "high"
+            elif suspicious_percentage >= 20:
+                risk_level = "medium"
+            elif suspicious_percentage >= 5:
+                risk_level = "low"
+            else:
+                risk_level = "none"
+
+            # Build matches list
+            matches = []
+            for source_id, source_data in matches_by_source.items():
+                # Calculate match percentage for this source
+                num_matched_chunks = len(source_data['matched_chunks'])
+                match_percentage = (num_matched_chunks / total_chunks) * 100
+
+                # Filter by chunk_overlap_factor
+                if match_percentage < (chunk_overlap_factor * 100):
+                    continue  # Skip sources with too few matches
+
+                # Calculate average similarity
+                avg_similarity = sum(source_data['similarities']) / len(source_data['similarities'])
+
+                # Build match entry
+                match_entry = {
+                    'source_document_id': source_data['source_document_id'],
+                    'source_filename': source_data['source_filename'],
+                    'match_percentage': round(match_percentage, 2),
+                    'average_similarity': round(avg_similarity, 3),
+                }
+
+                # Include matched chunks if requested (limit to top 10 by similarity)
+                if include_sources:
+                    sorted_chunks = sorted(
+                        source_data['matched_chunks'],
+                        key=lambda x: x['similarity'],
+                        reverse=True
+                    )[:10]  # Top 10 matches
+                    match_entry['matched_chunks'] = sorted_chunks
+                else:
+                    match_entry['matched_chunks'] = []
+
+                matches.append(match_entry)
+
+            # Sort matches by match percentage (highest first)
+            matches.sort(key=lambda x: x['match_percentage'], reverse=True)
+
+            self.update_progress(5, 5, "Plagiarism detection completed")
+
+            result = {
+                "analyzed_document_id": document_id,
+                "analyzed_filename": document.filename,
+                "total_chunks": total_chunks,
+                "flagged_chunks_count": flagged_chunks_count,
+                "suspicious_percentage": round(suspicious_percentage, 2),
+                "overall_plagiarism_risk": risk_level,
+                "matches": matches,
+                "analysis_timestamp": datetime.utcnow().isoformat(),
+                "status": "completed"
+            }
+
+            logger.info(
+                f"Plagiarism detection complete: {flagged_chunks_count}/{total_chunks} chunks flagged "
+                f"({suspicious_percentage:.1f}%), risk: {risk_level}, {len(matches)} source(s) identified"
+            )
+
+            return result
+
+        finally:
+            storage.close()
+
+    except ValueError as e:
+        # Input validation errors
+        logger.error(f"Plagiarism detection validation error: {e}")
+        return {
+            "document_id": document_id,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "validation_error",
+            "status": "failed",
+        }
+
+    except Exception as e:
+        logger.error(f"Error detecting plagiarism: {e}", exc_info=True)
+
+        # Retry for transient errors
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e, countdown=60)
+
+        return {
+            "document_id": document_id,
+            "collection_id": collection_id,
+            "error": str(e),
+            "error_type": "internal_error",
+            "status": "failed",
+        }

@@ -16,7 +16,7 @@ from fileintel.api.dependencies import (
     get_api_key,
 )
 from fileintel.api.error_handlers import api_error_handler, create_success_response
-from fileintel.api.models import ApiResponseV2
+from fileintel.api.models import ApiResponseV2, PlagiarismAnalysisRequest
 from fileintel.storage.postgresql_storage import PostgreSQLStorage
 from fileintel.core.config import get_config
 
@@ -660,3 +660,178 @@ async def get_query_status(
     except Exception as e:
         logger.error(f"Error getting query status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/collections/{collection_identifier}/analyze-plagiarism",
+    response_model=ApiResponseV2,
+    summary="Analyze document for plagiarism (async task)",
+    description="""
+    Analyze a document for potential plagiarism by comparing it against all sources in the specified collection.
+
+    Returns a task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve results.
+
+    **How It Works:**
+    1. Retrieves all chunks from the specified document (must already be processed with embeddings)
+    2. For each chunk, performs vector similarity search against the reference collection
+    3. Identifies chunks with similarity above the threshold (default 0.7)
+    4. Groups matches by source document
+    5. Calculates statistics: match percentage, risk level, flagged chunks
+
+    **Typical Workflow:**
+    1. Create collection for document to analyze: `collection-A` (e.g., "student-paper")
+    2. Upload document to collection-A and process it (chunks + embeddings)
+    3. Create/use collection with reference sources: `collection-B` (e.g., "reference-papers")
+    4. Call this endpoint: analyze document from collection-A AGAINST collection-B
+
+    **Risk Levels:**
+    - **high**: ≥50% of document flagged as suspicious
+    - **medium**: 20-49% flagged
+    - **low**: 5-19% flagged
+    - **none**: <5% flagged
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Check status
+    3. When `status=SUCCESS` → Get plagiarism report from result
+
+    **Prerequisites:**
+    - Document must already exist in a collection
+    - Document must have chunks (processed)
+    - Chunks must have embeddings generated
+
+    Example successful result:
+    ```json
+    {
+      "analyzed_document_id": "doc-456",
+      "analyzed_filename": "student_paper.pdf",
+      "total_chunks": 50,
+      "flagged_chunks_count": 15,
+      "suspicious_percentage": 30.0,
+      "overall_plagiarism_risk": "medium",
+      "matches": [
+        {
+          "source_document_id": "doc-123",
+          "source_filename": "published_paper.pdf",
+          "match_percentage": 20.0,
+          "average_similarity": 0.85,
+          "matched_chunks": [...]
+        }
+      ],
+      "status": "completed"
+    }
+    ```
+    """
+)
+async def analyze_plagiarism(
+    collection_identifier: str,
+    request: PlagiarismAnalysisRequest,
+    storage: PostgreSQLStorage = Depends(get_storage),
+):
+    """
+    Submit plagiarism detection task.
+
+    Args:
+        collection_identifier: Reference collection ID or name (to search AGAINST)
+        request: Plagiarism analysis request with document_id to analyze
+        storage: PostgreSQL storage instance (dependency injection)
+
+    Returns:
+        ApiResponseV2 with task_id for async processing
+
+    Raises:
+        HTTPException: If collection not found, document not found, or validation fails
+    """
+    import asyncio
+
+    try:
+        # Get reference collection (wrap blocking call)
+        collection = await asyncio.to_thread(
+            get_collection_by_id_or_name, collection_identifier, storage
+        )
+        if not collection:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Reference collection '{collection_identifier}' not found"
+            )
+
+        # Validate document exists (wrap blocking call)
+        document = await asyncio.to_thread(
+            storage.get_document, request.document_id
+        )
+        if not document:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document '{request.document_id}' not found"
+            )
+
+        # Validate document has chunks (wrap blocking call)
+        document_chunks = await asyncio.to_thread(
+            storage.get_all_chunks_for_document, request.document_id
+        )
+        if not document_chunks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Document '{request.document_id}' has no chunks. "
+                       "Document must be processed (chunked) before plagiarism analysis."
+            )
+
+        # Validate chunks have embeddings
+        chunks_with_embeddings = [c for c in document_chunks if c.embedding is not None]
+        if not chunks_with_embeddings:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Document '{request.document_id}' chunks have no embeddings. "
+                       "Generate embeddings before plagiarism analysis."
+            )
+
+        # Import plagiarism detection task
+        from fileintel.tasks.llm_tasks import detect_plagiarism_task
+
+        # Submit task to Celery
+        task_result = detect_plagiarism_task.delay(
+            document_id=request.document_id,
+            collection_id=collection.id,
+            min_similarity=request.min_similarity,
+            chunk_overlap_factor=request.chunk_overlap_factor,
+            include_sources=request.include_sources,
+            group_by_source=request.group_by_source
+        )
+
+        logger.info(
+            f"Submitted plagiarism detection task: task_id={task_result.id} "
+            f"document='{document.filename}' against_collection='{collection.name}' "
+            f"total_chunks={len(document_chunks)} chunks_with_embeddings={len(chunks_with_embeddings)}"
+        )
+
+        # Return task ID immediately (non-blocking)
+        response_data = {
+            "task_id": str(task_result.id),
+            "status": "processing",
+            "collection_id": collection.id,
+            "collection_name": collection.name,
+            "document_id": request.document_id,
+            "document_filename": document.filename,
+            "total_chunks": len(document_chunks),
+            "chunks_with_embeddings": len(chunks_with_embeddings),
+            "min_similarity": request.min_similarity,
+            "message": "Plagiarism detection task submitted. Use task_id to check status.",
+            "status_endpoint": f"/api/v2/tasks/{task_result.id}",
+        }
+
+        return ApiResponseV2(
+            success=True,
+            message="Plagiarism detection task submitted successfully",
+            data=response_data,
+            timestamp=datetime.utcnow()
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Failed to submit plagiarism detection task: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit plagiarism detection task: {str(e)}"
+        )

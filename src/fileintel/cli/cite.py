@@ -254,3 +254,179 @@ def show_config():
             threshold_table.add_row(level.upper(), f"{value:.2f}")
 
         cli_handler.console.print(threshold_table)
+
+
+@app.command("inject")
+def inject_citation(
+    collection_identifier: str = typer.Argument(
+        ..., help="The name or ID of the collection to search for citations."
+    ),
+    text: str = typer.Argument(
+        ..., help="Text segment to annotate with citation (10-10000 characters)."
+    ),
+    style: str = typer.Option(
+        "footnote",
+        "--style",
+        "-s",
+        help="Citation injection style: inline, footnote, endnote, or markdown_link."
+    ),
+    min_similarity: Optional[float] = typer.Option(
+        None,
+        "--min-similarity",
+        "-m",
+        help="Minimum similarity threshold (0.0-1.0, default from config)."
+    ),
+    document_id: Optional[str] = typer.Option(
+        None,
+        "--document",
+        "-d",
+        help="Restrict search to specific document ID."
+    ),
+    top_k: Optional[int] = typer.Option(
+        None,
+        "--top-k",
+        "-k",
+        help="Number of candidate sources to retrieve (default from config)."
+    ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        "-f",
+        help="Include full citation text in footnote/endnote/markdown styles."
+    ),
+    show_source: bool = typer.Option(
+        True,
+        "--show-source/--no-source",
+        help="Show source details in output (default: True)."
+    ),
+):
+    """
+    Inject citation into text segment with various styles.
+
+    Searches the specified collection for the most similar source document
+    and injects a Harvard-style citation directly into the text.
+
+    **Injection Styles:**
+    - **inline**: Appends citation at end: "Text. (Author, Year)"
+    - **footnote**: Adds superscript: "Text.¹" + "[1] Full citation"
+    - **endnote**: Adds endnote: "Text.[dn1]" + "[dn1] Full citation"
+    - **markdown_link**: Creates link: "Text [(Author, Year)](#source)"
+
+    Examples:
+
+        # Basic citation injection (footnote style)
+        fileintel cite inject my-collection "Machine learning models learn patterns from data"
+
+        # Inline citation
+        fileintel cite inject papers "Deep learning requires large datasets" --style inline
+
+        # Footnote with full citation text
+        fileintel cite inject thesis "Neural networks" --style footnote --full
+
+        # Markdown link style
+        fileintel cite inject docs "Quantum entanglement" --style markdown_link --full
+    """
+    # Validate text length
+    if len(text) < 10:
+        cli_handler.display_error("Text segment must be at least 10 characters")
+        raise typer.Exit(1)
+
+    if len(text) > 10000:
+        cli_handler.display_error("Text segment must not exceed 10,000 characters")
+        raise typer.Exit(1)
+
+    # Validate injection style
+    valid_styles = ['inline', 'footnote', 'endnote', 'markdown_link']
+    if style not in valid_styles:
+        cli_handler.display_error(f"Invalid style. Must be one of: {', '.join(valid_styles)}")
+        raise typer.Exit(1)
+
+    # Get collection to resolve identifier
+    def _get_collection(api):
+        return get_entity_by_identifier(
+            api,
+            "collections",
+            collection_identifier,
+            "collection"
+        )
+
+    collection = cli_handler.handle_api_call(_get_collection, "get collection")
+    collection_id = collection.get("id")
+
+    # Build request payload
+    payload = {
+        "text_segment": text,
+        "insertion_style": style,
+        "include_full_citation": full,
+    }
+
+    if document_id:
+        payload["document_id"] = document_id
+    if min_similarity is not None:
+        payload["min_similarity"] = min_similarity
+    if top_k is not None:
+        payload["top_k"] = top_k
+
+    # Inject citation
+    def _inject_citation(api):
+        return api._request(
+            "POST",
+            f"citations/collections/{collection_id}/inject-citation",
+            json=payload
+        )
+
+    result = cli_handler.handle_api_call(_inject_citation, "inject citation")
+    data = result.get("data", result)
+
+    # Display annotated text prominently
+    cli_handler.console.print(f"\n[bold green]✨ Annotated Text:[/bold green]")
+    cli_handler.console.print(f"[white]{data.get('annotated_text', 'N/A')}[/white]")
+
+    # Display citation details
+    citation = data.get("citation", {})
+    confidence = data.get("confidence", "unknown")
+
+    cli_handler.console.print(f"\n[bold blue]Citation Details:[/bold blue]")
+    cli_handler.console.print(f"  In-Text: {citation.get('in_text', 'N/A')}")
+    cli_handler.console.print(f"  Full: {citation.get('full', 'N/A')}")
+    cli_handler.console.print(f"  Style: {data.get('insertion_style', style)}")
+
+    # Display confidence
+    confidence_color = {
+        "high": "green",
+        "medium": "yellow",
+        "low": "red"
+    }.get(confidence.lower(), "white")
+
+    cli_handler.console.print(f"\n[bold]Confidence:[/bold] [{confidence_color}]{confidence.upper()}[/{confidence_color}]")
+
+    # Display character positions
+    char_pos = data.get("character_positions", {})
+    if char_pos:
+        cli_handler.console.print(f"\n[dim]Citation inserted at characters {char_pos.get('start', 'N/A')}-{char_pos.get('end', 'N/A')}[/dim]")
+
+    # Display source details if requested
+    if show_source:
+        source = data.get("source", {})
+        cli_handler.console.print(f"\n[bold cyan]Source Details:[/bold cyan]")
+
+        # Create table for source info
+        table = Table(show_header=False, box=None)
+        table.add_column("Field", style="cyan")
+        table.add_column("Value")
+
+        table.add_row("Document ID", source.get("document_id", "N/A"))
+        table.add_row("Filename", source.get("filename", "N/A"))
+        table.add_row(
+            "Similarity Score",
+            f"{source.get('similarity_score', 0.0):.3f}"
+        )
+
+        cli_handler.console.print(table)
+
+    # Display warning if present
+    warning = data.get("warning")
+    if warning:
+        cli_handler.console.print(f"\n[yellow]⚠ Warning:[/yellow] {warning}")
+
+    cli_handler.display_success("Citation injected successfully")

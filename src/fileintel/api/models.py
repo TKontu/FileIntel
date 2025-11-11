@@ -236,3 +236,214 @@ class ApiResponseV2(BaseModel):
 
 
 # Removed HealthCheckV2 - health checks handled by main app endpoints
+
+
+# Citation Injection models
+class CitationInjectionRequest(BaseModel):
+    """Request model for citation injection."""
+
+    text_segment: str = Field(
+        ...,
+        min_length=10,
+        max_length=10000,
+        description="Text segment to annotate with citation (10-10000 characters)"
+    )
+
+    document_id: Optional[str] = Field(
+        None,
+        description="Optional: Restrict search to specific document"
+    )
+
+    min_similarity: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity threshold (0.0-1.0, default from config)"
+    )
+
+    top_k: Optional[int] = Field(
+        None,
+        ge=1,
+        le=20,
+        description="Number of candidate sources to retrieve (default from config)"
+    )
+
+    insertion_style: str = Field(
+        default="footnote",
+        description="Citation insertion style: 'inline', 'footnote', 'endnote', or 'markdown_link'"
+    )
+
+    include_full_citation: bool = Field(
+        default=False,
+        description="Include full citation text (for footnote/endnote/markdown styles)"
+    )
+
+
+class CitationInjectionResponse(BaseModel):
+    """Response model for citation injection."""
+
+    annotated_text: str = Field(
+        ...,
+        description="Text with citation injected"
+    )
+
+    original_text: str = Field(
+        ...,
+        description="Original input text"
+    )
+
+    citation: Dict[str, str] = Field(
+        ...,
+        description="Citation information with in_text, full, and style fields"
+    )
+
+    source: Dict[str, Any] = Field(
+        ...,
+        description="Source document details including similarity score"
+    )
+
+    confidence: str = Field(
+        ...,
+        description="Confidence level: 'high', 'medium', or 'low'"
+    )
+
+    insertion_style: str = Field(
+        ...,
+        description="Citation insertion style used"
+    )
+
+    character_positions: Dict[str, int] = Field(
+        ...,
+        description="Character positions of injected citation (start, end)"
+    )
+
+
+# Plagiarism Detection models
+class PlagiarismAnalysisRequest(BaseModel):
+    """Request model for plagiarism detection analysis."""
+
+    document_id: str = Field(
+        ...,
+        description="Document ID to analyze for plagiarism"
+    )
+
+    min_similarity: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity threshold to flag as potential plagiarism (0.0-1.0)"
+    )
+
+    chunk_overlap_factor: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum fraction of chunks that must match to report a source (0.0-1.0)"
+    )
+
+    include_sources: bool = Field(
+        default=True,
+        description="Include detailed source information and matched chunks"
+    )
+
+    group_by_source: bool = Field(
+        default=True,
+        description="Group results by source document"
+    )
+
+
+class PlagiarismMatchedChunk(BaseModel):
+    """Individual matched chunk in plagiarism detection."""
+
+    analyzed_chunk_text: str = Field(
+        ...,
+        description="Text from the analyzed document"
+    )
+
+    source_chunk_text: str = Field(
+        ...,
+        description="Matching text from source document"
+    )
+
+    similarity: float = Field(
+        ...,
+        description="Similarity score (0.0-1.0)"
+    )
+
+    source_page: Optional[int] = Field(
+        None,
+        description="Page number in source document (if available)"
+    )
+
+
+class PlagiarismMatch(BaseModel):
+    """Plagiarism match from a specific source document."""
+
+    source_document_id: str = Field(
+        ...,
+        description="Source document ID"
+    )
+
+    source_filename: str = Field(
+        ...,
+        description="Source document filename"
+    )
+
+    match_percentage: float = Field(
+        ...,
+        description="Percentage of analyzed document matching this source"
+    )
+
+    average_similarity: float = Field(
+        ...,
+        description="Average similarity score across all matched chunks"
+    )
+
+    matched_chunks: List[PlagiarismMatchedChunk] = Field(
+        default_factory=list,
+        description="List of matched chunks (if include_sources=True)"
+    )
+
+
+class PlagiarismAnalysisResponse(BaseModel):
+    """Response model for plagiarism detection analysis."""
+
+    analyzed_document_id: str = Field(
+        ...,
+        description="Document that was analyzed"
+    )
+
+    analyzed_filename: str = Field(
+        ...,
+        description="Filename of analyzed document"
+    )
+
+    total_chunks: int = Field(
+        ...,
+        description="Total number of chunks in analyzed document"
+    )
+
+    flagged_chunks_count: int = Field(
+        ...,
+        description="Number of chunks flagged as potentially plagiarized"
+    )
+
+    suspicious_percentage: float = Field(
+        ...,
+        description="Percentage of document flagged as suspicious"
+    )
+
+    overall_plagiarism_risk: str = Field(
+        ...,
+        description="Overall risk level: 'high', 'medium', 'low', or 'none'"
+    )
+
+    matches: List[PlagiarismMatch] = Field(
+        default_factory=list,
+        description="List of matching source documents"
+    )
+
+    analysis_timestamp: datetime = Field(
+        ...,
+        description="When the analysis was performed"
+    )

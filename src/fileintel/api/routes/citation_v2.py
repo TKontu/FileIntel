@@ -11,7 +11,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from ..models import ApiResponseV2
+from ..models import ApiResponseV2, CitationInjectionRequest
 from ..dependencies import get_storage
 from ..services import get_collection_by_identifier
 from ...core.config import get_config
@@ -249,4 +249,142 @@ async def get_citation_config():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get citation configuration: {str(e)}"
+        )
+
+
+@router.post(
+    "/collections/{collection_identifier}/inject-citation",
+    response_model=ApiResponseV2,
+    summary="Inject citation into text segment (async task)",
+    description="""
+    Submit a citation injection task that finds a source and embeds the citation into the text.
+
+    Returns a task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve results.
+
+    The service:
+    1. Finds the best matching source using vector similarity search
+    2. Generates Harvard-style citation
+    3. Injects the citation into the text using the specified style
+    4. Returns the annotated text with character positions
+
+    **Injection Styles:**
+    - **inline**: Appends citation at end: "Text. (Author, Year)"
+    - **footnote**: Adds superscript footnote: "Text.¹" + "[1] Full citation"
+    - **endnote**: Adds endnote marker: "Text.[dn1]" + "[dn1] Full citation"
+    - **markdown_link**: Creates markdown link: "Text [(Author, Year)](#source-id)"
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Check status
+    3. When `status=SUCCESS` → Get annotated_text from result
+
+    Example successful result:
+    ```json
+    {
+      "annotated_text": "Machine learning models learn patterns from data.¹\\n\\n[1] Smith, J. (2023)...",
+      "original_text": "Machine learning models learn patterns from data.",
+      "citation": {
+        "in_text": "(Smith et al., 2023)",
+        "full": "Smith, J., Jones, A. (2023). Title. Publisher.",
+        "style": "harvard"
+      },
+      "source": {
+        "document_id": "doc-123",
+        "similarity_score": 0.92
+      },
+      "confidence": "high",
+      "insertion_style": "footnote",
+      "character_positions": {"start": 47, "end": 49},
+      "status": "completed"
+    }
+    ```
+    """
+)
+async def inject_citation(
+    collection_identifier: str,
+    request: CitationInjectionRequest,
+    storage: PostgreSQLStorage = Depends(get_storage),
+):
+    """
+    Submit citation injection task.
+
+    Args:
+        collection_identifier: Collection ID or name
+        request: Citation injection request with text segment and parameters
+        storage: PostgreSQL storage instance (dependency injection)
+
+    Returns:
+        ApiResponseV2 with task_id for async processing
+
+    Raises:
+        HTTPException: If collection not found or input invalid
+    """
+    import asyncio
+
+    try:
+        # Get collection (wrap blocking call)
+        collection = await asyncio.to_thread(
+            get_collection_by_identifier, storage, collection_identifier
+        )
+        if not collection:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{collection_identifier}' not found"
+            )
+
+        # Validate insertion style
+        valid_styles = ['inline', 'footnote', 'endnote', 'markdown_link']
+        if request.insertion_style not in valid_styles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid insertion_style. Must be one of: {', '.join(valid_styles)}"
+            )
+
+        # Import citation injection task
+        from fileintel.tasks.llm_tasks import inject_citation_task
+
+        # Submit task to Celery
+        task_result = inject_citation_task.delay(
+            text_segment=request.text_segment,
+            collection_id=collection.id,
+            document_id=request.document_id,
+            min_similarity=request.min_similarity,
+            top_k=request.top_k,
+            insertion_style=request.insertion_style,
+            include_full_citation=request.include_full_citation
+        )
+
+        logger.info(
+            f"Submitted citation injection task: task_id={task_result.id} "
+            f"collection='{collection.name}' style='{request.insertion_style}' "
+            f"text_length={len(request.text_segment)}"
+        )
+
+        # Return task ID immediately (non-blocking)
+        response_data = {
+            "task_id": str(task_result.id),
+            "status": "processing",
+            "collection_id": collection.id,
+            "collection_name": collection.name,
+            "text_segment": request.text_segment[:100] + "..." if len(request.text_segment) > 100 else request.text_segment,
+            "insertion_style": request.insertion_style,
+            "message": "Citation injection task submitted. Use task_id to check status.",
+            "status_endpoint": f"/api/v2/tasks/{task_result.id}",
+        }
+
+        return ApiResponseV2(
+            success=True,
+            message="Citation injection task submitted successfully",
+            data=response_data,
+            timestamp=datetime.utcnow()
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Failed to submit citation injection task: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit citation injection task: {str(e)}"
         )
