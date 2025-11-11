@@ -89,15 +89,11 @@ def analyze_plagiarism(
         raise typer.Exit(1)
 
     # Get collection to resolve identifier
-    def _get_collection(api):
-        return get_entity_by_identifier(
-            api,
-            "collections",
-            collection_identifier,
-            "collection"
-        )
-
-    collection = cli_handler.handle_api_call(_get_collection, "get reference collection")
+    collection = get_entity_by_identifier(
+        "collection",
+        collection_identifier,
+        "get_collection"
+    )
     collection_id = collection.get("id")
 
     # Build request payload
