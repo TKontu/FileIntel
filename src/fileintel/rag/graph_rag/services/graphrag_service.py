@@ -1539,6 +1539,16 @@ Reformatted Answer (with all citations preserved):"""
         # GraphRAG citations use int short_ids (human_readable_id), not the UUID id field
         logger.debug(f"Entity human_readable_id column type: {entities_df['human_readable_id'].dtype}")
         logger.debug(f"Community column type: {communities_df['community'].dtype if 'community' in communities_df.columns else 'N/A'}")
+        logger.debug(f"Text unit ID column type: {text_units_df['id'].dtype if 'id' in text_units_df.columns else 'N/A'}")
+
+        # Convert text_units_df['id'] to int for Sources citations (which provide integer text unit IDs)
+        try:
+            if 'id' in text_units_df.columns:
+                if text_units_df['id'].dtype == 'object' or text_units_df['id'].dtype == 'string':
+                    text_units_df['id'] = pd.to_numeric(text_units_df['id'], errors='coerce').astype('Int64')
+                    logger.info(f"Converted text_units_df['id'] to Int64")
+        except Exception as e:
+            logger.warning(f"Failed to convert text unit IDs to numeric: {e}")
 
         # Convert human_readable_id to int for consistent lookups (citations are int)
         try:
@@ -1555,6 +1565,15 @@ Reformatted Answer (with all citations preserved):"""
                     logger.info(f"Converted communities_df['community'] to Int64")
         except Exception as e:
             logger.warning(f"Failed to convert community IDs to numeric: {e}")
+
+        # Also convert relationships['human_readable_id'] for Relationships citations
+        try:
+            if relationships_df is not None and 'human_readable_id' in relationships_df.columns:
+                if relationships_df['human_readable_id'].dtype == 'object' or relationships_df['human_readable_id'].dtype == 'string':
+                    relationships_df['human_readable_id'] = pd.to_numeric(relationships_df['human_readable_id'], errors='coerce').astype('Int64')
+                    logger.info(f"Converted relationships_df['human_readable_id'] to Int64")
+        except Exception as e:
+            logger.warning(f"Failed to convert relationship human_readable_ids to numeric: {e}")
 
         # OPTIMIZATION 1a: Calculate information density for all text units
         # Density = number of entities + relationships (semantic richness indicator)

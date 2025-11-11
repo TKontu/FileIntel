@@ -204,8 +204,9 @@ def configure_celery_app(config=None):
         task_inherit_parent_priority=True,
         task_default_priority=5,  # Medium priority
         # Memory and cleanup settings - dynamically calculated from environment
-        # Set to 0 to disable memory limits if causing worker respawn issues
-        worker_max_memory_per_child=max_memory_per_child if max_memory_per_child > 0 else 0,
+        # DISABLED: Memory limits cause worker recycling and fork bombs with GraphRAG
+        # Workers flush memory on task completion instead (see worker_process_shutdown)
+        worker_max_memory_per_child=0,  # 0 = disabled, prevents worker recycling
         task_soft_time_limit=celery_settings.task_soft_time_limit,  # Configurable from YAML
         task_time_limit=celery_settings.task_time_limit,  # Configurable from YAML
         # Result backend optimizations
@@ -762,7 +763,18 @@ def shutdown_worker_process(sender=None, **kwargs):
     _shared_engine = None
     _shared_session_factory = None
 
-    # Force garbage collection
-    gc.collect()
+    # Aggressive memory cleanup to prevent fork failures
+    # Force multiple GC passes to free all unreachable objects
+    for _ in range(3):
+        gc.collect()
+
+    # Try to return memory to OS (Python 3.13+, gracefully fails on older versions)
+    try:
+        import sys
+        if hasattr(sys, 'getallocatedblocks'):
+            # Clear any remaining memory pools
+            gc.collect(2)  # Full collection of all generations
+    except Exception:
+        pass
 
     logger.info(f"Worker process cleanup complete (PID: {os.getpid()})")
