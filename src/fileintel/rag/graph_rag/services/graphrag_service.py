@@ -1416,24 +1416,43 @@ Reformatted Answer (with all citations preserved):"""
         """
         Parse individual citations with their context text.
         Each citation gets a UNIQUE marker based on its position to avoid replacement conflicts.
+        Supports both simple and compound citations:
+        - Simple: [Data: Reports (123)]
+        - Compound: [Data: Reports (123); Entities (456, 789)]
 
         Returns:
-            List of dicts with {marker, original_marker, type, ids, context_text, start, end}
+            List of dicts with {marker, original_marker, types_data, context_text, start, end}
+            types_data = [{type: "Reports", ids: [123]}, {type: "Entities", ids: [456, 789]}]
         """
         import re
 
-        # Find all citation markers with surrounding context (sentence)
-        # Sources = text unit IDs (direct mapping to chunks)
-        citation_pattern = r'\[Data: (Reports|Entities|Relationships|Sources) \(([0-9, ]+)\)\]'
+        # Match entire citation block (simple or compound)
+        # Pattern matches: [Data: TYPE (IDs); TYPE (IDs); ...]
+        citation_pattern = r'\[Data: ([^\]]+)\]'
 
         citation_contexts = []
         for match in re.finditer(citation_pattern, answer_text):
             original_marker = match.group(0)
-            cit_type = match.group(1)
-            ids_str = match.group(2)
+            inner_content = match.group(1)  # Everything between [Data: and ]
 
-            # Parse IDs
-            ids = [int(id.strip()) for id in ids_str.split(',')]
+            # Parse individual type-ID pairs separated by semicolons
+            # Each part is like "Reports (123, 456)" or "Entities (789)"
+            type_pattern = r'(Reports|Entities|Relationships|Sources)\s*\(([0-9, ]+)\)'
+            types_data = []
+
+            for type_match in re.finditer(type_pattern, inner_content):
+                cit_type = type_match.group(1)
+                ids_str = type_match.group(2)
+                ids = [int(id.strip()) for id in ids_str.split(',')]
+                types_data.append({
+                    "type": cit_type,
+                    "ids": ids
+                })
+
+            if not types_data:
+                # Skip if we couldn't parse any citation types
+                logger.warning(f"Could not parse citation: {original_marker}")
+                continue
 
             # Extract surrounding context (sentence containing the citation)
             start = match.start()
@@ -1457,8 +1476,7 @@ Reformatted Answer (with all citations preserved):"""
             citation_contexts.append({
                 "marker": unique_marker,  # Unique marker for replacement
                 "original_marker": original_marker,  # Original for finding in text
-                "type": cit_type,
-                "ids": ids,
+                "types_data": types_data,  # List of {type, ids} dicts
                 "context_text": context_text_clean,
                 "start": start,  # Position in text
                 "end": end
@@ -1559,84 +1577,88 @@ Reformatted Answer (with all citations preserved):"""
 
         for citation in citation_contexts:
             marker = citation["marker"]
-            cit_type = citation["type"]
-            ids = citation["ids"]
+            types_data = citation["types_data"]  # List of {type, ids} dicts
 
-            # Step 1: Get text unit IDs based on citation type
+            # Step 1: Collect text unit IDs from ALL types in this citation (handles compound citations)
             text_unit_ids = set()
+            citation_summary = []  # For logging: ["Reports (3 IDs)", "Entities (5 IDs)"]
 
-            if cit_type == "Sources":
-                # Sources citations contain text unit IDs directly (no lookup needed)
-                # [Data: Sources (8137, 43990)] → text_unit_ids = {8137, 43990}
-                text_unit_ids.update(ids)
-                logger.debug(f"Citation {marker}: {len(ids)} source IDs (text units) added directly")
+            for type_data in types_data:
+                cit_type = type_data["type"]
+                ids = type_data["ids"]
+                citation_summary.append(f"{cit_type} ({len(ids)} IDs)")
 
-            elif cit_type == "Relationships":
-                # Direct lookup of relationships by human_readable_id
-                if relationships_df is not None:
-                    rel_mask = relationships_df["human_readable_id"].isin(ids)
-                    matched_rels = relationships_df[rel_mask]
-                    logger.debug(f"Citation {marker}: {len(ids)} relationship IDs → {len(matched_rels)} matched")
+                if cit_type == "Sources":
+                    # Sources citations contain text unit IDs directly (no lookup needed)
+                    # [Data: Sources (8137, 43990)] → text_unit_ids = {8137, 43990}
+                    text_unit_ids.update(ids)
+                    logger.debug(f"Citation {marker} [{cit_type}]: {len(ids)} source IDs (text units) added directly")
 
-                    for tu_list in matched_rels["text_unit_ids"]:
-                        if tu_list is not None and len(tu_list) > 0:
-                            text_unit_ids.update(tu_list)
+                elif cit_type == "Relationships":
+                    # Direct lookup of relationships by human_readable_id
+                    if relationships_df is not None:
+                        rel_mask = relationships_df["human_readable_id"].isin(ids)
+                        matched_rels = relationships_df[rel_mask]
+                        logger.debug(f"Citation {marker} [{cit_type}]: {len(ids)} relationship IDs → {len(matched_rels)} matched")
+
+                        for tu_list in matched_rels["text_unit_ids"]:
+                            if tu_list is not None and len(tu_list) > 0:
+                                text_unit_ids.update(tu_list)
+                    else:
+                        logger.warning(f"Citation {marker} [{cit_type}]: Relationships DataFrame not loaded")
+
                 else:
-                    logger.warning(f"Citation {marker}: Relationships DataFrame not loaded")
-                    continue
+                    # For Reports and Entities, get entity IDs first, then text units
+                    entity_short_ids = set()  # Changed name to clarify these are human_readable_ids (integers)
 
-            else:
-                # For Reports and Entities, get entity IDs first, then text units
-                entity_short_ids = set()  # Changed name to clarify these are human_readable_ids (integers)
+                    if cit_type == "Reports":
+                        # CRITICAL: Communities.entity_ids contains UUID strings (entity.id field)
+                        # But citations contain integers (entity.human_readable_id field)
+                        # We need to convert UUIDs → human_readable_ids
+                        comm_mask = communities_df["community"].isin(ids)
+                        entity_uuids = set()
+                        for entity_list in communities_df[comm_mask]["entity_ids"]:
+                            if entity_list is not None and len(entity_list) > 0:
+                                entity_uuids.update(entity_list)
 
-                if cit_type == "Reports":
-                    # CRITICAL: Communities.entity_ids contains UUID strings (entity.id field)
-                    # But citations contain integers (entity.human_readable_id field)
-                    # We need to convert UUIDs → human_readable_ids
-                    comm_mask = communities_df["community"].isin(ids)
-                    entity_uuids = set()
-                    for entity_list in communities_df[comm_mask]["entity_ids"]:
-                        if entity_list is not None and len(entity_list) > 0:
-                            entity_uuids.update(entity_list)
+                        if entity_uuids:
+                            # Convert entity UUIDs to human_readable_ids by looking them up
+                            uuid_mask = entities_df["id"].isin(entity_uuids)
+                            matched_by_uuid = entities_df[uuid_mask]
+                            entity_short_ids = set(matched_by_uuid["human_readable_id"].dropna().astype(int).tolist())
+                            logger.debug(f"Citation {marker} [{cit_type}]: {len(entity_uuids)} entity UUIDs from communities → {len(entity_short_ids)} human_readable_ids")
 
-                    if entity_uuids:
-                        # Convert entity UUIDs to human_readable_ids by looking them up
-                        uuid_mask = entities_df["id"].isin(entity_uuids)
-                        matched_by_uuid = entities_df[uuid_mask]
-                        entity_short_ids = set(matched_by_uuid["human_readable_id"].dropna().astype(int).tolist())
-                        logger.debug(f"Citation {marker}: {len(entity_uuids)} entity UUIDs from communities → {len(entity_short_ids)} human_readable_ids")
+                    elif cit_type == "Entities":
+                        # Entity citations already contain human_readable_ids (integers)
+                        entity_short_ids.update(ids)
 
-                elif cit_type == "Entities":
-                    # Entity citations already contain human_readable_ids (integers)
-                    entity_short_ids.update(ids)
+                    if entity_short_ids:
+                        # Step 2: Get text units for these specific entities
+                        # CRITICAL: Citations use short_id (human_readable_id), not id!
+                        # GraphRAG shows short_id to LLM in context, so citations contain short_id values
+                        entity_mask = entities_df["human_readable_id"].isin(entity_short_ids)
+                        matched_entities = entities_df[entity_mask]
+                        logger.debug(f"Citation {marker} [{cit_type}]: {len(entity_short_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
 
-                if not entity_short_ids:
-                    logger.debug(f"Citation {marker}: No entity IDs found for {cit_type} {ids}")
-                    continue
+                        if len(matched_entities) == 0:
+                            logger.warning(f"Citation {marker} [{cit_type}]: None of the {len(entity_short_ids)} entity short_ids found in entities DataFrame")
+                            logger.warning(f"  Citation short_ids: {sorted(list(entity_short_ids))[:10]}")
+                            logger.warning(f"  DataFrame human_readable_id range: {entities_df['human_readable_id'].min()} - {entities_df['human_readable_id'].max()}")
+                            logger.warning(f"  DataFrame entity count: {len(entities_df)}")
+                            logger.warning(f"  Sample DataFrame human_readable_ids: {sorted(entities_df['human_readable_id'].dropna().head(10).tolist())}")
+                        else:
+                            for tu_list in matched_entities["text_unit_ids"]:
+                                if tu_list is not None and len(tu_list) > 0:
+                                    text_unit_ids.update(tu_list)
+                    else:
+                        logger.debug(f"Citation {marker} [{cit_type}]: No entity IDs found")
 
-                # Step 2: Get text units for these specific entities
-                # CRITICAL: Citations use short_id (human_readable_id), not id!
-                # GraphRAG shows short_id to LLM in context, so citations contain short_id values
-                entity_mask = entities_df["human_readable_id"].isin(entity_short_ids)
-                matched_entities = entities_df[entity_mask]
-                logger.debug(f"Citation {marker}: {len(entity_short_ids)} entity IDs (short_id) → {len(matched_entities)} matched in DataFrame")
-
-                if len(matched_entities) == 0:
-                    logger.warning(f"Citation {marker}: None of the {len(entity_short_ids)} entity short_ids found in entities DataFrame")
-                    logger.warning(f"  Citation short_ids: {sorted(list(entity_short_ids))[:10]}")
-                    logger.warning(f"  DataFrame human_readable_id range: {entities_df['human_readable_id'].min()} - {entities_df['human_readable_id'].max()}")
-                    logger.warning(f"  DataFrame entity count: {len(entities_df)}")
-                    logger.warning(f"  Sample DataFrame human_readable_ids: {sorted(entities_df['human_readable_id'].dropna().head(10).tolist())}")
-                    continue
-
-                for tu_list in matched_entities["text_unit_ids"]:
-                    if tu_list is not None and len(tu_list) > 0:
-                        text_unit_ids.update(tu_list)
-
-            # Check if we found any text units (applies to all citation types)
+            # Check if we found any text units from ALL types in this citation
             if not text_unit_ids:
-                logger.warning(f"Citation {marker}: No text_unit_ids found for {cit_type} citation with IDs {ids}")
+                logger.warning(f"Citation {marker}: No text_unit_ids found for citation with types: {', '.join(citation_summary)}")
                 continue
+
+            logger.debug(f"Citation {marker} ({', '.join(citation_summary)}): Collected {len(text_unit_ids)} text units total")
 
             citation_to_text_units[marker] = text_unit_ids
             all_relevant_text_units.update(text_unit_ids)
