@@ -745,10 +745,8 @@ async def analyze_plagiarism(
     import asyncio
 
     try:
-        # Get reference collection (wrap blocking call)
-        collection = await asyncio.to_thread(
-            get_collection_by_id_or_name, collection_identifier, storage
-        )
+        # Get reference collection
+        collection = await get_collection_by_id_or_name(collection_identifier, storage)
         if not collection:
             raise HTTPException(
                 status_code=404,

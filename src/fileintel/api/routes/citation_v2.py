@@ -155,10 +155,8 @@ async def generate_citation(
     import asyncio
 
     try:
-        # Get collection (wrap blocking call)
-        collection = await asyncio.to_thread(
-            get_collection_by_identifier, storage, collection_identifier
-        )
+        # Get collection
+        collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:
             raise HTTPException(
                 status_code=404,
@@ -322,10 +320,8 @@ async def inject_citation(
     import asyncio
 
     try:
-        # Get collection (wrap blocking call)
-        collection = await asyncio.to_thread(
-            get_collection_by_identifier, storage, collection_identifier
-        )
+        # Get collection
+        collection = await get_collection_by_identifier(storage, collection_identifier)
         if not collection:
             raise HTTPException(
                 status_code=404,
