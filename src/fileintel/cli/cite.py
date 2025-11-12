@@ -108,7 +108,7 @@ def cite_collection(
     if top_k is not None:
         payload["top_k"] = top_k
 
-    # Generate citation
+    # Generate citation (async task)
     def _generate_citation(api):
         return api._request(
             "POST",
@@ -116,8 +116,27 @@ def cite_collection(
             json=payload
         )
 
-    result = cli_handler.handle_api_call(_generate_citation, "generate citation")
+    result = cli_handler.handle_api_call(_generate_citation, "submit citation task")
     data = result.get("data", result)
+
+    # Check if this is an async response (contains task_id)
+    if "task_id" in data:
+        task_id = data["task_id"]
+        cli_handler.console.print(
+            f"[blue]Citation task submitted ({task_id[:8]}...). Waiting for completion...[/blue]\n"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        if task_result.get("successful"):
+            data = task_result.get("result", {})
+        else:
+            error_msg = task_result.get("error", "Unknown error")
+            cli_handler.display_error(f"Citation generation failed: {error_msg}")
+            raise typer.Exit(1)
 
     # Display results
     citation = data.get("citation", {})
@@ -359,7 +378,7 @@ def inject_citation(
     if top_k is not None:
         payload["top_k"] = top_k
 
-    # Inject citation
+    # Inject citation (async task)
     def _inject_citation(api):
         return api._request(
             "POST",
@@ -367,8 +386,27 @@ def inject_citation(
             json=payload
         )
 
-    result = cli_handler.handle_api_call(_inject_citation, "inject citation")
+    result = cli_handler.handle_api_call(_inject_citation, "submit citation injection task")
     data = result.get("data", result)
+
+    # Check if this is an async response (contains task_id)
+    if "task_id" in data:
+        task_id = data["task_id"]
+        cli_handler.console.print(
+            f"[blue]Citation injection task submitted ({task_id[:8]}...). Waiting for completion...[/blue]\n"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        if task_result.get("successful"):
+            data = task_result.get("result", {})
+        else:
+            error_msg = task_result.get("error", "Unknown error")
+            cli_handler.display_error(f"Citation injection failed: {error_msg}")
+            raise typer.Exit(1)
 
     # Display annotated text prominently
     cli_handler.console.print(f"\n[bold green]✨ Annotated Text:[/bold green]")

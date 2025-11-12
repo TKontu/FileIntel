@@ -105,7 +105,7 @@ def analyze_plagiarism(
         "group_by_source": True,
     }
 
-    # Submit plagiarism analysis
+    # Submit plagiarism analysis (async task)
     def _analyze_plagiarism(api):
         return api._request(
             "POST",
@@ -113,8 +113,27 @@ def analyze_plagiarism(
             json=payload
         )
 
-    result = cli_handler.handle_api_call(_analyze_plagiarism, "analyze plagiarism")
+    result = cli_handler.handle_api_call(_analyze_plagiarism, "submit plagiarism analysis task")
     data = result.get("data", result)
+
+    # Check if this is an async response (contains task_id)
+    if "task_id" in data:
+        task_id = data["task_id"]
+        cli_handler.console.print(
+            f"[blue]Plagiarism analysis task submitted ({task_id[:8]}...). Waiting for completion...[/blue]\n"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        if task_result.get("successful"):
+            data = task_result.get("result", {})
+        else:
+            error_msg = task_result.get("error", "Unknown error")
+            cli_handler.display_error(f"Plagiarism analysis failed: {error_msg}")
+            raise typer.Exit(1)
 
     # Display results
     analyzed_filename = data.get("analyzed_filename", "Unknown")
