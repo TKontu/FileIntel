@@ -128,10 +128,11 @@ def analyze_plagiarism(
         task_result = api.wait_for_task_completion(task_id, show_progress=True)
 
         # Extract result from completed task
-        if task_result.get("successful"):
-            data = task_result.get("result", {})
+        task_data = task_result.get("data", {})
+        if task_data.get("status") == "SUCCESS":
+            data = task_data.get("result", {})
         else:
-            error_msg = task_result.get("error", "Unknown error")
+            error_msg = task_data.get("error", "Unknown error")
             cli_handler.display_error(f"Plagiarism analysis failed: {error_msg}")
             raise typer.Exit(1)
 
