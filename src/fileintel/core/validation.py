@@ -36,12 +36,13 @@ class TaskValidationError(ValidationError):
 
 
 # Supported file formats and MIME types
-SUPPORTED_FILE_FORMATS = ["pdf", "epub", "mobi", "txt"]
+SUPPORTED_FILE_FORMATS = ["pdf", "epub", "mobi", "txt", "md"]
 SUPPORTED_MIME_TYPES = {
     "pdf": "application/pdf",
     "epub": "application/epub+zip",
     "mobi": "application/x-mobipocket-ebook",
     "txt": "text/plain",
+    "md": "text/markdown",
 }
 
 VALID_OPERATION_TYPES = [

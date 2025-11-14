@@ -51,6 +51,14 @@ class CitationFormatter:
         """
         Format an in-text citation for Harvard style with page number.
 
+        Handles all special cases according to Harvard guidelines:
+        - Standard: (Author, Year, p. X) or (Author, Year)
+        - Multiple authors: (Davis and Barrett, 2019) or (Davis et al., 2019)
+        - No author: (Title, Year) - uses title or shortened title
+        - No year: (Author, p. X) or (Author) - omits year
+        - No page: Omits page reference
+        - No metadata: Falls back to filename
+
         Args:
             chunk: Chunk data containing document metadata and chunk metadata
 
@@ -87,40 +95,56 @@ class CitationFormatter:
                                     page_number = ",".join(str(p) for p in pages)
 
             if self._has_citation_metadata(document_metadata):
-                author_surname = self._extract_author_surname(document_metadata)
+                author_text = self._format_in_text_authors(document_metadata)
                 year = self._extract_year(document_metadata)
 
+                # If no author, try to use title (Harvard standard for anonymous works)
+                if not author_text:
+                    title = document_metadata.get("title", "").strip()
+                    if title:
+                        # Use first few words of title if it's long
+                        title = title.strip('"').strip("'")
+                        if len(title) > 50:
+                            # Take first 3-5 words
+                            words = title.split()[:4]
+                            author_text = " ".join(words) + "..."
+                        else:
+                            author_text = title
+                    elif year:
+                        # Has year but no author or title - use "Anon." (Anonymous)
+                        author_text = "Anon."
+
                 # Build citation with page number if available
-                if author_surname and year and page_number:
+                if author_text and year and page_number:
                     # Format page reference correctly
                     if isinstance(page_number, str):
                         if "-" in page_number:
                             # Consecutive pages: (Author, Year, pp. X-Y)
-                            return f"({author_surname}, {year}, pp. {page_number})"
+                            return f"({author_text}, {year}, pp. {page_number})"
                         elif "," in page_number:
                             # Non-consecutive pages: (Author, Year, pp. X,Y,Z)
-                            return f"({author_surname}, {year}, pp. {page_number})"
+                            return f"({author_text}, {year}, pp. {page_number})"
                         else:
                             # Single page: (Author, Year, p. X)
-                            return f"({author_surname}, {year}, p. {page_number})"
+                            return f"({author_text}, {year}, p. {page_number})"
                     else:
                         # Fallback for numeric page number
-                        return f"({author_surname}, {year}, p. {page_number})"
-                elif author_surname and year:
-                    return f"({author_surname}, {year})"
-                elif author_surname and page_number:
+                        return f"({author_text}, {year}, p. {page_number})"
+                elif author_text and year:
+                    return f"({author_text}, {year})"
+                elif author_text and page_number:
                     # Author without year, but WITH page number - still include the page!
                     if isinstance(page_number, str):
                         if "-" in page_number:
-                            return f"({author_surname}, pp. {page_number})"
+                            return f"({author_text}, pp. {page_number})"
                         elif "," in page_number:
-                            return f"({author_surname}, pp. {page_number})"
+                            return f"({author_text}, pp. {page_number})"
                         else:
-                            return f"({author_surname}, p. {page_number})"
+                            return f"({author_text}, p. {page_number})"
                     else:
-                        return f"({author_surname}, p. {page_number})"
-                elif author_surname:
-                    return f"({author_surname})"
+                        return f"({author_text}, p. {page_number})"
+                elif author_text:
+                    return f"({author_text})"
 
             # Fallback to simplified filename with page numbers if available
             filename = chunk.get("original_filename", chunk.get("filename", "Unknown"))
@@ -323,6 +347,73 @@ class CitationFormatter:
             return name_parts[-1]
 
         return full_name
+
+    def _format_in_text_authors(self, metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Format authors for Harvard in-text citations.
+
+        Harvard in-text citation rules:
+        - 1 author: (Davis, 2019)
+        - 2 authors: (Davis and Barrett, 2019)
+        - 3 authors: (Davis, Barrett and McLachlan, 2019)
+        - 4+ authors: (Davis et al., 2019)
+
+        Args:
+            metadata: Document metadata containing author information
+
+        Returns:
+            Formatted author string for in-text citation (surnames only)
+        """
+        # Prefer author_surnames if available (LLM-extracted, robust)
+        author_surnames = metadata.get("author_surnames", [])
+        if author_surnames and isinstance(author_surnames, list) and author_surnames:
+            num_authors = len(author_surnames)
+            if num_authors == 1:
+                return author_surnames[0]
+            elif num_authors == 2:
+                return f"{author_surnames[0]} and {author_surnames[1]}"
+            elif num_authors == 3:
+                return f"{author_surnames[0]}, {author_surnames[1]} and {author_surnames[2]}"
+            else:  # 4 or more
+                return f"{author_surnames[0]} et al."
+
+        # Fallback: extract surnames from full author names
+        authors = metadata.get("authors", "")
+        if not authors:
+            return None
+
+        # Convert to list if string
+        if isinstance(authors, str):
+            authors = [a.strip() for a in authors.split(",")]
+
+        if not isinstance(authors, list) or not authors:
+            return None
+
+        # Extract surnames from full names
+        surnames = []
+        for author in authors:
+            if ',' in author:
+                # "LastName, FirstName" format
+                surnames.append(author.split(',')[0].strip())
+            else:
+                # "FirstName LastName" format - take last word
+                name_parts = author.strip().split()
+                if name_parts:
+                    surnames.append(name_parts[-1])
+
+        if not surnames:
+            return None
+
+        # Apply Harvard formatting rules
+        num_authors = len(surnames)
+        if num_authors == 1:
+            return surnames[0]
+        elif num_authors == 2:
+            return f"{surnames[0]} and {surnames[1]}"
+        elif num_authors == 3:
+            return f"{surnames[0]}, {surnames[1]} and {surnames[2]}"
+        else:  # 4 or more
+            return f"{surnames[0]} et al."
 
     def _format_authors_full(self, metadata: Dict[str, Any]) -> Optional[str]:
         """

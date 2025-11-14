@@ -259,6 +259,9 @@ def read_document_with_elements(
     from fileintel.document_processing.processors.mobi_processor import (
         MOBIReader as MOBIProcessor,
     )
+    from fileintel.document_processing.processors.text_processor import (
+        TextReader,
+    )
 
     path = Path(file_path)
 
@@ -309,6 +312,8 @@ def read_document_with_elements(
         ".pdf": pdf_processor,
         ".epub": EPUBProcessor,
         ".mobi": MOBIProcessor,
+        ".txt": TextReader,
+        ".md": TextReader,
     }
 
     processor_class = processors.get(extension)
@@ -823,11 +828,9 @@ def process_document(
                         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
                         # Determine MIME type based on file extension
-                        mime_type = (
-                            "application/pdf"
-                            if file_path.lower().endswith(".pdf")
-                            else "text/plain"
-                        )
+                        from fileintel.core.validation import SUPPORTED_MIME_TYPES
+                        file_extension = Path(file_path).suffix.lower().lstrip('.')
+                        mime_type = SUPPORTED_MIME_TYPES.get(file_extension, "text/plain")
 
                         # Create the document record (without collection association)
                         document = storage.create_document(
