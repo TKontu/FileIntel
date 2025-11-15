@@ -24,6 +24,7 @@ from fileintel.api.routes import (
     metadata_v2,
     documents_v2,
     citation_v2,
+    health,
 )
 from fileintel.rag.graph_rag.services.dataframe_cache import GraphRAGDataFrameCache
 from fileintel.api.dependencies import get_storage
@@ -85,6 +86,9 @@ async def log_requests(request: Request, call_next):
     return response
 
 # V1 routes removed - migrated to task-based v2 API
+# Health check endpoints (no prefix - available at /health, /health/ready, etc.)
+app.include_router(health.router, tags=["health"])
+
 # V2 Task-based API endpoints
 app.include_router(collections_v2.router, prefix=API_V2_PREFIX, tags=["collections-v2"])
 app.include_router(documents_v2.router, prefix=API_V2_PREFIX, tags=["documents-v2"])

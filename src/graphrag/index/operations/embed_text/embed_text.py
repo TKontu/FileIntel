@@ -185,7 +185,14 @@ async def _text_embed_with_vector_store(
         ):
             # Skip documents with None embeddings (failed embedding attempts)
             if doc_vector is None:
-                logger.warning(f"Skipping document {doc_id} - embedding failed")
+                # Provide diagnostic information to help debug why embedding failed
+                text_preview = doc_text[:200] if len(doc_text) > 200 else doc_text
+                logger.warning(
+                    f"Skipping document {doc_id} - embedding failed. "
+                    f"Text length: {len(doc_text)}, "
+                    f"Preview: {text_preview!r}. "
+                    f"Check earlier ERROR logs for details about why this embedding failed."
+                )
                 continue
 
             if type(doc_vector) is np.ndarray:

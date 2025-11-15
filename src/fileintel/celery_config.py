@@ -265,16 +265,64 @@ def get_celery_app() -> Celery:
 
 
 # Task result tracking utilities
-def get_task_status(task_id: str) -> dict:
-    """Get the status of a specific task."""
-    result = app.AsyncResult(task_id)
-    return {
-        "task_id": task_id,
-        "state": result.state,
-        "result": result.result,
-        "traceback": result.traceback,
-        "info": result.info,
-    }
+def get_task_status(task_id: str, timeout: float = 5.0) -> dict:
+    """
+    Get the status of a specific task with timeout protection.
+
+    Args:
+        task_id: The Celery task ID to check
+        timeout: Maximum time to wait for result backend response (seconds)
+
+    Returns:
+        Dict with task status information
+
+    Raises:
+        TimeoutError: If result backend doesn't respond within timeout
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    def _fetch_status():
+        """Internal function to fetch status (runs in thread)."""
+        result = app.AsyncResult(task_id)
+        return {
+            "task_id": task_id,
+            "state": result.state,
+            "result": result.result,
+            "traceback": result.traceback,
+            "info": result.info,
+        }
+
+    try:
+        # Execute status fetch with timeout using thread pool
+        # This prevents blocking the main event loop
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_fetch_status)
+            return future.result(timeout=timeout)
+    except FutureTimeoutError:
+        logger.error(
+            f"Task status fetch timed out after {timeout}s for task {task_id}. "
+            "This usually indicates Redis/result backend is unresponsive."
+        )
+        # Return a degraded response instead of blocking forever
+        return {
+            "task_id": task_id,
+            "state": "UNKNOWN",
+            "result": None,
+            "traceback": None,
+            "info": {"error": f"Result backend timeout after {timeout}s"},
+        }
+    except Exception as e:
+        logger.error(f"Error fetching task status for {task_id}: {e}")
+        return {
+            "task_id": task_id,
+            "state": "UNKNOWN",
+            "result": None,
+            "traceback": None,
+            "info": {"error": str(e)},
+        }
 
 
 def cancel_task(task_id: str, terminate: bool = False) -> bool:
@@ -286,21 +334,41 @@ def cancel_task(task_id: str, terminate: bool = False) -> bool:
         return False
 
 
-def get_active_tasks() -> dict:
-    """Get currently active tasks from all workers."""
+def get_active_tasks(timeout: float = 5.0) -> dict:
+    """
+    Get currently active tasks from all workers with timeout.
+
+    Args:
+        timeout: Maximum time to wait for response (seconds)
+
+    Returns:
+        Dict of active tasks by worker, or empty dict on timeout/error
+    """
     try:
-        inspect = app.control.inspect()
+        inspect = app.control.inspect(timeout=timeout)
         return inspect.active() or {}
-    except Exception:
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to get active tasks: {e}")
         return {}
 
 
-def get_worker_stats() -> dict:
-    """Get statistics from all workers."""
+def get_worker_stats(timeout: float = 5.0) -> dict:
+    """
+    Get statistics from all workers with timeout.
+
+    Args:
+        timeout: Maximum time to wait for response (seconds)
+
+    Returns:
+        Dict of worker stats, or empty dict on timeout/error
+    """
     try:
-        inspect = app.control.inspect()
+        inspect = app.control.inspect(timeout=timeout)
         return inspect.stats() or {}
-    except Exception:
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to get worker stats: {e}")
         return {}
 
 
