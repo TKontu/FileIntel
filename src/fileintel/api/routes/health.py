@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from ..health import get_health_service, HealthStatus
-from ..database import get_db
+from ..dependencies import get_db
 from ..error_handlers import create_success_response
 from ..models import ApiResponseV2
 

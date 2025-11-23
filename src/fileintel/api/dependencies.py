@@ -1,5 +1,6 @@
 from ..storage.postgresql_storage import PostgreSQLStorage
 from ..storage.models import SessionLocal, Collection
+from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from ..core.config import get_config
@@ -21,7 +22,17 @@ def get_api_key(api_key: Optional[str] = Security(api_key_header)) -> Optional[s
     return None
 
 
+def get_db() -> Generator[Session, None, None]:
+    """Yield a raw SQLAlchemy session (for health checks and direct DB access)."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 def get_storage() -> Generator[PostgreSQLStorage, None, None]:
+    """Yield a PostgreSQLStorage wrapper (for most API operations)."""
     db = SessionLocal()
     try:
         yield PostgreSQLStorage(db)
