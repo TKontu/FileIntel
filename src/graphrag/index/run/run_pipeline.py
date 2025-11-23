@@ -15,6 +15,10 @@ import pandas as pd
 
 from graphrag.callbacks.workflow_callbacks import WorkflowCallbacks
 from graphrag.config.models.graph_rag_config import GraphRagConfig
+from graphrag.index.run.activity_timeout import (
+    ActivityTimeoutWrapper,
+    run_with_activity_timeout,
+)
 from graphrag.index.run.checkpoint_manager import CheckpointManager
 from graphrag.index.run.utils import create_run_context
 from graphrag.index.typing.context import PipelineRunContext
@@ -294,32 +298,50 @@ async def _run_pipeline_from_index(
             last_workflow = name
             logger.info(f"▶ Executing workflow #{idx}: {name}")
 
-            context.callbacks.workflow_start(name, None)
             work_time = time.time()
 
-            # Add timeout to prevent infinite hangs (configurable via settings)
+            # Use activity-based timeout to prevent infinite hangs
+            # This timeout resets on every progress update, so it only triggers
+            # when the workflow is truly stuck (no progress for N seconds)
             try:
                 import asyncio
                 # Get workflow timeout from FileIntel settings attached to config
                 fileintel_settings = getattr(config, 'fileintel_settings', None)
                 if fileintel_settings and hasattr(fileintel_settings, 'graphrag'):
-                    timeout_value = fileintel_settings.graphrag.workflow_timeout
+                    inactivity_timeout = fileintel_settings.graphrag.workflow_timeout
                 else:
-                    timeout_value = None  # No timeout if not configured
+                    inactivity_timeout = None  # No timeout if not configured
 
-                if timeout_value:
-                    result = await asyncio.wait_for(
-                        workflow_function(config, context),
-                        timeout=timeout_value
-                    )
-                else:
-                    result = await workflow_function(config, context)
+                # Wrap callbacks with activity tracker
+                original_callbacks = context.callbacks
+                activity_wrapper = ActivityTimeoutWrapper(
+                    original_callbacks,
+                    inactivity_timeout=inactivity_timeout
+                )
+                context.callbacks = activity_wrapper
+
+                # Signal workflow start (resets activity timer)
+                context.callbacks.workflow_start(name, None)
+
+                # Run with activity-based timeout monitoring
+                result = await run_with_activity_timeout(
+                    workflow_function(config, context),
+                    activity_wrapper,
+                    workflow_name=name,
+                    check_interval=10.0  # Check activity every 10 seconds
+                )
+
+                # Restore original callbacks
+                context.callbacks = original_callbacks
+
             except asyncio.TimeoutError:
-                logger.error(f"❌ Workflow '{name}' timed out after {timeout_value} seconds")
-                logger.error("This usually indicates a blocking operation that froze the event loop")
+                logger.error(f"❌ Workflow '{name}' timed out due to inactivity")
+                logger.error(f"No progress for {inactivity_timeout} seconds (received {activity_wrapper.activity_count} progress updates before timeout)")
+                logger.error("This usually indicates a blocking operation or LLM server issue")
                 raise RuntimeError(
-                    f"Workflow '{name}' exceeded maximum execution time ({timeout_value} seconds). "
-                    "Consider increasing GRAPHRAG__WORKFLOW_TIMEOUT in settings or fixing blocking operations."
+                    f"Workflow '{name}' exceeded inactivity timeout ({inactivity_timeout}s with no progress). "
+                    f"The workflow received {activity_wrapper.activity_count} progress updates before becoming stuck. "
+                    "Check your LLM server status or increase GRAPHRAG__WORKFLOW_TIMEOUT in settings."
                 )
 
             context.callbacks.workflow_end(name, result)
@@ -362,32 +384,50 @@ async def _run_pipeline(
         logger.info("Executing pipeline...")
         for name, workflow_function in pipeline.run():
             last_workflow = name
-            context.callbacks.workflow_start(name, None)
             work_time = time.time()
 
-            # Add timeout to prevent infinite hangs (configurable via settings)
+            # Use activity-based timeout to prevent infinite hangs
+            # This timeout resets on every progress update, so it only triggers
+            # when the workflow is truly stuck (no progress for N seconds)
             try:
                 import asyncio
                 # Get workflow timeout from FileIntel settings attached to config
                 fileintel_settings = getattr(config, 'fileintel_settings', None)
                 if fileintel_settings and hasattr(fileintel_settings, 'graphrag'):
-                    timeout_value = fileintel_settings.graphrag.workflow_timeout
+                    inactivity_timeout = fileintel_settings.graphrag.workflow_timeout
                 else:
-                    timeout_value = None  # No timeout if not configured
+                    inactivity_timeout = None  # No timeout if not configured
 
-                if timeout_value:
-                    result = await asyncio.wait_for(
-                        workflow_function(config, context),
-                        timeout=timeout_value
-                    )
-                else:
-                    result = await workflow_function(config, context)
+                # Wrap callbacks with activity tracker
+                original_callbacks = context.callbacks
+                activity_wrapper = ActivityTimeoutWrapper(
+                    original_callbacks,
+                    inactivity_timeout=inactivity_timeout
+                )
+                context.callbacks = activity_wrapper
+
+                # Signal workflow start (resets activity timer)
+                context.callbacks.workflow_start(name, None)
+
+                # Run with activity-based timeout monitoring
+                result = await run_with_activity_timeout(
+                    workflow_function(config, context),
+                    activity_wrapper,
+                    workflow_name=name,
+                    check_interval=10.0  # Check activity every 10 seconds
+                )
+
+                # Restore original callbacks
+                context.callbacks = original_callbacks
+
             except asyncio.TimeoutError:
-                logger.error(f"❌ Workflow '{name}' timed out after {timeout_value} seconds")
-                logger.error("This usually indicates a blocking operation that froze the event loop")
+                logger.error(f"❌ Workflow '{name}' timed out due to inactivity")
+                logger.error(f"No progress for {inactivity_timeout} seconds (received {activity_wrapper.activity_count} progress updates before timeout)")
+                logger.error("This usually indicates a blocking operation or LLM server issue")
                 raise RuntimeError(
-                    f"Workflow '{name}' exceeded maximum execution time ({timeout_value} seconds). "
-                    "Consider increasing GRAPHRAG__WORKFLOW_TIMEOUT in settings or fixing blocking operations."
+                    f"Workflow '{name}' exceeded inactivity timeout ({inactivity_timeout}s with no progress). "
+                    f"The workflow received {activity_wrapper.activity_count} progress updates before becoming stuck. "
+                    "Check your LLM server status or increase GRAPHRAG__WORKFLOW_TIMEOUT in settings."
                 )
 
             context.callbacks.workflow_end(name, result)

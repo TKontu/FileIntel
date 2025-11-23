@@ -158,11 +158,15 @@ class GraphRAGSettings(BaseModel):
     validate_completeness: bool = Field(default=True)
     completeness_threshold: float = Field(default=0.99)
 
-    # Workflow timeout (seconds, None = no timeout)
+    # Workflow inactivity timeout (seconds, None = no timeout)
+    # This is a HEARTBEAT-BASED timeout that resets on every progress update
+    # It only triggers when the workflow is truly stuck with no progress
     workflow_timeout: int | None = Field(
-        default=7200,
-        description="Maximum time in seconds for a single workflow to complete (None = no timeout). "
-        "Prevents infinite hangs from blocking operations. Default: 7200 (2 hours)"
+        default=600,
+        description="Maximum seconds without progress before workflow timeout (None = no timeout). "
+        "This is an INACTIVITY timeout that resets on every progress update. "
+        "Recommended: 300-600s (5-10 minutes) for detecting stuck workflows. "
+        "Default: 600 (10 minutes of inactivity)"
     )
 
 

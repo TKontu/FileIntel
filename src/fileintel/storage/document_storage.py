@@ -173,8 +173,16 @@ class DocumentStorage:
         original_filename: str = None,
         metadata: Dict[str, Any] = None,
         content_fingerprint: str = None,
+        document_id: str = None,
     ) -> Document:
-        """Create a new document (without collection association)."""
+        """
+        Create a new document (without collection association).
+
+        Args:
+            document_id: Optional pre-generated document ID. If provided, uses this ID.
+                        If not provided but content_fingerprint is given, uses fingerprint as ID.
+                        Falls back to random UUID for backwards compatibility.
+        """
         try:
             # Validate inputs
             filename = self.base._validate_input_security(filename, "filename")
@@ -191,10 +199,16 @@ class DocumentStorage:
 
             import uuid
 
-            document_id = str(uuid.uuid4())
+            # Use deterministic ID hierarchy: explicit > fingerprint > random
+            if document_id:
+                final_document_id = document_id
+            elif content_fingerprint:
+                final_document_id = content_fingerprint
+            else:
+                final_document_id = str(uuid.uuid4())
 
             document = Document(
-                id=document_id,
+                id=final_document_id,
                 filename=filename,
                 content_hash=content_hash,
                 content_fingerprint=content_fingerprint,
@@ -248,7 +262,8 @@ class DocumentStorage:
         mime_type: str,
         file_path: str,
         metadata: Dict[str, Any] = None,
-        content_fingerprint: str = None
+        content_fingerprint: str = None,
+        document_id: str = None,
     ) -> Document:
         """
         Atomically create document and add it to collection in single transaction.
@@ -261,6 +276,9 @@ class DocumentStorage:
             filename, original_filename, content_hash, file_size, mime_type, file_path: Document fields
             metadata: Optional document metadata
             content_fingerprint: Optional content fingerprint
+            document_id: Optional pre-generated document ID. If provided, uses this ID.
+                        If not provided but content_fingerprint is given, uses fingerprint as ID.
+                        Falls back to random UUID for backwards compatibility.
 
         Returns:
             Created document that is already associated with collection
@@ -286,10 +304,17 @@ class DocumentStorage:
                 if not collection:
                     raise ValueError(f"Collection {collection_id} not found")
 
+                # Use deterministic ID hierarchy: explicit > fingerprint > random
+                if document_id:
+                    final_document_id = document_id
+                elif content_fingerprint:
+                    final_document_id = content_fingerprint
+                else:
+                    final_document_id = str(uuid.uuid4())
+
                 # Create document (without commit)
-                document_id = str(uuid.uuid4())
                 document = Document(
-                    id=document_id,
+                    id=final_document_id,
                     filename=filename,
                     content_hash=content_hash,
                     content_fingerprint=content_fingerprint,
@@ -493,6 +518,10 @@ class DocumentStorage:
         if not document:
             raise ValueError(f"Document {document_id} not found")
 
+        # Import fingerprinting utilities for deterministic chunk IDs
+        import uuid
+        from fileintel.utils.fingerprint import FILEINTEL_NAMESPACE
+
         chunk_objects = []
         for i, chunk_data in enumerate(chunks):
             chunk_text = self.base._clean_text(chunk_data.get("text", ""))
@@ -500,9 +529,13 @@ class DocumentStorage:
             if not chunk_text.strip():
                 continue  # Skip empty chunks
 
-            import uuid
-
-            chunk_id = str(uuid.uuid4())
+            # Generate deterministic chunk ID based on document fingerprint and position
+            # This ensures re-processing produces identical chunk IDs
+            if document.content_fingerprint:
+                chunk_id = str(uuid.uuid5(FILEINTEL_NAMESPACE, f"{document.content_fingerprint}:chunk:{i}"))
+            else:
+                # Fallback to random UUID for documents without fingerprint
+                chunk_id = str(uuid.uuid4())
 
             # Store additional chunk data in metadata
             metadata = chunk_metadata or {}

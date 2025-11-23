@@ -303,10 +303,10 @@ async def upload_document_to_collection(
             file_path = Path(existing_document.file_path)
             # NOTE: File is NOT saved to disk - we reuse existing file
         else:
-            # Create unique filename and file path
-            file_id = str(uuid.uuid4())
+            # Create deterministic filename using content fingerprint
+            # Same content always gets same filename, enabling true deduplication
             file_extension = Path(file.filename).suffix
-            unique_filename = f"{file_id}{file_extension}"
+            unique_filename = f"{content_fingerprint}{file_extension}"
             # Normalize to absolute path to ensure consistent matching in workflows
             file_path = (Path(config.paths.uploads) / unique_filename).resolve()
 
@@ -318,6 +318,7 @@ async def upload_document_to_collection(
                 await f.write(content)
 
             # Store document in database with normalized absolute file_path (wrap blocking call)
+            # Document ID = content_fingerprint for deterministic, traceable IDs
             document = await asyncio.to_thread(
                 storage.create_document,
                 filename=unique_filename,
@@ -327,6 +328,7 @@ async def upload_document_to_collection(
                 mime_type=mime_type,
                 file_path=str(file_path),  # Already normalized and absolute
                 original_filename=file.filename,
+                document_id=content_fingerprint,  # Deterministic ID from content
                 metadata={
                     "uploaded_via": "api_v2",
                     "original_filename": file.filename,
@@ -1333,32 +1335,19 @@ async def upload_and_process_documents(
             if not file.filename:
                 continue
 
-            # Create unique filename
-            file_id = str(uuid.uuid4())
-            file_extension = Path(file.filename).suffix
-            unique_filename = f"{file_id}{file_extension}"
-            # Normalize to absolute path to ensure consistent matching in workflows
-            file_path = (Path(config.paths.uploads) / unique_filename).resolve()
-
             # Track whether document was successfully created
             # (determines if file should be cleaned up on error)
             file_saved = False
             document_created = False
+            file_path = None  # Will be set after fingerprint calculation
 
             try:
-                # Ensure upload directory exists
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Save file and calculate metadata
-                async with aiofiles.open(file_path, "wb") as f:
-                    content = await file.read()
-                    await f.write(content)
-                    file_saved = True
-
-                # Early file size validation to prevent blocking operations on oversized files
+                # Read content first to calculate fingerprint BEFORE saving
+                content = await file.read()
                 file_size = len(content)
-                max_file_size_bytes = config.paths.max_file_size_mb * 1024 * 1024
 
+                # Early file size validation
+                max_file_size_bytes = config.paths.max_file_size_mb * 1024 * 1024
                 if file_size > max_file_size_bytes:
                     raise HTTPException(
                         status_code=413,
@@ -1372,18 +1361,14 @@ async def upload_and_process_documents(
                 # Calculate file metadata
                 import hashlib
                 import asyncio
+                from fileintel.utils.fingerprint import generate_fingerprint_from_hash
 
                 # Move hash calculation to thread pool to avoid blocking API for large files
-                # Calculate timeout based on file size with conservative assumptions:
-                # - Base rate: 100MB/s (works for spinning disks and busy systems)
-                # - Load factor: 2x (account for system load)
-                # - Buffer: 10s (startup overhead)
-                # - Minimum: 15s (even small files need time on slow systems)
                 base_processing_rate = 100 * 1024 * 1024  # 100 MB/s
-                load_factor = 2.0  # 2x slower under load
+                load_factor = 2.0
                 buffer_seconds = 10.0
                 timeout_seconds = max(
-                    15.0,  # Minimum 15 seconds
+                    15.0,
                     (file_size / base_processing_rate) * load_factor + buffer_seconds
                 )
 
@@ -1396,8 +1381,6 @@ async def upload_and_process_documents(
                         timeout=timeout_seconds
                     )
                 except asyncio.TimeoutError:
-                    # Hash calculation took too long - system may be overloaded
-                    # REJECT rather than falling back to sync (which would block event loop)
                     logger.error(
                         f"Hash calculation timed out after {timeout_seconds:.1f}s for {file.filename} "
                         f"({file_size / (1024*1024):.2f} MB). System may be overloaded."
@@ -1410,51 +1393,61 @@ async def upload_and_process_documents(
                         )
                     )
 
+                # Generate deterministic fingerprint from content hash
+                content_fingerprint = generate_fingerprint_from_hash(content_hash)
                 mime_type = file.content_type or "application/octet-stream"
 
-                # Check for duplicate in this collection
-                # Wrap in to_thread to avoid blocking event loop
+                # Create deterministic filename using content fingerprint
+                file_extension = Path(file.filename).suffix
+                unique_filename = f"{content_fingerprint}{file_extension}"
+                file_path = (Path(config.paths.uploads) / unique_filename).resolve()
+
+                # Check for duplicate by fingerprint (global deduplication)
                 existing_document = await asyncio.to_thread(
-                    storage.get_document_by_hash_and_collection,
-                    content_hash,
-                    collection.id
+                    storage.get_document_by_fingerprint, content_fingerprint
                 )
 
                 if existing_document:
                     logger.info(
-                        f"Duplicate detected in batch: {file.filename} (hash: {content_hash[:16]}...) "
+                        f"Duplicate detected in batch: {file.filename} (fingerprint: {content_fingerprint}) "
                         f"already exists as document {existing_document.id}"
+                    )
+
+                    # Add existing document to this collection if not already
+                    await asyncio.to_thread(
+                        storage.add_document_to_collection, existing_document.id, collection.id
                     )
 
                     # Track duplicate but don't create new document
                     duplicate_files.append({
                         "filename": file.filename,
                         "existing_document_id": str(existing_document.id),
-                        "content_hash": content_hash,
+                        "content_fingerprint": content_fingerprint,
                         "file_size": file_size,
-                        "reason": "Duplicate file already exists in collection"
+                        "reason": "Duplicate file linked to existing document"
                     })
 
-                    # Remove the uploaded file since it's a duplicate
-                    file_path.unlink(missing_ok=True)
-
-                    # Skip to next file
+                    # Skip to next file (no file saved, so nothing to clean up)
                     continue
 
-                # Not a duplicate (at time of check), create document and add to collection
-                # Inner try-except to handle race condition where another request
-                # creates the same document concurrently
+                # Not a duplicate - save file with deterministic filename
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                async with aiofiles.open(file_path, "wb") as f:
+                    await f.write(content)
+                    file_saved = True
+
+                # Create document with deterministic ID
                 try:
-                    # Store document in database
-                    # Wrap in to_thread to avoid blocking event loop
                     document = await asyncio.to_thread(
                         storage.create_document,
                         filename=unique_filename,
                         original_filename=file.filename,
                         content_hash=content_hash,
+                        content_fingerprint=content_fingerprint,
                         file_size=file_size,
                         mime_type=mime_type,
                         file_path=str(file_path),
+                        document_id=content_fingerprint,  # Deterministic ID
                         metadata={"uploaded_via": "api_v2"},
                     )
 
@@ -1475,9 +1468,7 @@ async def upload_and_process_documents(
                     # Check if this is a duplicate error (race condition)
                     # Re-check for duplicate after catching exception
                     existing_document = await asyncio.to_thread(
-                        storage.get_document_by_hash_and_collection,
-                        content_hash,
-                        collection.id
+                        storage.get_document_by_fingerprint, content_fingerprint
                     )
 
                     if existing_document:
@@ -1486,17 +1477,24 @@ async def upload_and_process_documents(
                             f"Existing document: {existing_document.id}"
                         )
 
+                        # Link existing document to this collection
+                        await asyncio.to_thread(
+                            storage.add_document_to_collection, existing_document.id, collection.id
+                        )
+
                         # Track as duplicate
                         duplicate_files.append({
                             "filename": file.filename,
                             "existing_document_id": str(existing_document.id),
-                            "content_hash": content_hash,
+                            "content_fingerprint": content_fingerprint,
                             "file_size": file_size,
                             "reason": "Duplicate created by concurrent request (race condition)"
                         })
 
-                        # Remove the uploaded file since it's a duplicate
-                        file_path.unlink(missing_ok=True)
+                        # NOTE: Do NOT delete the file! With deterministic filenames, both requests
+                        # write to the same path. The file belongs to the successfully-created document.
+                        # Mark as not our file to prevent cleanup in finally block.
+                        file_saved = False
                     else:
                         # Not a duplicate error, something else failed
                         logger.error(f"Failed to create document for {file.filename}: {e}")
@@ -1512,7 +1510,7 @@ async def upload_and_process_documents(
                 # 1. It was saved to disk (file_saved=True)
                 # 2. Document was NOT successfully created (document_created=False)
                 # If document was created, the document owns the file - don't delete
-                if file_saved and not document_created and file_path.exists():
+                if file_saved and not document_created and file_path and file_path.exists():
                     try:
                         file_path.unlink()
                         logger.info(f"Cleaned up orphaned file: {file_path}")

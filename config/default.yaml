@@ -5,8 +5,8 @@ llm:
   temperature: ${LLM_TEMPERATURE:-0.1}
   rate_limit: ${LLM_RATE_LIMIT:-999}
   # Task timeout limits (prevents worker exhaustion)
-  task_timeout_seconds: ${LLM_TASK_TIMEOUT:-7200}  # 2 hours soft timeout for LLM tasks (was 300)
-  task_hard_limit_seconds: ${LLM_TASK_HARD_LIMIT:-7200}  # 2 hours hard kill timeout (was 360)
+  task_timeout_seconds: ${LLM_TASK_TIMEOUT:-14400}  # 2 hours soft timeout for LLM tasks (was 300)
+  task_hard_limit_seconds: ${LLM_TASK_HARD_LIMIT:-15600}  # 2 hours hard kill timeout (was 360)
   # HTTP client timeout and retry settings (critical for high server load / queue depths)
   http_timeout_seconds: ${LLM_HTTP_TIMEOUT:-900}  # 15 minutes HTTP timeout (handles 95+ queued requests)
   max_retries: ${LLM_MAX_RETRIES:-5}  # Retry attempts for failed requests

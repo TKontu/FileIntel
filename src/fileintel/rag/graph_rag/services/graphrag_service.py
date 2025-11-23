@@ -2518,6 +2518,10 @@ Reformatted Answer (with all citations preserved):"""
         # Use the same citation formatter as vector RAG for consistency
         try:
             citation = format_in_text_citation(chunk_data)
+            # Strip outer parentheses - they will be added by the caller
+            # format_in_text_citation returns "(Author, Year)" but caller adds parentheses
+            if citation.startswith("(") and citation.endswith(")"):
+                citation = citation[1:-1]
             return citation
         except Exception as e:
             logger.warning(f"CitationFormatter failed: {e}, using fallback")

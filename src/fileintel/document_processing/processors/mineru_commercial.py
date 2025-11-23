@@ -115,7 +115,8 @@ class MinerUEnhancedProcessor:
             # Process with API if no cache hit
             if not mineru_results:
                 # Copy file to shared folder for MinerU access
-                file_url, shared_file_path = self._copy_to_shared_folder(file_path)
+                # Use fingerprint for deterministic naming if available
+                file_url, shared_file_path = self._copy_to_shared_folder(file_path, content_fingerprint)
                 log.info(f"File copied to shared folder: {shared_file_path}")
 
                 # Process with MinerU API
@@ -149,10 +150,22 @@ class MinerUEnhancedProcessor:
         finally:
             self._cleanup_shared_file(shared_file_path)
 
-    def _copy_to_shared_folder(self, file_path: Path) -> Tuple[str, Path]:
-        """Copy file to shared folder and return URL and shared path."""
-        # Generate unique filename to avoid conflicts
-        unique_name = f"{uuid.uuid4()}_{file_path.name}"
+    def _copy_to_shared_folder(self, file_path: Path, content_fingerprint: str = None) -> Tuple[str, Path]:
+        """
+        Copy file to shared folder and return URL and shared path.
+
+        Args:
+            file_path: Source file path
+            content_fingerprint: Optional deterministic fingerprint for naming.
+                               If provided, uses fingerprint for consistent naming.
+                               Falls back to random UUID for backwards compatibility.
+        """
+        # Use deterministic naming if fingerprint provided, otherwise random UUID
+        if content_fingerprint:
+            unique_name = f"{content_fingerprint}_{file_path.name}"
+        else:
+            unique_name = f"{uuid.uuid4()}_{file_path.name}"
+
         shared_path = self.shared_folder / unique_name
 
         try:

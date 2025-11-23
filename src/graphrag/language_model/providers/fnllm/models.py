@@ -83,10 +83,15 @@ class OpenAIChatFNLLM:
         """
         import time
         import logging
+        from graphrag.index.run.heartbeat_context import signal_heartbeat
+
         logger = logging.getLogger(__name__)
 
         fnllm_start = time.time()
         logger.debug(f"FNLLM DEBUG: Starting achat call, prompt length: {len(prompt)}")
+
+        # Signal heartbeat BEFORE LLM call (reset timeout timer)
+        signal_heartbeat(f"LLM request starting (prompt length: {len(prompt)})")
 
         if history is None:
             model_start = time.time()
@@ -100,6 +105,9 @@ class OpenAIChatFNLLM:
             response = await self.model(prompt, history=history, **kwargs)
             model_end = time.time()
             logger.debug(f"FNLLM DEBUG: self.model() call completed in {model_end - model_start:.2f} seconds")
+
+        # Signal heartbeat AFTER LLM call completes (reset timeout timer)
+        signal_heartbeat(f"LLM response received (took {model_end - model_start:.1f}s)")
 
         response_creation_start = time.time()
         logger.debug(f"FNLLM DEBUG: Creating BaseModelResponse")
@@ -239,7 +247,16 @@ class OpenAIEmbeddingFNLLM:
         -------
             The embeddings of the text.
         """
+        from graphrag.index.run.heartbeat_context import signal_heartbeat
+
+        # Signal heartbeat before embedding batch
+        signal_heartbeat(f"Embedding batch starting ({len(text_list)} texts)")
+
         response = await self.model(text_list, **kwargs)
+
+        # Signal heartbeat after embedding completes
+        signal_heartbeat(f"Embedding batch completed ({len(text_list)} texts)")
+
         if response.output.embeddings is None:
             msg = "No embeddings found in response"
             raise ValueError(msg)

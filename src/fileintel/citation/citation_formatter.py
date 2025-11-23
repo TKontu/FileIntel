@@ -329,8 +329,12 @@ class CitationFormatter:
         """
         # Prefer author_surnames if available (LLM-extracted, robust)
         author_surnames = metadata.get("author_surnames", [])
-        if author_surnames and isinstance(author_surnames, list) and author_surnames:
-            return author_surnames[0]
+        # Handle both string and list formats (CSV import may store as string)
+        if author_surnames:
+            if isinstance(author_surnames, str):
+                return author_surnames.strip()
+            elif isinstance(author_surnames, list) and author_surnames:
+                return author_surnames[0]
 
         # Fallback: simple extraction from full name (may not work for all formats)
         full_name = self._extract_primary_author(metadata)
@@ -366,16 +370,21 @@ class CitationFormatter:
         """
         # Prefer author_surnames if available (LLM-extracted, robust)
         author_surnames = metadata.get("author_surnames", [])
-        if author_surnames and isinstance(author_surnames, list) and author_surnames:
-            num_authors = len(author_surnames)
-            if num_authors == 1:
-                return author_surnames[0]
-            elif num_authors == 2:
-                return f"{author_surnames[0]} and {author_surnames[1]}"
-            elif num_authors == 3:
-                return f"{author_surnames[0]}, {author_surnames[1]} and {author_surnames[2]}"
-            else:  # 4 or more
-                return f"{author_surnames[0]} et al."
+        # Handle both string and list formats (CSV import may store as string)
+        if author_surnames:
+            if isinstance(author_surnames, str):
+                # Single author surname as string - use directly
+                return author_surnames.strip()
+            elif isinstance(author_surnames, list) and author_surnames:
+                num_authors = len(author_surnames)
+                if num_authors == 1:
+                    return author_surnames[0]
+                elif num_authors == 2:
+                    return f"{author_surnames[0]} and {author_surnames[1]}"
+                elif num_authors == 3:
+                    return f"{author_surnames[0]}, {author_surnames[1]} and {author_surnames[2]}"
+                else:  # 4 or more
+                    return f"{author_surnames[0]} et al."
 
         # Fallback: extract surnames from full author names
         authors = metadata.get("authors", "")
@@ -424,13 +433,17 @@ class CitationFormatter:
         """
         # Prefer author_surnames for proper Harvard format
         author_surnames = metadata.get("author_surnames", [])
-        if author_surnames and isinstance(author_surnames, list):
-            if len(author_surnames) == 1:
-                return author_surnames[0]
-            elif len(author_surnames) == 2:
-                return f"{author_surnames[0]} and {author_surnames[1]}"
-            else:
-                return f"{author_surnames[0]} et al."
+        # Handle both string and list formats (CSV import may store as string)
+        if author_surnames:
+            if isinstance(author_surnames, str):
+                return author_surnames.strip()
+            elif isinstance(author_surnames, list):
+                if len(author_surnames) == 1:
+                    return author_surnames[0]
+                elif len(author_surnames) == 2:
+                    return f"{author_surnames[0]} and {author_surnames[1]}"
+                else:
+                    return f"{author_surnames[0]} et al."
 
         # Fallback to full author names
         authors = metadata.get("authors", "")
