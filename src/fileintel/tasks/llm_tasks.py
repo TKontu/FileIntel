@@ -1093,6 +1093,131 @@ def _inject_citation_into_text(
 
 @app.task(
     base=BaseFileIntelTask,
+    name="fileintel.tasks.generate_citation_candidates",
+    max_retries=3,
+    default_retry_delay=60,
+    rate_limit=LLM_RATE_LIMIT,
+    acks_late=True,
+)
+def generate_citation_candidates_task(
+    self,
+    text_segment: str,
+    collection_id: str,
+    document_id: Optional[str] = None,
+    min_similarity: Optional[float] = None,
+    num_candidates: int = 3,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Generate multiple citation candidates for user selection.
+
+    Returns top N matching sources with full text excerpts so the user can
+    review and select the most appropriate citation.
+
+    Args:
+        text_segment: The text that needs citation (10-5000 chars)
+        collection_id: Collection to search in
+        document_id: Optional specific document to search within
+        min_similarity: Minimum similarity threshold (0.0-1.0)
+        num_candidates: Number of candidates to return (1-10, default 3)
+        **kwargs: Additional parameters
+
+    Returns:
+        Dict containing:
+        - candidates: List of citation candidates with citation, source, confidence
+        - query_text: Original search text
+        - total_found: Total number of matches found
+        - status: "completed" or "failed"
+    """
+    self.validate_input(
+        ["text_segment", "collection_id"],
+        text_segment=text_segment,
+        collection_id=collection_id
+    )
+
+    config = get_config()
+
+    try:
+        self.update_progress(0, 3, "Initializing citation candidates search")
+
+        from fileintel.celery_config import get_shared_storage
+        from fileintel.services.citation_service import CitationGenerationService
+
+        # Get storage
+        storage = get_shared_storage()
+
+        try:
+            self.update_progress(1, 3, f"Searching for {num_candidates} matching sources")
+
+            # Initialize citation service
+            citation_service = CitationGenerationService(config, storage)
+
+            # Generate citation candidates
+            result = citation_service.generate_citation_candidates(
+                text_segment=text_segment,
+                collection_id=collection_id,
+                document_id=document_id,
+                min_similarity=min_similarity,
+                num_candidates=num_candidates
+            )
+
+            self.update_progress(2, 3, f"Found {len(result['candidates'])} candidates")
+
+            # Add status to result
+            result["status"] = "completed"
+
+            self.update_progress(3, 3, "Citation candidates generation completed")
+            return result
+
+        finally:
+            storage.close()
+
+    except ValueError as e:
+        # Input validation errors
+        logger.error(f"Citation candidates validation error: {e}")
+        return {
+            "query_text": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "candidates": [],
+            "total_found": 0,
+            "error": str(e),
+            "error_type": "validation_error",
+            "status": "failed",
+        }
+
+    except RuntimeError as e:
+        # No source found errors
+        logger.warning(f"Citation candidates: No source found: {e}")
+        return {
+            "query_text": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "candidates": [],
+            "total_found": 0,
+            "error": str(e),
+            "error_type": "no_source_found",
+            "status": "failed",
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating citation candidates: {e}", exc_info=True)
+
+        # Retry for API errors
+        if "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e, countdown=60)
+
+        return {
+            "query_text": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+            "collection_id": collection_id,
+            "candidates": [],
+            "total_found": 0,
+            "error": str(e),
+            "error_type": "internal_error",
+            "status": "failed",
+        }
+
+
+@app.task(
+    base=BaseFileIntelTask,
     name="fileintel.tasks.detect_plagiarism",
     max_retries=3,
     default_retry_delay=60,

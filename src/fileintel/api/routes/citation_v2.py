@@ -57,6 +57,36 @@ class CitationRequest(BaseModel):
     )
 
 
+class CitationCandidatesRequest(BaseModel):
+    """Request model for citation candidates generation."""
+
+    text_segment: str = Field(
+        ...,
+        min_length=10,
+        max_length=5000,
+        description="Text segment that needs citation (10-5000 characters)"
+    )
+
+    document_id: Optional[str] = Field(
+        None,
+        description="Optional: Restrict search to specific document"
+    )
+
+    min_similarity: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity threshold (0.0-1.0, default from config)"
+    )
+
+    num_candidates: int = Field(
+        3,
+        ge=1,
+        le=10,
+        description="Number of citation candidates to return (1-10, default 3)"
+    )
+
+
 class CitationResponse(BaseModel):
     """Response model for citation generation."""
 
@@ -231,6 +261,7 @@ async def get_citation_config():
             "default_top_k": config.citation.default_top_k,
             "confidence_thresholds": config.citation.confidence_thresholds,
             "max_excerpt_length": config.citation.max_excerpt_length,
+            "min_chunk_length": config.citation.min_chunk_length,
             "enable_llm_analysis": config.citation.enable_llm_analysis,
             "llm_analysis_model": config.citation.llm_analysis_model,
         }
@@ -247,6 +278,126 @@ async def get_citation_config():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get citation configuration: {str(e)}"
+        )
+
+
+@router.post(
+    "/collections/{collection_identifier}/citation-candidates",
+    response_model=ApiResponseV2,
+    summary="Get multiple citation candidates for selection (async task)",
+    description="""
+    Submit a task to generate multiple citation candidates for user selection.
+
+    Returns a task ID immediately. Use `/api/v2/tasks/{task_id}` to check status and retrieve results.
+
+    Unlike `generate-citation` which returns only the best match, this endpoint returns
+    multiple candidates (default 3) so the user can review and select the most appropriate one.
+
+    **Features:**
+    - Returns top N matching sources with full text excerpts (not truncated)
+    - Filters out short chunks (headlines, single sentences) by default
+    - Each candidate includes citation, source details, and confidence level
+
+    **Workflow:**
+    1. POST to this endpoint → Get `task_id`
+    2. GET `/api/v2/tasks/{task_id}` → Check status
+    3. When `status=SUCCESS` → Review candidates and select
+
+    Example successful result:
+    ```json
+    {
+      "candidates": [
+        {
+          "citation": {"in_text": "(Smith, 2023)", "full": "Smith, J. (2023)...", "style": "harvard"},
+          "source": {"document_id": "doc-1", "similarity_score": 0.92, "text_excerpt": "Full text..."},
+          "confidence": "high"
+        },
+        {
+          "citation": {"in_text": "(Jones, 2022)", "full": "Jones, A. (2022)...", "style": "harvard"},
+          "source": {"document_id": "doc-2", "similarity_score": 0.88, "text_excerpt": "Full text..."},
+          "confidence": "medium"
+        }
+      ],
+      "query_text": "Original search text...",
+      "total_found": 5,
+      "status": "completed"
+    }
+    ```
+    """
+)
+async def generate_citation_candidates(
+    collection_identifier: str,
+    request: CitationCandidatesRequest,
+    storage: PostgreSQLStorage = Depends(get_storage),
+):
+    """
+    Submit citation candidates generation task.
+
+    Args:
+        collection_identifier: Collection ID or name
+        request: Citation candidates request with text segment and parameters
+        storage: PostgreSQL storage instance (dependency injection)
+
+    Returns:
+        ApiResponseV2 with task_id for async processing
+
+    Raises:
+        HTTPException: If collection not found or input invalid
+    """
+    try:
+        # Get collection
+        collection = await get_collection_by_identifier(storage, collection_identifier)
+        if not collection:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{collection_identifier}' not found"
+            )
+
+        # Import citation candidates task
+        from fileintel.tasks.llm_tasks import generate_citation_candidates_task
+
+        # Submit task to Celery
+        task_result = generate_citation_candidates_task.delay(
+            text_segment=request.text_segment,
+            collection_id=collection.id,
+            document_id=request.document_id,
+            min_similarity=request.min_similarity,
+            num_candidates=request.num_candidates
+        )
+
+        logger.info(
+            f"Submitted citation candidates task: task_id={task_result.id} "
+            f"collection='{collection.name}' num_candidates={request.num_candidates} "
+            f"text_length={len(request.text_segment)}"
+        )
+
+        # Return task ID immediately (non-blocking)
+        response_data = {
+            "task_id": str(task_result.id),
+            "status": "processing",
+            "collection_id": collection.id,
+            "collection_name": collection.name,
+            "text_segment": request.text_segment[:100] + "..." if len(request.text_segment) > 100 else request.text_segment,
+            "num_candidates": request.num_candidates,
+            "message": "Citation candidates task submitted. Use task_id to check status.",
+            "status_endpoint": f"/api/v2/tasks/{task_result.id}",
+        }
+
+        return ApiResponseV2(
+            success=True,
+            message="Citation candidates task submitted successfully",
+            data=response_data,
+            timestamp=datetime.utcnow()
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Failed to submit citation candidates task: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit citation candidates task: {str(e)}"
         )
 
 

@@ -17,6 +17,125 @@ from .shared import (
 app = typer.Typer(help="Citation generation operations.")
 
 
+def _handle_candidates_mode(
+    collection_id: str,
+    text: str,
+    min_similarity: Optional[float],
+    document_id: Optional[str],
+    num_candidates: int,
+    show_source: bool
+):
+    """
+    Handle citation candidates mode - displays multiple candidates for user selection.
+    """
+    # Build request payload
+    payload = {
+        "text_segment": text,
+        "num_candidates": num_candidates,
+    }
+
+    if document_id:
+        payload["document_id"] = document_id
+    if min_similarity is not None:
+        payload["min_similarity"] = min_similarity
+
+    # Generate citation candidates (async task)
+    def _generate_candidates(api):
+        return api._request(
+            "POST",
+            f"citations/collections/{collection_id}/citation-candidates",
+            json=payload
+        )
+
+    result = cli_handler.handle_api_call(_generate_candidates, "submit citation candidates task")
+    data = result.get("data", result)
+
+    # Check if this is an async response (contains task_id)
+    if "task_id" in data:
+        task_id = data["task_id"]
+        cli_handler.console.print(
+            f"[blue]Citation candidates task submitted ({task_id[:8]}...). Waiting for completion...[/blue]\n"
+        )
+
+        # Wait for task to complete
+        api = cli_handler.get_api_client()
+        task_result = api.wait_for_task_completion(task_id, show_progress=True)
+
+        # Extract result from completed task
+        task_data = task_result.get("data", {})
+        if task_data.get("status") == "SUCCESS":
+            data = task_data.get("result", {})
+        else:
+            error_msg = task_data.get("error", "Unknown error")
+            cli_handler.display_error(f"Citation candidates generation failed: {error_msg}")
+            raise typer.Exit(1)
+
+    # Display results
+    candidates = data.get("candidates", [])
+    total_found = data.get("total_found", 0)
+
+    if not candidates:
+        cli_handler.display_error("No citation candidates found above similarity threshold")
+        raise typer.Exit(1)
+
+    cli_handler.console.print(f"\n[bold blue]Found {total_found} matches, showing top {len(candidates)} candidates:[/bold blue]\n")
+
+    # Display each candidate
+    for i, candidate in enumerate(candidates, 1):
+        citation = candidate.get("citation", {})
+        source = candidate.get("source", {})
+        confidence = candidate.get("confidence", "unknown")
+        warning = candidate.get("warning")
+
+        # Confidence color
+        confidence_color = {
+            "high": "green",
+            "medium": "yellow",
+            "low": "red"
+        }.get(confidence.lower(), "white")
+
+        # Header for candidate
+        cli_handler.console.print(f"[bold cyan]━━━ Candidate {i} ━━━[/bold cyan]")
+
+        # In-text citation
+        cli_handler.console.print(f"[bold green]In-Text:[/bold green] {citation.get('in_text', 'N/A')}")
+
+        # Full citation
+        cli_handler.console.print(f"[bold blue]Full:[/bold blue] {citation.get('full', 'N/A')}")
+
+        # Confidence and similarity
+        similarity = source.get('similarity_score', 0.0)
+        cli_handler.console.print(
+            f"[bold]Confidence:[/bold] [{confidence_color}]{confidence.upper()}[/{confidence_color}] "
+            f"(similarity: {similarity:.3f})"
+        )
+
+        # Warning if present
+        if warning:
+            cli_handler.console.print(f"[yellow]⚠ {warning}[/yellow]")
+
+        # Source details if requested
+        if show_source:
+            cli_handler.console.print(f"\n[dim]Source: {source.get('filename', 'N/A')}[/dim]")
+
+            # Page numbers if available
+            page_numbers = source.get("page_numbers", [])
+            if page_numbers:
+                pages_str = ", ".join(str(p) for p in page_numbers)
+                cli_handler.console.print(f"[dim]Pages: {pages_str}[/dim]")
+
+            # Full text excerpt (not truncated)
+            excerpt = source.get("text_excerpt", "")
+            if excerpt:
+                cli_handler.console.print(f"\n[bold]Reference Text:[/bold]")
+                # Word wrap for readability
+                cli_handler.console.print(f"[dim]{excerpt}[/dim]")
+
+        cli_handler.console.print("")  # Blank line between candidates
+
+    cli_handler.display_success(f"Generated {len(candidates)} citation candidates")
+
+
 @app.command("collection")
 def cite_collection(
     collection_identifier: str = typer.Argument(
@@ -54,6 +173,12 @@ def cite_collection(
         "--show-source/--no-source",
         help="Show source details in output (default: True).",
     ),
+    candidates: Optional[int] = typer.Option(
+        None,
+        "--candidates",
+        "-c",
+        help="Show N citation candidates for selection instead of just the best match (1-10).",
+    ),
 ):
     """
     Generate citation for a text segment.
@@ -63,8 +188,11 @@ def cite_collection(
 
     Examples:
 
-        # Basic citation
+        # Basic citation (returns best match)
         fileintel cite collection my-collection "Machine learning models learn patterns from data"
+
+        # Show 3 citation candidates for selection
+        fileintel cite collection thesis "Neural networks" --candidates 3
 
         # With minimum similarity threshold
         fileintel cite collection papers "Deep learning requires large datasets" --min-similarity 0.8
@@ -87,6 +215,12 @@ def cite_collection(
         cli_handler.display_error("Text segment must not exceed 5000 characters")
         raise typer.Exit(1)
 
+    # Validate candidates option
+    if candidates is not None:
+        if candidates < 1 or candidates > 10:
+            cli_handler.display_error("--candidates must be between 1 and 10")
+            raise typer.Exit(1)
+
     # Get collection to resolve identifier
     collection = get_entity_by_identifier(
         "collection",
@@ -95,6 +229,20 @@ def cite_collection(
     )
     collection_id = collection.get("id")
 
+    # Branch based on whether candidates mode is requested
+    if candidates is not None:
+        # Use citation candidates endpoint
+        _handle_candidates_mode(
+            collection_id=collection_id,
+            text=text,
+            min_similarity=min_similarity,
+            document_id=document_id,
+            num_candidates=candidates,
+            show_source=show_source
+        )
+        return
+
+    # Standard single citation mode
     # Build request payload
     payload = {
         "text_segment": text,
@@ -246,7 +394,9 @@ def show_config():
 
     table.add_row("Minimum Similarity", str(config.get("min_similarity", "N/A")))
     table.add_row("Default Top K", str(config.get("default_top_k", "N/A")))
-    table.add_row("Max Excerpt Length", str(config.get("max_excerpt_length", "N/A")))
+    table.add_row("Min Chunk Length", str(config.get("min_chunk_length", "N/A")))
+    max_excerpt = config.get("max_excerpt_length", 0)
+    table.add_row("Max Excerpt Length", "No limit" if max_excerpt == 0 else str(max_excerpt))
     table.add_row(
         "LLM Analysis Enabled",
         str(config.get("enable_llm_analysis", "N/A"))

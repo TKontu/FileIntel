@@ -59,6 +59,7 @@ class VectorSearchStorage:
         limit: int = 10,
         similarity_threshold: float = 0.0,
         exclude_chunks: List[str] = None,
+        min_chunk_length: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         Find relevant chunks in collection using vector similarity.
@@ -69,6 +70,7 @@ class VectorSearchStorage:
             limit: Maximum number of results
             similarity_threshold: Minimum similarity score
             exclude_chunks: Chunk IDs to exclude from results
+            min_chunk_length: Minimum chunk text length (filters short headlines/sentences)
 
         Returns:
             List of relevant chunks with similarity scores
@@ -76,6 +78,8 @@ class VectorSearchStorage:
         try:
             # Build exclusion filter
             exclusion_filter = ""
+            # Build min length filter
+            min_length_filter = ""
             params = {
                 "collection_id": collection_id,
                 "query_embedding": query_embedding,
@@ -90,6 +94,10 @@ class VectorSearchStorage:
                 exclusion_filter = f"AND c.id NOT IN ({placeholders})"
                 for i, chunk_id in enumerate(exclude_chunks):
                     params[f"exclude_{i}"] = chunk_id
+
+            if min_chunk_length > 0:
+                min_length_filter = "AND LENGTH(c.chunk_text) >= :min_chunk_length"
+                params["min_chunk_length"] = min_chunk_length
 
             query = text(
                 f"""
@@ -110,6 +118,7 @@ class VectorSearchStorage:
                     AND c.embedding IS NOT NULL
                     AND 1 - (c.embedding <=> CAST(:query_embedding AS vector)) >= :similarity_threshold
                     {exclusion_filter}
+                    {min_length_filter}
                 ORDER BY c.embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :limit
             """
@@ -151,6 +160,7 @@ class VectorSearchStorage:
         query_embedding: List[float],
         limit: int = 10,
         similarity_threshold: float = 0.0,
+        min_chunk_length: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         Find relevant chunks in specific document using vector similarity.
@@ -160,13 +170,27 @@ class VectorSearchStorage:
             query_embedding: Query vector for similarity search
             limit: Maximum number of results
             similarity_threshold: Minimum similarity score
+            min_chunk_length: Minimum chunk text length (filters short headlines/sentences)
 
         Returns:
             List of relevant chunks with similarity scores
         """
         try:
+            # Build min length filter
+            min_length_filter = ""
+            params = {
+                "document_id": document_id,
+                "query_embedding": query_embedding,
+                "similarity_threshold": similarity_threshold,
+                "limit": limit,
+            }
+
+            if min_chunk_length > 0:
+                min_length_filter = "AND LENGTH(c.chunk_text) >= :min_chunk_length"
+                params["min_chunk_length"] = min_chunk_length
+
             query = text(
-                """
+                f"""
                 SELECT
                     c.id as chunk_id,
                     c.chunk_text,
@@ -182,20 +206,13 @@ class VectorSearchStorage:
                 WHERE c.document_id = :document_id
                     AND c.embedding IS NOT NULL
                     AND 1 - (c.embedding <=> CAST(:query_embedding AS vector)) >= :similarity_threshold
+                    {min_length_filter}
                 ORDER BY c.embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :limit
             """
             )
 
-            result = self.db.execute(
-                query,
-                {
-                    "document_id": document_id,
-                    "query_embedding": query_embedding,
-                    "similarity_threshold": similarity_threshold,
-                    "limit": limit,
-                },
-            )
+            result = self.db.execute(query, params)
 
             chunks = []
             for row in result:

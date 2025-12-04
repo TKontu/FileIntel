@@ -62,7 +62,13 @@ class CitationGenerationService:
         self.max_excerpt_length = getattr(
             getattr(config, 'citation', None),
             'max_excerpt_length',
-            300
+            0  # Default 0 = no truncation
+        )
+
+        self.min_chunk_length = getattr(
+            getattr(config, 'citation', None),
+            'min_chunk_length',
+            100  # Filter out short headlines/sentences
         )
 
     @property
@@ -234,6 +240,7 @@ class CitationGenerationService:
                 document_id=document_id,
                 top_k=top_k,
                 min_similarity=min_similarity,
+                min_chunk_length=self.min_chunk_length,
                 answer_format="default"  # We don't need the generated answer
             )
 
@@ -351,9 +358,9 @@ class CitationGenerationService:
         Returns:
             Dict with source details
         """
-        # Extract text excerpt (truncate if needed)
+        # Extract text excerpt (only truncate if max_excerpt_length > 0)
         text = chunk.get("text", chunk.get("chunk_text", ""))
-        if len(text) > self.max_excerpt_length:
+        if self.max_excerpt_length > 0 and len(text) > self.max_excerpt_length:
             text = text[:self.max_excerpt_length] + "..."
 
         # Extract page numbers
@@ -479,3 +486,136 @@ Relevance explanation:"""
         except Exception as e:
             logger.warning(f"LLM enhancement failed: {e}")
             return None
+
+    def generate_citation_candidates(
+        self,
+        text_segment: str,
+        collection_id: str,
+        document_id: Optional[str] = None,
+        min_similarity: Optional[float] = None,
+        num_candidates: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Generate multiple citation candidates for user selection.
+
+        Returns top N matching sources with citations so the user can
+        choose the most appropriate one.
+
+        Args:
+            text_segment: The text that needs citation (10-5000 chars)
+            collection_id: Collection to search in
+            document_id: Optional specific document to search within
+            min_similarity: Minimum similarity threshold (0.0-1.0)
+            num_candidates: Number of candidates to return (default 3)
+
+        Returns:
+            Dict containing:
+            - candidates: List of citation candidates, each with:
+                - citation: {in_text, full, style}
+                - source: {document_id, chunk_id, similarity_score, text_excerpt, ...}
+                - confidence: "high"|"medium"|"low"
+                - warning: str (if applicable)
+            - query_text: The original text segment
+            - total_found: Total number of matches found
+
+        Raises:
+            ValueError: If input is invalid
+            RuntimeError: If no sources found above threshold
+        """
+        # Validate input
+        if not text_segment or not text_segment.strip():
+            raise ValueError("Text segment cannot be empty")
+
+        text_segment = text_segment.strip()
+
+        if len(text_segment) < 10:
+            raise ValueError("Text segment must be at least 10 characters")
+
+        if len(text_segment) > 5000:
+            raise ValueError("Text segment must not exceed 5000 characters")
+
+        # Use provided values or defaults
+        similarity_threshold = min_similarity if min_similarity is not None else self.min_similarity
+
+        # Validate similarity threshold
+        if not 0.0 <= similarity_threshold <= 1.0:
+            raise ValueError("min_similarity must be between 0.0 and 1.0")
+
+        # Validate num_candidates
+        if num_candidates < 1 or num_candidates > 10:
+            raise ValueError("num_candidates must be between 1 and 10")
+
+        logger.info(
+            f"Generating {num_candidates} citation candidates for text segment "
+            f"(length: {len(text_segment)}, collection: {collection_id})"
+        )
+
+        try:
+            # Find matching sources - retrieve more than needed for filtering
+            result = self.vector_service.query(
+                query=text_segment,
+                collection_id=collection_id,
+                document_id=document_id,
+                top_k=num_candidates * 2,  # Get extra for filtering
+                min_similarity=similarity_threshold,
+                min_chunk_length=self.min_chunk_length,
+                answer_format="default"
+            )
+
+            sources = result.get("sources", [])
+
+            if not sources:
+                raise RuntimeError(
+                    f"No sources found above similarity threshold of {similarity_threshold}"
+                )
+
+            # Build candidates list
+            candidates = []
+            for source in sources[:num_candidates]:
+                similarity_score = source.get(
+                    "similarity_score",
+                    source.get("relevance_score", 0.0)
+                )
+
+                # Validate metadata
+                has_metadata = self._validate_source_metadata(source)
+
+                # Generate citations
+                citations = self._generate_citations_from_chunk(source)
+
+                # Determine confidence
+                confidence = self._determine_confidence(similarity_score, has_metadata)
+
+                # Build source details (full text, not truncated)
+                source_details = self._build_source_details(source, similarity_score)
+
+                candidate = {
+                    "citation": citations,
+                    "source": source_details,
+                    "confidence": confidence
+                }
+
+                # Add warning if metadata incomplete
+                if not has_metadata:
+                    candidate["warning"] = (
+                        "Source metadata unavailable. Citation based on filename."
+                    )
+
+                candidates.append(candidate)
+
+            logger.info(
+                f"Generated {len(candidates)} citation candidates "
+                f"(best similarity: {candidates[0]['source']['similarity_score']:.3f})"
+            )
+
+            return {
+                "candidates": candidates,
+                "query_text": text_segment,
+                "total_found": len(sources)
+            }
+
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"Citation candidates generation failed: {e}", exc_info=True)
+            raise RuntimeError(f"Citation candidates generation failed: {str(e)}")

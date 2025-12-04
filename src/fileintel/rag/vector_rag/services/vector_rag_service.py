@@ -47,6 +47,7 @@ class VectorRAGService:
         min_similarity: float = 0.0,
         answer_format: str = "default",
         include_cited_chunks: bool = False,
+        min_chunk_length: int = 0,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -61,6 +62,7 @@ class VectorRAGService:
             min_similarity: Minimum similarity threshold (0-1)
             answer_format: Answer format template name (default: "default")
             include_cited_chunks: Include full text content of cited chunks in response (default: False)
+            min_chunk_length: Minimum chunk text length (filters short headlines/sentences)
             **kwargs: Additional parameters
 
         Returns:
@@ -113,6 +115,7 @@ class VectorRAGService:
                     query_embedding=query_embedding,
                     limit=retrieval_limit,
                     similarity_threshold=min_similarity,
+                    min_chunk_length=min_chunk_length,
                 )
             else:
                 # Search within entire collection
@@ -121,6 +124,7 @@ class VectorRAGService:
                     query_embedding=query_embedding,
                     limit=retrieval_limit,
                     similarity_threshold=min_similarity,
+                    min_chunk_length=min_chunk_length,
                 )
 
             # Rerank results if reranker is enabled
@@ -191,16 +195,17 @@ class VectorRAGService:
                     "document_id": chunk["document_id"],
                     "chunk_id": chunk["chunk_id"],
                     "filename": chunk["original_filename"],  # Keep original for compatibility
+                    "original_filename": chunk["original_filename"],  # Also include for citation service
                     "citation": citation,  # Enhanced citation format
                     "in_text_citation": in_text_citation,  # For Harvard style in-text references
-                    "text": chunk["text"][:200] + "..."
-                    if len(chunk["text"]) > 200
-                    else chunk["text"],
+                    "text": chunk["text"],  # Full text - let consumer decide on truncation
+                    "chunk_text": chunk["text"],  # Alias for citation service compatibility
                     "similarity_score": chunk["similarity"],
                     "relevance_score": chunk["similarity"],  # For CLI compatibility
                     "distance": 1 - chunk["similarity"],  # Convert similarity to distance
                     "position": chunk.get("chunk_index", chunk.get("position", 0)),
                     "chunk_metadata": chunk.get("metadata", chunk.get("chunk_metadata", {})),
+                    "metadata": chunk.get("metadata", chunk.get("chunk_metadata", {})),  # Alias
                     "document_metadata": chunk.get("document_metadata", {}),  # Include document metadata
                 }
                 sources.append(source_data)

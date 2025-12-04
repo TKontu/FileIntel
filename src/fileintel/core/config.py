@@ -401,10 +401,17 @@ class CitationSettings(BaseModel):
     )
 
     max_excerpt_length: int = Field(
-        default=300,
-        ge=50,
-        le=1000,
-        description="Maximum length of text excerpt in source details"
+        default=0,
+        ge=0,
+        le=5000,
+        description="Maximum length of text excerpt in source details (0 = no limit, show full text)"
+    )
+
+    min_chunk_length: int = Field(
+        default=100,
+        ge=0,
+        le=5000,
+        description="Minimum chunk text length (characters) for citation matching. Filters out short headlines/sentences. Set to 0 to disable filtering."
     )
 
     enable_llm_analysis: bool = Field(
