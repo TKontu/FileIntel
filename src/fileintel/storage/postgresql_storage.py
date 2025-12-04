@@ -190,10 +190,11 @@ class PostgreSQLStorage(StorageInterface):
         limit: int = 10,
         similarity_threshold: float = 0.7,
         exclude_chunks: List[str] = None,
+        min_chunk_length: int = 0,
     ) -> List[Dict[str, Any]]:
         """Find relevant chunks using vector similarity."""
         return self.vector_storage.find_relevant_chunks_in_collection(
-            collection_id, query_embedding, limit, similarity_threshold, exclude_chunks
+            collection_id, query_embedding, limit, similarity_threshold, exclude_chunks, min_chunk_length
         )
 
     def find_relevant_chunks_in_document(
@@ -202,10 +203,11 @@ class PostgreSQLStorage(StorageInterface):
         query_embedding: List[float],
         limit: int = 10,
         similarity_threshold: float = 0.7,
+        min_chunk_length: int = 0,
     ) -> List[Dict[str, Any]]:
         """Find relevant chunks in document using vector similarity."""
         return self.vector_storage.find_relevant_chunks_in_document(
-            document_id, query_embedding, limit, similarity_threshold
+            document_id, query_embedding, limit, similarity_threshold, min_chunk_length
         )
 
     def find_relevant_chunks_hybrid(

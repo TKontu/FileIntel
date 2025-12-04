@@ -1092,6 +1092,7 @@ def _inject_citation_into_text(
 
 
 @app.task(
+    bind=True,
     base=BaseFileIntelTask,
     name="fileintel.tasks.generate_citation_candidates",
     max_retries=3,
