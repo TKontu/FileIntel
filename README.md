@@ -186,7 +186,7 @@ graphrag:
 
 ### Intelligent Query Classification
 
-FileIntel automatically routes queries to the optimal RAG strategy (vector, graph, or hybrid) using **LLM-based semantic understanding** with keyword fallback for reliability.
+FileIntel automatically routes queries to the optimal RAG strategy (vector, graph, or hybrid) using **LLM-based semantic understanding**.
 
 #### Configuration
 
@@ -204,31 +204,11 @@ rag:
   classification_cache_ttl: 3600  # 1 hour
 ```
 
-#### Classification Methods
-
-1. **LLM (Recommended for Production)**: Uses semantic analysis to understand query intent
-   - 90-95% accuracy
-   - 100-300ms latency (uncached)
-   - ~$0.0001 per unique query
-   - Handles complex/ambiguous queries
-
-2. **Keyword (Fast & Free)**: Pattern matching on query text
-   - 75-85% accuracy
-   - <1ms latency
-   - $0 cost
-   - Deterministic and reliable
-
-3. **Hybrid (Best of Both)**: LLM with automatic keyword fallback
-   - 90-95% accuracy (from LLM)
-   - <5ms average latency (with cache)
-   - Minimal cost (cache hit rate >70%)
-   - Zero-failure guarantee
-
 #### Environment Variables
 
 ```bash
 # Set classification method
-RAG_CLASSIFICATION_METHOD=hybrid  # Options: llm, keyword, hybrid
+RAG_CLASSIFICATION_METHOD=hybrid  # Options: llm, hybrid
 
 # Use faster/cheaper model for classification
 RAG_CLASSIFICATION_MODEL=gemma3-4B
@@ -277,7 +257,7 @@ FileIntel supports **reranking** to improve retrieval result quality by re-scori
 First, start the reranker model on your vLLM server:
 
 ```bash
-# On your vLLM server (e.g., 192.168.0.136)
+# On your vLLM server (e.g., 192.168.0.111)
 python -m vllm.entrypoints.openai.api_server \
     --model BAAI/bge-reranker-v2-m3 \
     --task rerank \
@@ -343,41 +323,10 @@ RAG_RERANK_HYBRID=true
 # Optional filtering
 RAG_RERANKING_MIN_SCORE=null  # e.g., 0.3
 ```
-
-#### When to Use Reranking
-
-**Use reranking when:**
-- Answer quality is more important than speed
-- You have a GPU-enabled vLLM server available
-- You're working with multilingual content (bge-reranker-v2-m3)
-- Initial retrieval returns noisy results
-
-**Skip reranking when:**
-- Latency is critical (<100ms responses required)
-- You don't have access to a reranking server
-- Your retrieval already provides high-quality results
-- Processing very large batches
-
-#### Testing Reranking
-
-```bash
-# Compare results with/without reranking
-RAG_RERANKING_ENABLED=false fileintel query ask collection-id "your query"
-RAG_RERANKING_ENABLED=true fileintel query ask collection-id "your query"
-```
-
-#### Performance Characteristics
-
-| Setup | Latency | Accuracy | Use Case |
-|-------|---------|----------|----------|
-| vLLM + GPU | 50-100ms | High | Recommended for production |
-| vLLM + CPU | 200-500ms | High | Development/testing |
-
 #### Recommended Models
 
 - **BAAI/bge-reranker-v2-m3**: Multilingual, best general purpose (560MB)
 - **BAAI/bge-reranker-large**: English-focused, higher accuracy (1.3GB)
-- **BAAI/bge-reranker-base**: Lightweight, faster inference (278MB)
 
 ### Document Processing
 ```yaml
@@ -422,7 +371,6 @@ document_processing:
 - **PostgreSQL + pgvector**: Primary storage with vector similarity search
 - **Redis**: Message broker and result backend
 - **MinerU**: Advanced PDF extraction with OCR and layout detection
-- **Flower** (optional): Web UI for monitoring Celery tasks
 
 ## Advanced Features
 
@@ -547,48 +495,6 @@ fileintel tasks list --filter processing
 
 Full API documentation available at `http://localhost:8000/docs` when running.
 
-## Monitoring
-
-### Flower Dashboard
-
-Monitor Celery workers and tasks:
-
-```bash
-# Access Flower at http://localhost:5555
-# (Enabled by default in docker-compose)
-```
-
-### Task Metrics
-
-```bash
-# CLI metrics
-fileintel tasks list
-fileintel health
-
-# API metrics
-curl http://localhost:8000/api/v2/tasks/metrics
-```
-
-## Performance Tuning
-
-### For Large Collections (10,000+ documents)
-
-```yaml
-# config/default.yaml
-storage:
-  pool_size: 50
-  max_overflow: 50
-
-celery:
-  worker_max_tasks_per_child: 100
-
-rag:
-  async_processing:
-    enabled: true
-    batch_size: 10
-    max_concurrent_requests: 25
-```
-
 ### For GPU Acceleration
 
 ```yaml
@@ -601,67 +507,6 @@ rag:
   embedding_provider: "openai"
   embedding_model: "bge-large-en"
 ```
-
-## Troubleshooting
-
-### Common Issues
-
-**Task timeout errors:**
-```yaml
-# Increase timeouts in config/default.yaml
-celery:
-  task_soft_time_limit: 7200  # 2 hours
-  task_time_limit: 7200
-```
-
-**Out of memory during GraphRAG indexing:**
-```yaml
-# Reduce batch size
-graphrag:
-  async_processing:
-    batch_size: 4
-    max_concurrent_requests: 10
-```
-
-**Slow PDF processing:**
-```yaml
-# Switch to faster MinerU backend
-document_processing:
-  mineru:
-    model_version: "pipeline"  # faster than "vlm"
-```
-
-### Logs
-
-```bash
-# View logs
-docker-compose logs -f api
-docker-compose logs -f celery
-
-# Or check files
-tail -f logs/fileintel.log
-```
-
-## Development
-
-### Local Setup
-
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/
-
-# Format code
-black src/
-isort src/
-```
-
 ### Database Migrations
 
 ```bash
@@ -707,47 +552,13 @@ gzip fileintel.tar  # 14GB → ~5-7GB
 docker load -i fileintel.tar
 docker-compose -f docker-compose.prod.yml up -d
 ```
-
-### Security Essentials
-
-- [ ] Change default passwords (20+ characters)
-- [ ] Set up SSL/TLS termination
-- [ ] Configure firewall (expose only port 8000)
-- [ ] Enable API authentication
-- [ ] Set up automated backups
-- [ ] Restrict Flower dashboard access
-
-### Backups
-
-```bash
-# Backup database
-docker-compose exec postgres pg_dump -U fileintel_user fileintel > backup.sql
-
-# Restore
-docker-compose exec -T postgres psql -U fileintel_user fileintel < backup.sql
-```
-
 See [deployment.md](deployment.md) for SSL setup, scaling, monitoring, and advanced configurations.
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Write tests for new features
-4. Ensure all tests pass
-5. Submit a pull request
 
 ## Acknowledgments
 
 - [Microsoft GraphRAG](https://github.com/microsoft/graphrag) - Graph-based RAG implementation
 - [MinerU](https://github.com/opendatalab/MinerU) - Advanced PDF extraction
 - [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search for PostgreSQL
-
-## Support
-
-- Issues: https://github.com/yourusername/fileintel/issues
-- Discussions: https://github.com/yourusername/fileintel/discussions
 
 ---
 
